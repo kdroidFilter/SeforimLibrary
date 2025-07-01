@@ -1,0 +1,40 @@
+-- Requêtes pour les liens
+
+selectById:
+SELECT * FROM link WHERE id = ?;
+
+selectBySourceLineIds:
+SELECT l.*, b.title AS targetBookTitle, tl.plainText AS targetText
+FROM link l
+JOIN book b ON l.targetBookId = b.id
+JOIN line tl ON l.targetLineId = tl.id
+WHERE l.sourceLineId IN ?
+ORDER BY l.sourceLineIndex, b.orderIndex;
+
+selectBySourceBookRange:
+SELECT * FROM link
+WHERE sourceBookId = ?
+AND sourceLineIndex >= ?
+AND sourceLineIndex <= ?;
+
+selectCommentatorsByBook:
+SELECT DISTINCT l.targetBookId, b.title AS targetBookTitle, b.author, COUNT(*) AS linkCount
+FROM link l
+JOIN book b ON l.targetBookId = b.id
+WHERE l.sourceBookId = ?
+AND l.connectionType IN ('COMMENTARY', 'TARGUM')
+GROUP BY l.targetBookId, b.title, b.author
+ORDER BY b.orderIndex, b.title;
+
+insert:
+INSERT INTO link (sourceBookId, targetBookId, heRef, sourceLineId, targetLineId, sourceLineIndex, targetLineIndex, connectionType)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+delete:
+DELETE FROM link WHERE id = ?;
+
+deleteByBookId:
+DELETE FROM link WHERE sourceBookId = ? OR targetBookId = ?;
+
+lastInsertRowId:
+SELECT last_insert_rowid();

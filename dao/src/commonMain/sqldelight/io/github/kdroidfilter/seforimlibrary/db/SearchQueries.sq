@@ -1,0 +1,82 @@
+-- Requêtes de recherche standard (sans FTS5)
+
+searchAll:
+SELECT
+    ls.bookId,
+    b.title bookTitle,
+    ls.lineId,
+    ls.lineIndex,
+    SUBSTR(ls.content, 1, 150) snippet, -- Extrait simple du contenu
+    0 rank -- Classement fixe sans FTS5
+FROM line_search ls
+JOIN book b ON b.id = ls.bookId
+WHERE ls.content LIKE '%' || ? || '%'
+ORDER BY ls.bookId, ls.lineIndex
+LIMIT ? OFFSET ?;
+
+searchInBook:
+SELECT
+    ls.bookId,
+    b.title bookTitle,
+    ls.lineId,
+    ls.lineIndex,
+    SUBSTR(ls.content, 1, 150) snippet,
+    0 rank
+FROM line_search ls
+JOIN book b ON b.id = ls.bookId
+WHERE ls.content LIKE '%' || ? || '%' AND ls.bookId = ?
+ORDER BY ls.lineIndex
+LIMIT ? OFFSET ?;
+
+searchByAuthor:
+SELECT
+    ls.bookId,
+    b.title bookTitle,
+    ls.lineId,
+    ls.lineIndex,
+    SUBSTR(ls.content, 1, 150) snippet,
+    0 rank
+FROM line_search ls
+JOIN book b ON b.id = ls.bookId
+WHERE ls.content LIKE '%' || ? || '%' AND b.author = ?
+ORDER BY ls.bookId, ls.lineIndex
+LIMIT ? OFFSET ?;
+
+searchWithBookFilter:
+SELECT
+    ls.bookId,
+    b.title bookTitle,
+    ls.lineId,
+    ls.lineIndex,
+    SUBSTR(ls.content, 1, 150) snippet,
+    0 rank
+FROM line_search ls
+JOIN book b ON b.id = ls.bookId
+WHERE ls.content LIKE '%' || ? || '%'
+AND b.title LIKE '%' || ? || '%'
+ORDER BY ls.bookId, ls.lineIndex
+LIMIT ? OFFSET ?;
+
+countSearchResults:
+SELECT COUNT(*)
+FROM line_search
+WHERE content LIKE '%' || ? || '%';
+
+-- Nouvelles requêtes pour gérer l'insertion et la mise à jour des données de recherche
+
+insertSearchEntry:
+INSERT INTO line_search (bookId, lineId, lineIndex, bookTitle, content)
+VALUES (?, ?, ?, ?, ?);
+
+updateSearchEntry:
+UPDATE line_search
+SET content = ?
+WHERE lineId = ?;
+
+deleteSearchEntryByLineId:
+DELETE FROM line_search
+WHERE lineId = ?;
+
+deleteSearchEntriesByBookId:
+DELETE FROM line_search
+WHERE bookId = ?;

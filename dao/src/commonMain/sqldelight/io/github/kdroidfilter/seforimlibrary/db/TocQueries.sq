@@ -1,0 +1,29 @@
+-- Requêtes pour la table des matières
+
+selectByBookId:
+SELECT * FROM tocEntry WHERE bookId = ? ORDER BY orderIndex;
+
+selectById:
+SELECT * FROM tocEntry WHERE id = ?;
+
+selectRootByBookId:
+SELECT * FROM tocEntry WHERE bookId = ? AND parentId IS NULL ORDER BY orderIndex;
+
+selectChildren:
+SELECT * FROM tocEntry WHERE parentId = ? ORDER BY orderIndex;
+
+selectByLineId:
+SELECT * FROM tocEntry WHERE lineId = ?;
+
+insert:
+INSERT INTO tocEntry (bookId, parentId, text, level, lineId, lineIndex, orderIndex, path)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+delete:
+DELETE FROM tocEntry WHERE id = ?;
+
+deleteByBookId:
+DELETE FROM tocEntry WHERE bookId = ?;
+
+lastInsertRowId:
+SELECT last_insert_rowid();

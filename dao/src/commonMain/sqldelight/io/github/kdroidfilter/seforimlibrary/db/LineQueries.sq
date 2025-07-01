@@ -1,0 +1,36 @@
+-- Requêtes pour les lignes
+
+selectById:
+SELECT * FROM line WHERE id = ?;
+
+selectByBookId:
+SELECT * FROM line WHERE bookId = ? ORDER BY lineIndex;
+
+selectByBookIdRange:
+SELECT * FROM line
+WHERE bookId = ?
+AND lineIndex >= ?
+AND lineIndex <= ?
+ORDER BY lineIndex;
+
+selectByBookIdAndIndex:
+SELECT * FROM line WHERE bookId = ? AND lineIndex = ?;
+
+insert:
+INSERT INTO line (bookId, lineIndex, content, plainText, tocEntryId)
+VALUES (?, ?, ?, ?, ?);
+
+updateTocEntryId:
+UPDATE line SET tocEntryId = ? WHERE id = ?;
+
+delete:
+DELETE FROM line WHERE id = ?;
+
+deleteByBookId:
+DELETE FROM line WHERE bookId = ?;
+
+countByBookId:
+SELECT COUNT(*) FROM line WHERE bookId = ?;
+
+lastInsertRowId:
+SELECT last_insert_rowid();

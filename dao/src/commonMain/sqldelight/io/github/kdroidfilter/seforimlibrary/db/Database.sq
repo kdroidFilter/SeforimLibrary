@@ -1,0 +1,115 @@
+-- Table des catégories
+CREATE TABLE IF NOT EXISTS category (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parentId INTEGER,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    shortDescription TEXT NOT NULL DEFAULT '',
+    orderIndex INTEGER NOT NULL DEFAULT 999,
+    path TEXT NOT NULL UNIQUE,
+    level INTEGER NOT NULL DEFAULT 0,
+    createdAt INTEGER NOT NULL,
+    FOREIGN KEY (parentId) REFERENCES category(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_category_parent ON category(parentId);
+CREATE INDEX idx_category_order ON category(orderIndex);
+CREATE INDEX idx_category_path ON category(path);
+
+-- Table des livres
+CREATE TABLE IF NOT EXISTS book (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    categoryId INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    extraTitles TEXT NOT NULL DEFAULT '[]',
+    author TEXT,
+    heShortDesc TEXT,
+    pubDate TEXT,
+    pubPlace TEXT,
+    orderIndex INTEGER NOT NULL DEFAULT 999,
+    topics TEXT NOT NULL DEFAULT '',
+    path TEXT NOT NULL UNIQUE,
+    bookType TEXT NOT NULL,
+    totalLines INTEGER NOT NULL DEFAULT 0,
+    createdAt INTEGER NOT NULL,
+    FOREIGN KEY (categoryId) REFERENCES category(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_book_category ON book(categoryId);
+CREATE INDEX idx_book_title ON book(title);
+CREATE INDEX idx_book_author ON book(author);
+CREATE INDEX idx_book_order ON book(orderIndex);
+CREATE INDEX idx_book_path ON book(path);
+
+-- Table des lignes
+CREATE TABLE IF NOT EXISTS line (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bookId INTEGER NOT NULL,
+    lineIndex INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    plainText TEXT NOT NULL,
+    tocEntryId INTEGER,
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
+    FOREIGN KEY (tocEntryId) REFERENCES tocEntry(id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_line_book_index ON line(bookId, lineIndex);
+CREATE INDEX idx_line_toc ON line(tocEntryId);
+
+-- Table des entrées TOC
+CREATE TABLE IF NOT EXISTS tocEntry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bookId INTEGER NOT NULL,
+    parentId INTEGER,
+    text TEXT NOT NULL,
+    level INTEGER NOT NULL,
+    lineId INTEGER NOT NULL,
+    lineIndex INTEGER NOT NULL,
+    orderIndex INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
+    FOREIGN KEY (parentId) REFERENCES tocEntry(id) ON DELETE CASCADE,
+    FOREIGN KEY (lineId) REFERENCES line(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_toc_book ON tocEntry(bookId);
+CREATE INDEX idx_toc_parent ON tocEntry(parentId);
+CREATE INDEX idx_toc_line ON tocEntry(lineId);
+
+-- Table des liens
+CREATE TABLE IF NOT EXISTS link (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sourceBookId INTEGER NOT NULL,
+    targetBookId INTEGER NOT NULL,
+    heRef TEXT NOT NULL,
+    sourceLineId INTEGER NOT NULL,
+    targetLineId INTEGER NOT NULL,
+    sourceLineIndex INTEGER NOT NULL,
+    targetLineIndex INTEGER NOT NULL,
+    connectionType TEXT NOT NULL,
+    FOREIGN KEY (sourceBookId) REFERENCES book(id) ON DELETE CASCADE,
+    FOREIGN KEY (targetBookId) REFERENCES book(id) ON DELETE CASCADE,
+    FOREIGN KEY (sourceLineId) REFERENCES line(id) ON DELETE CASCADE,
+    FOREIGN KEY (targetLineId) REFERENCES line(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_link_source ON link(sourceBookId, sourceLineIndex);
+CREATE INDEX idx_link_source_line ON link(sourceLineId);
+CREATE INDEX idx_link_target ON link(targetBookId, targetLineIndex);
+CREATE INDEX idx_link_type ON link(connectionType);
+
+-- Table standard pour la recherche (sans FTS5)
+CREATE TABLE IF NOT EXISTS line_search (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bookId INTEGER NOT NULL,
+    lineId INTEGER NOT NULL,
+    lineIndex INTEGER NOT NULL,
+    bookTitle TEXT NOT NULL,
+    content TEXT NOT NULL,
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
+    FOREIGN KEY (lineId) REFERENCES line(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_line_search_content ON line_search(content);
+CREATE INDEX idx_line_search_book_title ON line_search(bookTitle);
+CREATE INDEX idx_line_search_book_id ON line_search(bookId);

@@ -1,0 +1,45 @@
+-- Requêtes pour les livres
+
+selectAll:
+SELECT * FROM book ORDER BY orderIndex, title;
+
+selectById:
+SELECT * FROM book WHERE id = ?;
+
+selectByCategoryId:
+SELECT * FROM book WHERE categoryId = ? ORDER BY orderIndex, title;
+
+selectByTitle:
+SELECT * FROM book WHERE title = ?;
+
+selectByPath:
+SELECT * FROM book WHERE path = ?;
+
+selectByAuthor:
+SELECT * FROM book WHERE author LIKE ? ORDER BY orderIndex, title;
+
+insert:
+INSERT INTO book (categoryId, title, extraTitles, author, heShortDesc, pubDate, pubPlace, orderIndex, topics, path, bookType, totalLines, createdAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+insertWithId:
+INSERT INTO book (id, categoryId, title, extraTitles, author, heShortDesc, pubDate, pubPlace, orderIndex, topics, path, bookType, totalLines, createdAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateTotalLines:
+UPDATE book SET totalLines = ? WHERE id = ?;
+
+delete:
+DELETE FROM book WHERE id = ?;
+
+countByCategoryId:
+SELECT COUNT(*) FROM book WHERE categoryId = ?;
+
+countAll:
+SELECT COUNT(*) FROM book;
+
+getMaxId:
+SELECT MAX(id) FROM book;
+
+lastInsertRowId:
+SELECT last_insert_rowid();

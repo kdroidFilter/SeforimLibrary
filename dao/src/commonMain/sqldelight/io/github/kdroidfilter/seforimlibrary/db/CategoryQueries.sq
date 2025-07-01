@@ -1,0 +1,34 @@
+-- Requêtes pour les catégories
+
+selectAll:
+SELECT * FROM category ORDER BY orderIndex, title;
+
+selectById:
+SELECT * FROM category WHERE id = ?;
+
+selectByParentId:
+SELECT * FROM category WHERE parentId = ? ORDER BY orderIndex, title;
+
+selectRoot:
+SELECT * FROM category WHERE parentId IS NULL ORDER BY orderIndex, title;
+
+selectByPath:
+SELECT * FROM category WHERE path = ?;
+
+insert:
+INSERT INTO category (parentId, title, description, shortDescription, orderIndex, path, level, createdAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+update:
+UPDATE category SET
+    title = ?,
+    description = ?,
+    shortDescription = ?,
+    orderIndex = ?
+WHERE id = ?;
+
+delete:
+DELETE FROM category WHERE id = ?;
+
+lastInsertRowId:
+SELECT last_insert_rowid();
