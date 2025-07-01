@@ -163,6 +163,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
 
     suspend fun insertLine(line: Line): Long = withContext(Dispatchers.IO) {
+        println("DEBUG: Repository inserting line with bookId: ${line.bookId}")
         database.lineQueriesQueries.insert(
             bookId = line.bookId,
             lineIndex = line.lineIndex.toLong(),
@@ -170,11 +171,15 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             plainText = line.plainText,
             tocEntryId = null
         )
-        database.lineQueriesQueries.lastInsertRowId().executeAsOne()
+        val lineId = database.lineQueriesQueries.lastInsertRowId().executeAsOne()
+        println("DEBUG: Repository inserted line with ID: $lineId and bookId: ${line.bookId}")
+        lineId
     }
 
     suspend fun updateLineTocEntry(lineId: Long, tocEntryId: Long) = withContext(Dispatchers.IO) {
+        println("DEBUG: Repository updating line $lineId with tocEntryId: $tocEntryId")
         database.lineQueriesQueries.updateTocEntryId(tocEntryId, lineId)
+        println("DEBUG: Repository updated line $lineId with tocEntryId: $tocEntryId")
     }
 
     // --- Table of Contents ---
@@ -196,6 +201,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     suspend fun insertTocEntry(entry: TocEntry): Long = withContext(Dispatchers.IO) {
+        println("DEBUG: Repository inserting TOC entry with bookId: ${entry.bookId}, lineId: ${entry.lineId}")
         database.tocQueriesQueries.insert(
             bookId = entry.bookId,
             parentId = entry.parentId,
@@ -206,7 +212,9 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             orderIndex = entry.order.toLong(),
             path = entry.path
         )
-        database.tocQueriesQueries.lastInsertRowId().executeAsOne()
+        val tocId = database.tocQueriesQueries.lastInsertRowId().executeAsOne()
+        println("DEBUG: Repository inserted TOC entry with ID: $tocId, bookId: ${entry.bookId}, lineId: ${entry.lineId}")
+        tocId
     }
 
     // --- Links ---

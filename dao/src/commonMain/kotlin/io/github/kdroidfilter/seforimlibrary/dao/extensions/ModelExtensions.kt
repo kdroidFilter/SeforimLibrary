@@ -50,6 +50,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.Category.toModel(): Category {
 }
 
 fun io.github.kdroidfilter.seforimlibrary.db.Line.toModel(): Line {
+    println("DEBUG: Converting database Line to model with id: $id, bookId: $bookId, tocEntryId: $tocEntryId")
     return Line(
         id = id,
         bookId = bookId,

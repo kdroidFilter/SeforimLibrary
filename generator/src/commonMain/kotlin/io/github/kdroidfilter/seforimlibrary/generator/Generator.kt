@@ -164,6 +164,7 @@ class DatabaseGenerator(
 
         // Traiter le contenu pour les livres texte
         if (book.bookType == BookType.TEXT) {
+            // Use the ID returned by the database, which might be different from currentBookId
             processBookContent(path, bookId)
         }
     }
@@ -195,6 +196,8 @@ class DatabaseGenerator(
                 val lineIndex = startIndex + index
                 val plainText = cleanHtml(line)
 
+                // Make sure we're using the correct bookId from the database
+                println("DEBUG: Inserting line with bookId: $bookId")
                 val lineId = repository.insertLine(
                     Line(
                         bookId = bookId,
@@ -203,6 +206,7 @@ class DatabaseGenerator(
                         plainText = plainText
                     )
                 )
+                println("DEBUG: Line inserted with ID: $lineId")
 
                 lineIds.add(lineIndex to lineId)
             }
@@ -240,12 +244,19 @@ class DatabaseGenerator(
             val level = detectHeaderLevel(line)
             if (level > 0) {
                 val text = cleanHtml(line)
-                val lineId = lineIds.find { it.first == index }?.second ?: return@forEachIndexed
+                val lineId = lineIds.find { it.first == index }?.second
+                if (lineId == null) {
+                    println("DEBUG: Could not find lineId for index $index")
+                    return@forEachIndexed
+                }
                 tocEntries.add(TocInfo(index, lineId, level, text))
             }
         }
 
-        if (tocEntries.isEmpty()) return
+        if (tocEntries.isEmpty()) {
+            println("DEBUG: No TOC entries found for book ID: $bookId")
+            return
+        }
 
         logger.info("Création de ${tocEntries.size} entrées TOC")
 
@@ -273,10 +284,13 @@ class DatabaseGenerator(
                 path = path
             )
 
+            println("DEBUG: Inserting TOC entry with bookId: $bookId, lineId: ${tocInfo.lineId}")
             val tocId = repository.insertTocEntry(tocEntry)
+            println("DEBUG: TOC entry inserted with ID: $tocId")
             parentStack[tocInfo.level] = tocId
 
             // Mettre à jour la ligne avec la référence TOC
+            println("DEBUG: Updating line ${tocInfo.lineId} with tocEntryId: $tocId")
             repository.updateLineTocEntry(tocInfo.lineId, tocId)
         }
     }
