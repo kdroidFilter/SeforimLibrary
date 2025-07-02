@@ -61,12 +61,14 @@ fun io.github.kdroidfilter.seforimlibrary.db.Line.toModel(): Line {
 }
 
 fun io.github.kdroidfilter.seforimlibrary.db.TocEntry.toModel(): TocEntry {
+    println("DEBUG: Converting database TocEntry to model with id: $id, bookId: $bookId, lineId: $lineId")
     return TocEntry(
         id = id,
         bookId = bookId,
         parentId = parentId,
         text = text,
         level = level.toInt(),
+        lineId = lineId,
         lineIndex = lineIndex.toInt(),
         order = orderIndex.toInt(),
         path = path

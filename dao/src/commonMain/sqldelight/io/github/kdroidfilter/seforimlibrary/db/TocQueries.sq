@@ -19,6 +19,13 @@ insert:
 INSERT INTO tocEntry (bookId, parentId, text, level, lineId, lineIndex, orderIndex, path)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
+insertWithId:
+INSERT INTO tocEntry (id, bookId, parentId, text, level, lineId, lineIndex, orderIndex, path)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateLineId:
+UPDATE tocEntry SET lineId = ? WHERE id = ?;
+
 delete:
 DELETE FROM tocEntry WHERE id = ?;
 

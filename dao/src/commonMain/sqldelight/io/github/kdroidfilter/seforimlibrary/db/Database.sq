@@ -63,13 +63,13 @@ CREATE TABLE IF NOT EXISTS tocEntry (
     parentId INTEGER,
     text TEXT NOT NULL,
     level INTEGER NOT NULL,
-    lineId INTEGER NOT NULL,
+    lineId INTEGER,
     lineIndex INTEGER NOT NULL,
     orderIndex INTEGER NOT NULL,
     path TEXT NOT NULL,
     FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
     FOREIGN KEY (parentId) REFERENCES tocEntry(id) ON DELETE CASCADE,
-    FOREIGN KEY (lineId) REFERENCES line(id) ON DELETE CASCADE
+    FOREIGN KEY (lineId) REFERENCES line(id) ON DELETE SET NULL
 );
 
 CREATE INDEX idx_toc_book ON tocEntry(bookId);

@@ -20,6 +20,10 @@ insert:
 INSERT INTO line (bookId, lineIndex, content, plainText, tocEntryId)
 VALUES (?, ?, ?, ?, ?);
 
+insertWithId:
+INSERT INTO line (id, bookId, lineIndex, content, plainText, tocEntryId)
+VALUES (?, ?, ?, ?, ?, ?);
+
 updateTocEntryId:
 UPDATE line SET tocEntryId = ? WHERE id = ?;
 

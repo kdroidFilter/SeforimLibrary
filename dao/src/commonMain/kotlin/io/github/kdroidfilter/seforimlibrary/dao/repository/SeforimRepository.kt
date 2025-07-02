@@ -164,16 +164,32 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     suspend fun insertLine(line: Line): Long = withContext(Dispatchers.IO) {
         println("DEBUG: Repository inserting line with bookId: ${line.bookId}")
-        database.lineQueriesQueries.insert(
-            bookId = line.bookId,
-            lineIndex = line.lineIndex.toLong(),
-            content = line.content,
-            plainText = line.plainText,
-            tocEntryId = null
-        )
-        val lineId = database.lineQueriesQueries.lastInsertRowId().executeAsOne()
-        println("DEBUG: Repository inserted line with ID: $lineId and bookId: ${line.bookId}")
-        lineId
+
+        // Use the ID from the line object if it's greater than 0
+        if (line.id > 0) {
+            database.lineQueriesQueries.insertWithId(
+                id = line.id,
+                bookId = line.bookId,
+                lineIndex = line.lineIndex.toLong(),
+                content = line.content,
+                plainText = line.plainText,
+                tocEntryId = null
+            )
+            println("DEBUG: Repository inserted line with explicit ID: ${line.id} and bookId: ${line.bookId}")
+            return@withContext line.id
+        } else {
+            // Fall back to auto-generated ID if line.id is 0
+            database.lineQueriesQueries.insert(
+                bookId = line.bookId,
+                lineIndex = line.lineIndex.toLong(),
+                content = line.content,
+                plainText = line.plainText,
+                tocEntryId = null
+            )
+            val lineId = database.lineQueriesQueries.lastInsertRowId().executeAsOne()
+            println("DEBUG: Repository inserted line with auto-generated ID: $lineId and bookId: ${line.bookId}")
+            return@withContext lineId
+        }
     }
 
     suspend fun updateLineTocEntry(lineId: Long, tocEntryId: Long) = withContext(Dispatchers.IO) {
@@ -202,19 +218,44 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     suspend fun insertTocEntry(entry: TocEntry): Long = withContext(Dispatchers.IO) {
         println("DEBUG: Repository inserting TOC entry with bookId: ${entry.bookId}, lineId: ${entry.lineId}")
-        database.tocQueriesQueries.insert(
-            bookId = entry.bookId,
-            parentId = entry.parentId,
-            text = entry.text,
-            level = entry.level.toLong(),
-            lineId = entry.lineId,
-            lineIndex = entry.lineIndex.toLong(),
-            orderIndex = entry.order.toLong(),
-            path = entry.path
-        )
-        val tocId = database.tocQueriesQueries.lastInsertRowId().executeAsOne()
-        println("DEBUG: Repository inserted TOC entry with ID: $tocId, bookId: ${entry.bookId}, lineId: ${entry.lineId}")
-        tocId
+
+        // Use the ID from the entry object if it's greater than 0
+        if (entry.id > 0) {
+            database.tocQueriesQueries.insertWithId(
+                id = entry.id,
+                bookId = entry.bookId,
+                parentId = entry.parentId,
+                text = entry.text,
+                level = entry.level.toLong(),
+                lineId = entry.lineId,
+                lineIndex = entry.lineIndex.toLong(),
+                orderIndex = entry.order.toLong(),
+                path = entry.path
+            )
+            println("DEBUG: Repository inserted TOC entry with explicit ID: ${entry.id}, bookId: ${entry.bookId}, lineId: ${entry.lineId}")
+            return@withContext entry.id
+        } else {
+            // Fall back to auto-generated ID if entry.id is 0
+            database.tocQueriesQueries.insert(
+                bookId = entry.bookId,
+                parentId = entry.parentId,
+                text = entry.text,
+                level = entry.level.toLong(),
+                lineId = entry.lineId,
+                lineIndex = entry.lineIndex.toLong(),
+                orderIndex = entry.order.toLong(),
+                path = entry.path
+            )
+            val tocId = database.tocQueriesQueries.lastInsertRowId().executeAsOne()
+            println("DEBUG: Repository inserted TOC entry with auto-generated ID: $tocId, bookId: ${entry.bookId}, lineId: ${entry.lineId}")
+            return@withContext tocId
+        }
+    }
+
+    suspend fun updateTocEntryLineId(tocEntryId: Long, lineId: Long) = withContext(Dispatchers.IO) {
+        println("DEBUG: Repository updating TOC entry $tocEntryId with lineId: $lineId")
+        database.tocQueriesQueries.updateLineId(lineId, tocEntryId)
+        println("DEBUG: Repository updated TOC entry $tocEntryId with lineId: $lineId")
     }
 
     // --- Links ---

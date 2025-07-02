@@ -25,6 +25,8 @@ class DatabaseGenerator(
     private val logger = LoggerFactory.getLogger(javaClass)
     private val json = Json { ignoreUnknownKeys = true }
     private var nextBookId = 1L // Counter for book IDs
+    private var nextLineId = 1L // Counter for line IDs
+    private var nextTocEntryId = 1L // Counter for TOC entry IDs
 
     suspend fun generate() = coroutineScope {
         logger.info("Démarrage de la génération de la base de données...")
@@ -150,7 +152,7 @@ class DatabaseGenerator(
             heShortDesc = meta?.heShortDesc,
             pubDate = meta?.pubDate,
             pubPlace = meta?.pubPlace,
-            order = meta?.order?.toFloat() ?: 999f,
+            order = meta?.order ?: 999f,
             topics = extractTopics(path),
             path = path.toString(),
             bookType = if (path.extension == "pdf") BookType.PDF else BookType.TEXT,
@@ -185,21 +187,65 @@ class DatabaseGenerator(
         val lines = content.lines()
         logger.info("Nombre de lignes: ${lines.size}")
 
-        // Insérer les lignes par batch pour performance
-        val lineIds = mutableListOf<Pair<Int, Long>>()
-        val batchSize = 1000
+        // Process each line one by one, handling TOC entries as we go
+        processLinesWithTocEntries(bookId, lines)
 
-        for (batch in lines.chunked(batchSize).withIndex()) {
-            val startIndex = batch.index * batchSize
+        // Mettre à jour le nombre total de lignes
+        repository.updateBookTotalLines(bookId, lines.size)
 
-            for ((index, line) in batch.value.withIndex()) {
-                val lineIndex = startIndex + index
-                val plainText = cleanHtml(line)
+        logger.info("Contenu traité avec succès pour le livre ID: $bookId (ID généré par la base de données)")
+    }
 
-                // Make sure we're using the correct bookId from the database
-                println("DEBUG: Inserting line with bookId: $bookId")
+
+    private suspend fun processLinesWithTocEntries(bookId: Long, lines: List<String>) {
+        println("DEBUG: Processing lines and TOC entries together for book ID: $bookId")
+
+        // Map to track TOC entry parent relationships by level
+        val parentStack = mutableMapOf<Int, Long>()
+        var tocOrder = 0
+
+        for ((lineIndex, line) in lines.withIndex()) {
+            val plainText = cleanHtml(line)
+            val level = detectHeaderLevel(line)
+
+            // Check if this line is a TOC entry
+            if (level > 0) {
+                // This is a TOC entry, create it first (without lineId)
+                val parentId = if (level > 1) {
+                    // Find the closest parent
+                    (level - 1 downTo 1).firstNotNullOfOrNull { parentStack[it] }
+                } else null
+
+                val path = buildTocPath(parentStack, level, tocOrder)
+
+                // Assign explicit IDs
+                val currentTocEntryId = nextTocEntryId++
+                val currentLineId = nextLineId++
+
+                val tocEntry = TocEntry(
+                    id = currentTocEntryId, // Set explicit ID
+                    bookId = bookId,
+                    parentId = parentId,
+                    text = plainText,
+                    level = level,
+                    lineId = null, // Will be set after line is inserted
+                    lineIndex = lineIndex,
+                    order = tocOrder++,
+                    path = path
+                )
+
+                println("DEBUG: Inserting TOC entry with ID: $currentTocEntryId, bookId: $bookId, lineIndex: $lineIndex")
+                val tocEntryId = repository.insertTocEntry(tocEntry)
+                println("DEBUG: TOC entry inserted with ID: $tocEntryId")
+
+                // Update parent stack
+                parentStack[level] = tocEntryId
+
+                // Now insert the line
+                println("DEBUG: Inserting line with ID: $currentLineId, bookId: $bookId, lineIndex: $lineIndex")
                 val lineId = repository.insertLine(
                     Line(
+                        id = currentLineId, // Set explicit ID
                         bookId = bookId,
                         lineIndex = lineIndex,
                         content = line,
@@ -208,22 +254,35 @@ class DatabaseGenerator(
                 )
                 println("DEBUG: Line inserted with ID: $lineId")
 
-                lineIds.add(lineIndex to lineId)
+                // Update the TOC entry with the lineId
+                println("DEBUG: Updating TOC entry $tocEntryId with lineId: $lineId")
+                repository.updateTocEntryLineId(tocEntryId, lineId)
+
+                // Update the line with the tocEntryId
+                println("DEBUG: Updating line $lineId with tocEntryId: $tocEntryId")
+                repository.updateLineTocEntry(lineId, tocEntryId)
+            } else {
+                // This is a regular line, just insert it
+                val currentLineId = nextLineId++
+                println("DEBUG: Inserting regular line with ID: $currentLineId, bookId: $bookId, lineIndex: $lineIndex")
+                repository.insertLine(
+                    Line(
+                        id = currentLineId, // Set explicit ID
+                        bookId = bookId,
+                        lineIndex = lineIndex,
+                        content = line,
+                        plainText = plainText
+                    )
+                )
             }
 
-            if (batch.index % 10 == 0) {
-                logger.info("Progression: ${startIndex + batch.value.size}/${lines.size} lignes")
+            // Log progress
+            if (lineIndex % 1000 == 0) {
+                logger.info("Progression: $lineIndex/${lines.size} lignes")
             }
         }
-
-        // Créer la table des matières
-        createTableOfContents(bookId, lines, lineIds)
-
-        // Mettre à jour le nombre total de lignes
-        repository.updateBookTotalLines(bookId, lines.size)
-
-        logger.info("Contenu traité avec succès pour le livre ID: $bookId (ID généré par la base de données)")
     }
+
 
     private fun cleanHtml(html: String): String {
         return Jsoup.clean(html, Safelist.none())
@@ -231,69 +290,6 @@ class DatabaseGenerator(
             .replace("\\s+".toRegex(), " ")
     }
 
-    private suspend fun createTableOfContents(
-        bookId: Long,
-        lines: List<String>,
-        lineIds: List<Pair<Int, Long>>
-    ) {
-        println("DEBUG: Creating table of contents for book ID: $bookId")
-        val tocEntries = mutableListOf<TocInfo>()
-
-        // Détecter les entrées TOC
-        lines.forEachIndexed { index, line ->
-            val level = detectHeaderLevel(line)
-            if (level > 0) {
-                val text = cleanHtml(line)
-                val lineId = lineIds.find { it.first == index }?.second
-                if (lineId == null) {
-                    println("DEBUG: Could not find lineId for index $index")
-                    return@forEachIndexed
-                }
-                tocEntries.add(TocInfo(index, lineId, level, text))
-            }
-        }
-
-        if (tocEntries.isEmpty()) {
-            println("DEBUG: No TOC entries found for book ID: $bookId")
-            return
-        }
-
-        logger.info("Création de ${tocEntries.size} entrées TOC")
-
-        // Créer la hiérarchie TOC
-        val parentStack = mutableMapOf<Int, Long>()
-
-        for ((order, tocInfo) in tocEntries.withIndex()) {
-            val parentId = if (tocInfo.level > 1) {
-                // Trouver le parent le plus proche
-                (tocInfo.level - 1 downTo 1)
-                    .mapNotNull { parentStack[it] }
-                    .firstOrNull()
-            } else null
-
-            val path = buildTocPath(parentStack, tocInfo.level, order)
-
-            val tocEntry = TocEntry(
-                bookId = bookId,
-                parentId = parentId,
-                text = tocInfo.text,
-                level = tocInfo.level,
-                lineId = tocInfo.lineId,
-                lineIndex = tocInfo.lineIndex,
-                order = order,
-                path = path
-            )
-
-            println("DEBUG: Inserting TOC entry with bookId: $bookId, lineId: ${tocInfo.lineId}")
-            val tocId = repository.insertTocEntry(tocEntry)
-            println("DEBUG: TOC entry inserted with ID: $tocId")
-            parentStack[tocInfo.level] = tocId
-
-            // Mettre à jour la ligne avec la référence TOC
-            println("DEBUG: Updating line ${tocInfo.lineId} with tocEntryId: $tocId")
-            repository.updateLineTocEntry(tocInfo.lineId, tocId)
-        }
-    }
 
     private fun detectHeaderLevel(line: String): Int {
         return when {
@@ -403,12 +399,6 @@ class DatabaseGenerator(
     }
 
     // Classes internes
-    private data class TocInfo(
-        val lineIndex: Int,
-        val lineId: Long,
-        val level: Int,
-        val text: String
-    )
 
     @kotlinx.serialization.Serializable
     private data class LinkData(

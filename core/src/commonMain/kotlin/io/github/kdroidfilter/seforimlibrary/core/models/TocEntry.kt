@@ -12,7 +12,7 @@ data class TocEntry(
     val parentId: Long? = null,
     val text: String,
     val level: Int,
-    val lineId: Long = 0,
+    val lineId: Long? = null,
     val lineIndex: Int,
     val order: Int,
     val path: String  // Chemin hiérarchique (ex: "1.2.3")
