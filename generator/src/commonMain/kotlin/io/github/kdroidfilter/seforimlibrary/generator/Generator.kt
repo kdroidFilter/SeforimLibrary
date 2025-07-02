@@ -472,7 +472,7 @@ class DatabaseGenerator(
         val line_index_1: Double,
         val path_2: String,
         val line_index_2: Double,
-        @SerialName("Connection Type")
+        @SerialName("Conection Type")
         val connectionType: String = ""
     )
 }
