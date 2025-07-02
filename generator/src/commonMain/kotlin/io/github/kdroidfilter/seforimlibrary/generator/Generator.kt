@@ -1,10 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.generator
 
 
-import co.touchlab.kermit.CommonWriter
 import co.touchlab.kermit.Logger
-import co.touchlab.kermit.Logger.Companion.setMinSeverity
-import co.touchlab.kermit.Severity
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import kotlinx.coroutines.coroutineScope
