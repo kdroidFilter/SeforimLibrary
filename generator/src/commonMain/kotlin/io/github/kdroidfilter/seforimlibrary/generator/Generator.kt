@@ -379,65 +379,48 @@ class DatabaseGenerator(
             for ((index, linkData) in links.withIndex()) {
                 try {
                     // Trouver le livre cible
-                    val targetPath = Paths.get(linkData.path_2)
-                    val targetTitle = targetPath.fileName.toString().substringBeforeLast('.')
+                    // Handle paths with backslashes
+                    val path = linkData.path_2
+                    val targetTitle = if (path.contains('\\')) {
+                        // Extract the last component of a backslash-separated path
+                        val lastComponent = path.split('\\').last()
+                        // Remove file extension if present
+                        lastComponent.substringBeforeLast('.', lastComponent)
+                    } else {
+                        // Use the standard path handling for forward slash paths
+                        val targetPath = Paths.get(path)
+                        targetPath.fileName.toString().substringBeforeLast('.')
+                    }
                     logger.d { "Link ${index + 1}/${links.size} - Target book title: $targetTitle" }
 
+                    // Try to find the target book
                     val targetBook = repository.getBookByTitle(targetTitle)
                     if (targetBook == null) {
-                        logger.d { "Target book not found: $targetTitle" }
+                        // Enhanced logging for debugging
+                        logger.i { "Link ${index + 1}/${links.size} - Target book not found: $targetTitle" }
+                        logger.i { "Original path: ${linkData.path_2}" }
                         continue
                     }
-                    logger.d { "Found target book with ID: ${targetBook.id}" }
+                    logger.d { "Using target book with ID: ${targetBook.id}" }
 
                     // Trouver les lignes
                     logger.d { "Looking for source line at index: ${linkData.line_index_1.toInt()} in book ${sourceBook.id}" }
 
-                    // Try to find the source line, or create it if it doesn't exist
-                    var sourceLine = repository.getLineByIndex(sourceBook.id, linkData.line_index_1.toInt())
+                    // Try to find the source line
+                    val sourceLine = repository.getLineByIndex(sourceBook.id, linkData.line_index_1.toInt())
                     if (sourceLine == null) {
-                        logger.d { "Source line not found at index: ${linkData.line_index_1.toInt()}, creating it" }
-
-                        // Create a placeholder line
-                        val sourceLineId = nextLineId++
-                        sourceLine = Line(
-                            id = sourceLineId,
-                            bookId = sourceBook.id,
-                            lineIndex = linkData.line_index_1.toInt(),
-                            content = "Placeholder for link source",
-                            plainText = "Placeholder for link source"
-                        )
-
-                        val insertedSourceLineId = repository.insertLine(sourceLine)
-                        logger.d { "Created placeholder source line with ID: $insertedSourceLineId" }
-
-                        // Update the sourceLine with the inserted ID
-                        sourceLine = sourceLine.copy(id = insertedSourceLineId)
+                        logger.d { "Source line not found at index: ${linkData.line_index_1.toInt()}, skipping this link but continuing with others" }
+                        continue
                     }
                     logger.d { "Using source line with ID: ${sourceLine.id}" }
 
                     logger.d { "Looking for target line at index: ${linkData.line_index_2.toInt()} in book ${targetBook.id}" }
 
-                    // Try to find the target line, or create it if it doesn't exist
-                    var targetLine = repository.getLineByIndex(targetBook.id, linkData.line_index_2.toInt())
+                    // Try to find the target line
+                    val targetLine = repository.getLineByIndex(targetBook.id, linkData.line_index_2.toInt())
                     if (targetLine == null) {
-                        logger.d { "Target line not found at index: ${linkData.line_index_2.toInt()}, creating it" }
-
-                        // Create a placeholder line
-                        val targetLineId = nextLineId++
-                        targetLine = Line(
-                            id = targetLineId,
-                            bookId = targetBook.id,
-                            lineIndex = linkData.line_index_2.toInt(),
-                            content = "Placeholder for link target",
-                            plainText = "Placeholder for link target"
-                        )
-
-                        val insertedTargetLineId = repository.insertLine(targetLine)
-                        logger.d { "Created placeholder target line with ID: $insertedTargetLineId" }
-
-                        // Update the targetLine with the inserted ID
-                        targetLine = targetLine.copy(id = insertedTargetLineId)
+                        logger.d { "Target line not found at index: ${linkData.line_index_2.toInt()}, skipping this link but continuing with others" }
+                        continue
                     }
                     logger.d { "Using target line with ID: ${targetLine.id}" }
 
@@ -489,7 +472,7 @@ class DatabaseGenerator(
         val line_index_1: Double,
         val path_2: String,
         val line_index_2: Double,
-        @SerialName("Conection Type")
+        @SerialName("Connection Type")
         val connectionType: String = ""
     )
 }
