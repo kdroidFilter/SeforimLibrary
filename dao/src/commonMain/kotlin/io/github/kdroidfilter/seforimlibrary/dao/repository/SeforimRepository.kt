@@ -3,28 +3,23 @@ package io.github.kdroidfilter.seforimlibrary.dao.repository
 
 
 import app.cash.sqldelight.db.SqlDriver
-import io.github.kdroidfilter.seforimlibrary.core.models.Book
-import io.github.kdroidfilter.seforimlibrary.core.models.Category
-import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
-import io.github.kdroidfilter.seforimlibrary.core.models.Line
-import io.github.kdroidfilter.seforimlibrary.core.models.Link
-import io.github.kdroidfilter.seforimlibrary.core.models.SearchResult
-import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
+import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.dao.extensions.toModel
 import io.github.kdroidfilter.seforimlibrary.dao.extensions.toSearchResult
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.decodeFromString
 
 class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     private val database = SeforimDb(driver)
     private val json = Json { ignoreUnknownKeys = true }
+    private val logger = Logger.withTag("SeforimRepository")
 
     init {
-        println("DEBUG: Initializing SeforimRepository")
+
+        logger.d{"Initializing SeforimRepository"}
         // Create the database schema if it doesn't exist
         SeforimDb.Schema.create(driver)
         // Optimisations SQLite
@@ -36,9 +31,9 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         // Check if the database is empty
         try {
             val bookCount = database.bookQueriesQueries.countAll().executeAsOne()
-            println("DEBUG: Database contains $bookCount books")
+            logger.d{"Database contains $bookCount books"}
         } catch (e: Exception) {
-            println("DEBUG: Error counting books: ${e.message}")
+            logger.d{"Error counting books: ${e.message}"}
         }
     }
 
@@ -93,7 +88,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     suspend fun insertBook(book: Book): Long = withContext(Dispatchers.IO) {
-        println("DEBUG: Repository inserting book '${book.title}' with ID: ${book.id}")
+        logger.d{"Repository inserting book '${book.title}' with ID: ${book.id}"}
 
         // Use the ID from the book object if it's greater than 0
         if (book.id > 0) {
@@ -113,7 +108,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 totalLines = book.totalLines.toLong(),
                 createdAt = book.createdAt
             )
-            println("DEBUG: Used insertWithId for book '${book.title}' with ID: ${book.id}")
+            logger.d{"Used insertWithId for book '${book.title}' with ID: ${book.id}"}
             return@withContext book.id
         } else {
             // Fall back to auto-generated ID if book.id is 0
@@ -133,7 +128,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 createdAt = book.createdAt
             )
             val id = database.bookQueriesQueries.lastInsertRowId().executeAsOne()
-            println("DEBUG: Used insert for book '${book.title}', got ID: $id")
+            logger.d{"Used insert for book '${book.title}', got ID: $id"}
             return@withContext id
         }
     }
@@ -163,7 +158,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
 
     suspend fun insertLine(line: Line): Long = withContext(Dispatchers.IO) {
-        println("DEBUG: Repository inserting line with bookId: ${line.bookId}")
+        logger.d{"Repository inserting line with bookId: ${line.bookId}"}
 
         // Use the ID from the line object if it's greater than 0
         if (line.id > 0) {
@@ -175,7 +170,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 plainText = line.plainText,
                 tocEntryId = null
             )
-            println("DEBUG: Repository inserted line with explicit ID: ${line.id} and bookId: ${line.bookId}")
+            logger.d{"Repository inserted line with explicit ID: ${line.id} and bookId: ${line.bookId}"}
             return@withContext line.id
         } else {
             // Fall back to auto-generated ID if line.id is 0
@@ -187,15 +182,15 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 tocEntryId = null
             )
             val lineId = database.lineQueriesQueries.lastInsertRowId().executeAsOne()
-            println("DEBUG: Repository inserted line with auto-generated ID: $lineId and bookId: ${line.bookId}")
+            logger.d{"Repository inserted line with auto-generated ID: $lineId and bookId: ${line.bookId}"}
             return@withContext lineId
         }
     }
 
     suspend fun updateLineTocEntry(lineId: Long, tocEntryId: Long) = withContext(Dispatchers.IO) {
-        println("DEBUG: Repository updating line $lineId with tocEntryId: $tocEntryId")
+        logger.d{"Repository updating line $lineId with tocEntryId: $tocEntryId"}
         database.lineQueriesQueries.updateTocEntryId(tocEntryId, lineId)
-        println("DEBUG: Repository updated line $lineId with tocEntryId: $tocEntryId")
+        logger.d{"Repository updated line $lineId with tocEntryId: $tocEntryId"}
     }
 
     // --- Table of Contents ---
@@ -217,7 +212,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     suspend fun insertTocEntry(entry: TocEntry): Long = withContext(Dispatchers.IO) {
-        println("DEBUG: Repository inserting TOC entry with bookId: ${entry.bookId}, lineId: ${entry.lineId}")
+        logger.d{"Repository inserting TOC entry with bookId: ${entry.bookId}, lineId: ${entry.lineId}"}
 
         // Use the ID from the entry object if it's greater than 0
         if (entry.id > 0) {
@@ -232,7 +227,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 orderIndex = entry.order.toLong(),
                 path = entry.path
             )
-            println("DEBUG: Repository inserted TOC entry with explicit ID: ${entry.id}, bookId: ${entry.bookId}, lineId: ${entry.lineId}")
+            logger.d{"Repository inserted TOC entry with explicit ID: ${entry.id}, bookId: ${entry.bookId}, lineId: ${entry.lineId}"}
             return@withContext entry.id
         } else {
             // Fall back to auto-generated ID if entry.id is 0
@@ -247,21 +242,28 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 path = entry.path
             )
             val tocId = database.tocQueriesQueries.lastInsertRowId().executeAsOne()
-            println("DEBUG: Repository inserted TOC entry with auto-generated ID: $tocId, bookId: ${entry.bookId}, lineId: ${entry.lineId}")
+            logger.d{"Repository inserted TOC entry with auto-generated ID: $tocId, bookId: ${entry.bookId}, lineId: ${entry.lineId}"}
             return@withContext tocId
         }
     }
 
     suspend fun updateTocEntryLineId(tocEntryId: Long, lineId: Long) = withContext(Dispatchers.IO) {
-        println("DEBUG: Repository updating TOC entry $tocEntryId with lineId: $lineId")
+        logger.d{"Repository updating TOC entry $tocEntryId with lineId: $lineId"}
         database.tocQueriesQueries.updateLineId(lineId, tocEntryId)
-        println("DEBUG: Repository updated TOC entry $tocEntryId with lineId: $lineId")
+        logger.d{"Repository updated TOC entry $tocEntryId with lineId: $lineId"}
     }
 
     // --- Links ---
 
     suspend fun getLink(id: Long): Link? = withContext(Dispatchers.IO) {
         database.linkQueriesQueries.selectById(id).executeAsOneOrNull()?.toModel()
+    }
+
+    suspend fun countLinks(): Long = withContext(Dispatchers.IO) {
+        logger.d{"Counting links in database"}
+        val count = database.linkQueriesQueries.countAll().executeAsOne()
+        logger.d{"Found $count links in database"}
+        count
     }
 
     suspend fun getCommentariesForLines(
@@ -303,17 +305,28 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
 
     suspend fun insertLink(link: Link): Long = withContext(Dispatchers.IO) {
-        database.linkQueriesQueries.insert(
-            sourceBookId = link.sourceBookId,
-            targetBookId = link.targetBookId,
-            heRef = link.heRef,
-            sourceLineId = link.sourceLineId,
-            targetLineId = link.targetLineId,
-            sourceLineIndex = link.sourceLineIndex.toLong(),
-            targetLineIndex = link.targetLineIndex.toLong(),
-            connectionType = link.connectionType.name
-        )
-        database.linkQueriesQueries.lastInsertRowId().executeAsOne()
+        logger.d{"Repository inserting link from book ${link.sourceBookId} to book ${link.targetBookId}"}
+        logger.d{"Link details - sourceLineId: ${link.sourceLineId}, targetLineId: ${link.targetLineId}"}
+        logger.d{"Link details - sourceLineIndex: ${link.sourceLineIndex}, targetLineIndex: ${link.targetLineIndex}"}
+
+        try {
+            database.linkQueriesQueries.insert(
+                sourceBookId = link.sourceBookId,
+                targetBookId = link.targetBookId,
+                heRef = link.heRef,
+                sourceLineId = link.sourceLineId,
+                targetLineId = link.targetLineId,
+                sourceLineIndex = link.sourceLineIndex.toLong(),
+                targetLineIndex = link.targetLineIndex.toLong(),
+                connectionType = link.connectionType.name
+            )
+            val linkId = database.linkQueriesQueries.lastInsertRowId().executeAsOne()
+            logger.d{"Repository inserted link with ID: $linkId"}
+            return@withContext linkId
+        } catch (e: Exception) {
+            logger.e(e){"Error inserting link: ${e.message}"}
+            throw e
+        }
     }
 
     // --- Search ---

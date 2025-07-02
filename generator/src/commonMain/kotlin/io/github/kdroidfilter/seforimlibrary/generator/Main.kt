@@ -7,12 +7,18 @@ import java.io.File
 import java.nio.file.Paths
 import kotlin.io.path.Path
 import kotlin.system.exitProcess
+import co.touchlab.kermit.Logger
+import co.touchlab.kermit.Severity
 
 fun main() = runBlocking {
+    // Configure Kermit to only log warnings and errors
+    Logger.setMinSeverity(Severity.Warn)
+
+    val logger = Logger.withTag("Main")
 
     val dbFile = File("otzaria.db")
     val dbExists = dbFile.exists()
-    println("DEBUG: Database file exists: $dbExists")
+    logger.d{"Database file exists: $dbExists"}
 
     // If the database file exists, rename it to make sure we're creating a new one
     if (dbExists) {
@@ -21,7 +27,7 @@ fun main() = runBlocking {
             backupFile.delete()
         }
         dbFile.renameTo(backupFile)
-        println("DEBUG: Renamed existing database to otzaria.db.bak")
+        logger.d{"Renamed existing database to otzaria.db.bak"}
     }
 
     val driver = JdbcSqliteDriver(url = "jdbc:sqlite:otzaria.db")
@@ -30,14 +36,13 @@ fun main() = runBlocking {
     val dbPath = Paths.get("otzaria.db").toFile().path
 
     if (!sourcePath.toFile().exists()) {
-        println("Erreur: Le répertoire source n'existe pas: $sourcePath")
+        logger.e{"Le répertoire source n'existe pas: $sourcePath"}
         exitProcess(1)
     }
 
-    println("=== Générateur de base de données Otzaria ===")
-    println("Source: $sourcePath")
-    println("Base de données: $dbPath")
-    println()
+    logger.i{"=== Générateur de base de données Otzaria ==="}
+    logger.i{"Source: $sourcePath"}
+    logger.i{"Base de données: $dbPath"}
 
     val repository = SeforimRepository(dbPath, driver)
 
@@ -45,11 +50,10 @@ fun main() = runBlocking {
         val generator = DatabaseGenerator(sourcePath, repository)
         generator.generate()
 
-        println("\nGénération terminée avec succès!")
-        println("Base de données créée: $dbPath")
+        logger.i{"Génération terminée avec succès!"}
+        logger.i{"Base de données créée: $dbPath"}
     } catch (e: Exception) {
-        println("\nErreur lors de la génération:")
-        e.printStackTrace()
+        logger.e(e){"Erreur lors de la génération"}
         exitProcess(1)
     } finally {
         repository.close()

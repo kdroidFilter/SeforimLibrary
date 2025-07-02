@@ -15,8 +15,11 @@ import io.github.kdroidfilter.seforimlibrary.db.SearchInBook
 import io.github.kdroidfilter.seforimlibrary.db.SearchWithBookFilter
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
+import co.touchlab.kermit.Logger
 
- fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json): Book {
+private val logger = Logger.withTag("ModelExtensions")
+
+fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json): Book {
     return Book(
         id = id,
         categoryId = categoryId,
@@ -50,7 +53,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.Category.toModel(): Category {
 }
 
 fun io.github.kdroidfilter.seforimlibrary.db.Line.toModel(): Line {
-    println("DEBUG: Converting database Line to model with id: $id, bookId: $bookId, tocEntryId: $tocEntryId")
+    logger.d{"Converting database Line to model with id: $id, bookId: $bookId, tocEntryId: $tocEntryId"}
     return Line(
         id = id,
         bookId = bookId,
@@ -61,7 +64,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.Line.toModel(): Line {
 }
 
 fun io.github.kdroidfilter.seforimlibrary.db.TocEntry.toModel(): TocEntry {
-    println("DEBUG: Converting database TocEntry to model with id: $id, bookId: $bookId, lineId: $lineId")
+    logger.d{"Converting database TocEntry to model with id: $id, bookId: $bookId, lineId: $lineId"}
     return TocEntry(
         id = id,
         bookId = bookId,

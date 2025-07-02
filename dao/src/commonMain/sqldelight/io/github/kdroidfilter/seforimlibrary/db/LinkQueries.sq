@@ -3,6 +3,9 @@
 selectById:
 SELECT * FROM link WHERE id = ?;
 
+countAll:
+SELECT COUNT(*) FROM link;
+
 selectBySourceLineIds:
 SELECT l.*, b.title AS targetBookTitle, tl.plainText AS targetText
 FROM link l

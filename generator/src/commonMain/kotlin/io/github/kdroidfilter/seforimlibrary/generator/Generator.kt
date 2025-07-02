@@ -1,14 +1,19 @@
 package io.github.kdroidfilter.seforimlibrary.generator
 
 
+import co.touchlab.kermit.CommonWriter
+import co.touchlab.kermit.Logger
+import co.touchlab.kermit.Logger.Companion.setMinSeverity
+import co.touchlab.kermit.Severity
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.jsoup.Jsoup
 import org.jsoup.safety.Safelist
-import org.slf4j.LoggerFactory
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
@@ -22,20 +27,26 @@ class DatabaseGenerator(
     private val sourceDirectory: Path,
     private val repository: SeforimRepository
 ) {
-    private val logger = LoggerFactory.getLogger(javaClass)
-    private val json = Json { ignoreUnknownKeys = true }
+
+    private val logger = Logger.withTag("DatabaseGenerator")
+
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+        coerceInputValues = true
+    }
     private var nextBookId = 1L // Counter for book IDs
     private var nextLineId = 1L // Counter for line IDs
     private var nextTocEntryId = 1L // Counter for TOC entry IDs
 
-    suspend fun generate() = coroutineScope {
-        logger.info("Démarrage de la génération de la base de données...")
-        logger.info("Répertoire source: $sourceDirectory")
+    suspend fun generate(): Unit = coroutineScope {
+        logger.i { "Démarrage de la génération de la base de données..." }
+        logger.i { "Répertoire source: $sourceDirectory" }
 
         try {
             // Charger les métadonnées
             val metadata = loadMetadata()
-            logger.info("Métadonnées chargées: ${metadata.size} entrées")
+            logger.i { "Métadonnées chargées: ${metadata.size} entrées" }
 
             // Traiter la hiérarchie
             val libraryPath = sourceDirectory.resolve("אוצריא")
@@ -48,9 +59,9 @@ class DatabaseGenerator(
             // Traiter les liens
             processLinks()
 
-            logger.info("Génération terminée avec succès!")
+            logger.i { "Génération terminée avec succès!" }
         } catch (e: Exception) {
-            logger.error("Erreur lors de la génération", e)
+            logger.e(e) { "Erreur lors de la génération" }
             throw e
         }
     }
@@ -66,16 +77,16 @@ class DatabaseGenerator(
                 // If that fails, try to parse as List and convert to Map
                 try {
                     val metadataList = json.decodeFromString<List<BookMetadata>>(content)
-                    logger.info("Parsed metadata as List with ${metadataList.size} entries")
+                    logger.i { "Parsed metadata as List with ${metadataList.size} entries" }
                     // Convert list to map using title as key
                     metadataList.associateBy { it.title }
                 } catch (e: Exception) {
-                    logger.error("Failed to parse metadata.json", e)
+                    logger.i(e) { "Failed to parse metadata.json" }
                     emptyMap()
                 }
             }
         } else {
-            logger.warn("Fichier metadata.json introuvable")
+            logger.w { "Fichier metadata.json introuvable" }
             emptyMap()
         }
     }
@@ -97,9 +108,10 @@ class DatabaseGenerator(
                         val categoryId = createCategory(entry, parentCategoryId, level)
                         processDirectory(entry, categoryId, level + 1, metadata)
                     }
+
                     Files.isRegularFile(entry) && entry.extension in listOf("txt", "docx", "pdf") -> {
                         if (parentCategoryId == null) {
-                            logger.warn("Livre trouvé sans catégorie: $entry")
+                            logger.w { "Livre trouvé sans catégorie: $entry" }
                             continue
                         }
                         createAndProcessBook(entry, parentCategoryId, metadata)
@@ -115,7 +127,7 @@ class DatabaseGenerator(
         level: Int
     ): Long {
         val title = path.fileName.toString()
-        logger.info("Création de la catégorie: $title (niveau $level)")
+        logger.i { "Création de la catégorie: $title (niveau $level)" }
 
         val category = Category(
             parentId = parentId,
@@ -137,11 +149,11 @@ class DatabaseGenerator(
         val title = filename.substringBeforeLast('.')
         val meta = metadata[title]
 
-        logger.info("Traitement du livre: $title")
+        logger.i { "Traitement du livre: $title" }
 
         // Assign a unique ID to this book
         val currentBookId = nextBookId++
-        println("DEBUG: Assigning ID $currentBookId to book '$title'")
+        logger.d { "Assigning ID $currentBookId to book '$title'" }
 
         val book = Book(
             id = currentBookId, // Set the ID explicitly
@@ -159,10 +171,10 @@ class DatabaseGenerator(
             createdAt = System.currentTimeMillis()
         )
 
-        println("DEBUG: Inserting book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}")
+        logger.d { "Inserting book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}" }
         val bookId = repository.insertBook(book)
-        println("DEBUG: Book '${book.title}' inserted with ID: $bookId")
-        logger.info("Livre créé avec ID: $bookId (ID généré par la base de données)")
+        logger.d { "Book '${book.title}' inserted with ID: $bookId" }
+        logger.i { "Livre créé avec ID: $bookId (ID généré par la base de données)" }
 
         // Traiter le contenu pour les livres texte
         if (book.bookType == BookType.TEXT) {
@@ -172,20 +184,20 @@ class DatabaseGenerator(
     }
 
     private suspend fun processBookContent(path: Path, bookId: Long) = coroutineScope {
-        println("DEBUG: Processing content for book ID: $bookId")
-        logger.info("Traitement du contenu du livre ID: $bookId (ID généré par la base de données)")
+        logger.d { "Processing content for book ID: $bookId" }
+        logger.i { "Traitement du contenu du livre ID: $bookId (ID généré par la base de données)" }
 
         val content = when (path.extension) {
             "txt" -> path.readText(Charsets.UTF_8)
             "docx" -> extractDocxText(path)
             else -> {
-                logger.warn("Type de fichier non supporté: ${path.extension}")
+                logger.w { "Type de fichier non supporté: ${path.extension}" }
                 return@coroutineScope
             }
         }
 
         val lines = content.lines()
-        logger.info("Nombre de lignes: ${lines.size}")
+        logger.i { "Nombre de lignes: ${lines.size}" }
 
         // Process each line one by one, handling TOC entries as we go
         processLinesWithTocEntries(bookId, lines)
@@ -193,12 +205,12 @@ class DatabaseGenerator(
         // Mettre à jour le nombre total de lignes
         repository.updateBookTotalLines(bookId, lines.size)
 
-        logger.info("Contenu traité avec succès pour le livre ID: $bookId (ID généré par la base de données)")
+        logger.i { "Contenu traité avec succès pour le livre ID: $bookId (ID généré par la base de données)" }
     }
 
 
     private suspend fun processLinesWithTocEntries(bookId: Long, lines: List<String>) {
-        println("DEBUG: Processing lines and TOC entries together for book ID: $bookId")
+        logger.d { "Processing lines and TOC entries together for book ID: $bookId" }
 
         // Map to track TOC entry parent relationships by level
         val parentStack = mutableMapOf<Int, Long>()
@@ -234,15 +246,15 @@ class DatabaseGenerator(
                     path = path
                 )
 
-                println("DEBUG: Inserting TOC entry with ID: $currentTocEntryId, bookId: $bookId, lineIndex: $lineIndex")
+                logger.d { "Inserting TOC entry with ID: $currentTocEntryId, bookId: $bookId, lineIndex: $lineIndex" }
                 val tocEntryId = repository.insertTocEntry(tocEntry)
-                println("DEBUG: TOC entry inserted with ID: $tocEntryId")
+                logger.d { "TOC entry inserted with ID: $tocEntryId" }
 
                 // Update parent stack
                 parentStack[level] = tocEntryId
 
                 // Now insert the line
-                println("DEBUG: Inserting line with ID: $currentLineId, bookId: $bookId, lineIndex: $lineIndex")
+                logger.d { "Inserting line with ID: $currentLineId, bookId: $bookId, lineIndex: $lineIndex" }
                 val lineId = repository.insertLine(
                     Line(
                         id = currentLineId, // Set explicit ID
@@ -252,19 +264,19 @@ class DatabaseGenerator(
                         plainText = plainText
                     )
                 )
-                println("DEBUG: Line inserted with ID: $lineId")
+                logger.d { "Line inserted with ID: $lineId" }
 
                 // Update the TOC entry with the lineId
-                println("DEBUG: Updating TOC entry $tocEntryId with lineId: $lineId")
+                logger.d { "Updating TOC entry $tocEntryId with lineId: $lineId" }
                 repository.updateTocEntryLineId(tocEntryId, lineId)
 
                 // Update the line with the tocEntryId
-                println("DEBUG: Updating line $lineId with tocEntryId: $tocEntryId")
+                logger.d { "Updating line $lineId with tocEntryId: $tocEntryId" }
                 repository.updateLineTocEntry(lineId, tocEntryId)
             } else {
                 // This is a regular line, just insert it
                 val currentLineId = nextLineId++
-                println("DEBUG: Inserting regular line with ID: $currentLineId, bookId: $bookId, lineIndex: $lineIndex")
+                logger.d { "Inserting regular line with ID: $currentLineId, bookId: $bookId, lineIndex: $lineIndex" }
                 repository.insertLine(
                     Line(
                         id = currentLineId, // Set explicit ID
@@ -278,7 +290,7 @@ class DatabaseGenerator(
 
             // Log progress
             if (lineIndex % 1000 == 0) {
-                logger.info("Progression: $lineIndex/${lines.size} lignes")
+                logger.i { "Progression: $lineIndex/${lines.size} lignes" }
             }
         }
     }
@@ -318,11 +330,15 @@ class DatabaseGenerator(
     private suspend fun processLinks() {
         val linksDir = sourceDirectory.resolve("links")
         if (!linksDir.exists()) {
-            logger.warn("Répertoire links introuvable")
+            logger.w { "Répertoire links introuvable" }
             return
         }
 
-        logger.info("Traitement des liens...")
+        // Count links before processing
+        val linksBefore = repository.countLinks()
+        logger.d { "Links in database before processing: $linksBefore" }
+
+        logger.i { "Traitement des liens..." }
         var totalLinks = 0
 
         Files.list(linksDir).use { stream ->
@@ -330,61 +346,131 @@ class DatabaseGenerator(
                 runBlocking {
                     val processedLinks = processLinkFile(linkFile)
                     totalLinks += processedLinks
+                    logger.d { "Processed $processedLinks links from ${linkFile.fileName}, total so far: $totalLinks" }
                 }
             }
         }
 
-        logger.info("Total de $totalLinks liens traités")
+        // Count links after processing
+        val linksAfter = repository.countLinks()
+        logger.d { "Links in database after processing: $linksAfter" }
+        logger.d { "Added ${linksAfter - linksBefore} links to the database" }
+
+        logger.i { "Total de $totalLinks liens traités" }
     }
 
     private suspend fun processLinkFile(linkFile: Path): Int {
         val bookTitle = linkFile.nameWithoutExtension.removeSuffix("_links")
+        logger.d { "Processing link file for book: $bookTitle" }
 
         // Trouver le livre source
         val sourceBook = repository.getBookByTitle(bookTitle)
 
         if (sourceBook == null) {
-            logger.warn("Livre source introuvable pour les liens: $bookTitle")
+            logger.w { "Livre source introuvable pour les liens: $bookTitle" }
             return 0
         }
+        logger.d { "Found source book with ID: ${sourceBook.id}" }
 
-        val links = json.decodeFromString<List<LinkData>>(linkFile.readText())
-        var processed = 0
+        try {
+            val content = linkFile.readText()
+            logger.d { "Link file content length: ${content.length}" }
+            val links = json.decodeFromString<List<LinkData>>(content)
+            logger.d { "Decoded ${links.size} links from file" }
+            var processed = 0
 
-        for (linkData in links) {
-            try {
-                // Trouver le livre cible
-                val targetPath = Paths.get(linkData.path_2)
-                val targetTitle = targetPath.fileName.toString().substringBeforeLast('.')
+            for ((index, linkData) in links.withIndex()) {
+                try {
+                    // Trouver le livre cible
+                    val targetPath = Paths.get(linkData.path_2)
+                    val targetTitle = targetPath.fileName.toString().substringBeforeLast('.')
+                    logger.d { "Link ${index + 1}/${links.size} - Target book title: $targetTitle" }
 
-                val targetBook = repository.getBookByTitle(targetTitle)
-                    ?: continue
+                    val targetBook = repository.getBookByTitle(targetTitle)
+                    if (targetBook == null) {
+                        logger.d { "Target book not found: $targetTitle" }
+                        continue
+                    }
+                    logger.d { "Found target book with ID: ${targetBook.id}" }
 
-                // Trouver les lignes
-                val sourceLine = repository.getLineByIndex(sourceBook.id, linkData.line_index_1)
-                val targetLine = repository.getLineByIndex(targetBook.id, linkData.line_index_2)
+                    // Trouver les lignes
+                    logger.d { "Looking for source line at index: ${linkData.line_index_1.toInt()} in book ${sourceBook.id}" }
 
-                if (sourceLine != null && targetLine != null) {
+                    // Try to find the source line, or create it if it doesn't exist
+                    var sourceLine = repository.getLineByIndex(sourceBook.id, linkData.line_index_1.toInt())
+                    if (sourceLine == null) {
+                        logger.d { "Source line not found at index: ${linkData.line_index_1.toInt()}, creating it" }
+
+                        // Create a placeholder line
+                        val sourceLineId = nextLineId++
+                        sourceLine = Line(
+                            id = sourceLineId,
+                            bookId = sourceBook.id,
+                            lineIndex = linkData.line_index_1.toInt(),
+                            content = "Placeholder for link source",
+                            plainText = "Placeholder for link source"
+                        )
+
+                        val insertedSourceLineId = repository.insertLine(sourceLine)
+                        logger.d { "Created placeholder source line with ID: $insertedSourceLineId" }
+
+                        // Update the sourceLine with the inserted ID
+                        sourceLine = sourceLine.copy(id = insertedSourceLineId)
+                    }
+                    logger.d { "Using source line with ID: ${sourceLine.id}" }
+
+                    logger.d { "Looking for target line at index: ${linkData.line_index_2.toInt()} in book ${targetBook.id}" }
+
+                    // Try to find the target line, or create it if it doesn't exist
+                    var targetLine = repository.getLineByIndex(targetBook.id, linkData.line_index_2.toInt())
+                    if (targetLine == null) {
+                        logger.d { "Target line not found at index: ${linkData.line_index_2.toInt()}, creating it" }
+
+                        // Create a placeholder line
+                        val targetLineId = nextLineId++
+                        targetLine = Line(
+                            id = targetLineId,
+                            bookId = targetBook.id,
+                            lineIndex = linkData.line_index_2.toInt(),
+                            content = "Placeholder for link target",
+                            plainText = "Placeholder for link target"
+                        )
+
+                        val insertedTargetLineId = repository.insertLine(targetLine)
+                        logger.d { "Created placeholder target line with ID: $insertedTargetLineId" }
+
+                        // Update the targetLine with the inserted ID
+                        targetLine = targetLine.copy(id = insertedTargetLineId)
+                    }
+                    logger.d { "Using target line with ID: ${targetLine.id}" }
+
                     val link = Link(
                         sourceBookId = sourceBook.id,
                         targetBookId = targetBook.id,
                         heRef = linkData.heRef_2,
                         sourceLineId = sourceLine.id,
                         targetLineId = targetLine.id,
-                        sourceLineIndex = linkData.line_index_1,
-                        targetLineIndex = linkData.line_index_2,
+                        sourceLineIndex = linkData.line_index_1.toInt(),
+                        targetLineIndex = linkData.line_index_2.toInt(),
                         connectionType = ConnectionType.fromString(linkData.connectionType)
                     )
 
-                    repository.insertLink(link)
+                    logger.d { "Inserting link from book ${sourceBook.id} to book ${targetBook.id}" }
+                    val linkId = repository.insertLink(link)
+                    logger.d { "Link inserted with ID: $linkId" }
                     processed++
+                } catch (e: Exception) {
+                    logger.e(e) { "Erreur lors du traitement du lien: ${linkData.heRef_2}" }
+                    logger.d { "Error processing link: ${e.message}" }
                 }
-            } catch (e: Exception) {
-                logger.error("Erreur lors du traitement du lien: ${linkData.heRef_2}", e)
             }
+            logger.d { "Processed $processed links out of ${links.size}" }
+            return processed
+        } catch (e: Exception) {
+            logger.e(e) { "Erreur lors du traitement du fichier de liens: ${linkFile.fileName}" }
+            logger.d { "Error processing link file: ${e.message}" }
+            return 0
         }
-
-        return processed
     }
 
     private fun extractTopics(path: Path): String {
@@ -400,13 +486,13 @@ class DatabaseGenerator(
 
     // Classes internes
 
-    @kotlinx.serialization.Serializable
+    @Serializable
     private data class LinkData(
         val heRef_2: String,
-        val line_index_1: Int,
+        val line_index_1: Double,
         val path_2: String,
-        val line_index_2: Int,
-        @kotlinx.serialization.SerialName("Conection Type")
-        val connectionType: String
+        val line_index_2: Double,
+        @SerialName("Conection Type")
+        val connectionType: String = ""
     )
 }
