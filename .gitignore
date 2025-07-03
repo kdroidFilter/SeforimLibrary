@@ -16,3 +16,8 @@ Pods/
 *.gpg
 *yarn.lock
 otzaria_latest
+repomix-output.xml
+*.db
+*.db.bak
+*.db-shm
+*.db-wal
