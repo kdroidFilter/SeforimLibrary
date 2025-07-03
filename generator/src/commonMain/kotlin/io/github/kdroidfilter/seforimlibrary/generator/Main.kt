@@ -37,8 +37,8 @@ fun main() = runBlocking {
 
     val driver = JdbcSqliteDriver(url = "jdbc:sqlite:otzaria.db")
 
-    val sourcePath = Path("/Users/elie/Downloads/otzaria_latest")
-//    val sourcePath = Path("/Users/elie/IdeaProjects/SeforimLibrary/otzaria_latest")
+//    val sourcePath = Path("/Users/elie/Downloads/otzaria_latest")
+    val sourcePath = Path("/Users/elie/IdeaProjects/SeforimLibrary/otzaria_latest")
     val dbPath = Paths.get("otzaria.db").toFile().path
 
     if (!sourcePath.toFile().exists()) {

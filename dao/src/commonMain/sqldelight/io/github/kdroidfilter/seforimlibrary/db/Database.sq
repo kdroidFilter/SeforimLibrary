@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS category (
     FOREIGN KEY (parentId) REFERENCES category(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_category_parent ON category(parentId);
+CREATE INDEX IF NOT EXISTS idx_category_parent ON category(parentId);
 
 -- Authors table
 CREATE TABLE IF NOT EXISTS author (
@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS author (
     name TEXT NOT NULL UNIQUE
 );
 
-CREATE INDEX idx_author_name ON author(name);
+CREATE INDEX IF NOT EXISTS idx_author_name ON author(name);
 
 -- Table des topics
 CREATE TABLE IF NOT EXISTS topic (
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS topic (
     name TEXT NOT NULL UNIQUE
 );
 
-CREATE INDEX idx_topic_name ON topic(name);
+CREATE INDEX IF NOT EXISTS idx_topic_name ON topic(name);
 
 -- Publication places table
 CREATE TABLE IF NOT EXISTS pub_place (
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS pub_place (
     name TEXT NOT NULL UNIQUE
 );
 
-CREATE INDEX idx_pub_place_name ON pub_place(name);
+CREATE INDEX IF NOT EXISTS idx_pub_place_name ON pub_place(name);
 
 -- Publication dates table
 CREATE TABLE IF NOT EXISTS pub_date (
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS pub_date (
     date TEXT NOT NULL UNIQUE
 );
 
-CREATE INDEX idx_pub_date_date ON pub_date(date);
+CREATE INDEX IF NOT EXISTS idx_pub_date_date ON pub_date(date);
 
 -- Books table
 CREATE TABLE IF NOT EXISTS book (
@@ -52,9 +52,9 @@ CREATE TABLE IF NOT EXISTS book (
     FOREIGN KEY (categoryId) REFERENCES category(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_book_category ON book(categoryId);
-CREATE INDEX idx_book_title ON book(title);
-CREATE INDEX idx_book_order ON book(orderIndex);
+CREATE INDEX IF NOT EXISTS idx_book_category ON book(categoryId);
+CREATE INDEX IF NOT EXISTS idx_book_title ON book(title);
+CREATE INDEX IF NOT EXISTS idx_book_order ON book(orderIndex);
 
 -- Book-publication place junction table
 CREATE TABLE IF NOT EXISTS book_pub_place (
@@ -65,8 +65,8 @@ CREATE TABLE IF NOT EXISTS book_pub_place (
     FOREIGN KEY (pubPlaceId) REFERENCES pub_place(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_book_pub_place_book ON book_pub_place(bookId);
-CREATE INDEX idx_book_pub_place_place ON book_pub_place(pubPlaceId);
+CREATE INDEX IF NOT EXISTS idx_book_pub_place_book ON book_pub_place(bookId);
+CREATE INDEX IF NOT EXISTS idx_book_pub_place_place ON book_pub_place(pubPlaceId);
 
 -- Book-publication date junction table
 CREATE TABLE IF NOT EXISTS book_pub_date (
@@ -77,8 +77,8 @@ CREATE TABLE IF NOT EXISTS book_pub_date (
     FOREIGN KEY (pubDateId) REFERENCES pub_date(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_book_pub_date_book ON book_pub_date(bookId);
-CREATE INDEX idx_book_pub_date_date ON book_pub_date(pubDateId);
+CREATE INDEX IF NOT EXISTS idx_book_pub_date_book ON book_pub_date(bookId);
+CREATE INDEX IF NOT EXISTS idx_book_pub_date_date ON book_pub_date(pubDateId);
 
 -- Book-topic junction table
 CREATE TABLE IF NOT EXISTS book_topic (
@@ -89,8 +89,8 @@ CREATE TABLE IF NOT EXISTS book_topic (
     FOREIGN KEY (topicId) REFERENCES topic(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_book_topic_book ON book_topic(bookId);
-CREATE INDEX idx_book_topic_topic ON book_topic(topicId);
+CREATE INDEX IF NOT EXISTS idx_book_topic_book ON book_topic(bookId);
+CREATE INDEX IF NOT EXISTS idx_book_topic_topic ON book_topic(topicId);
 
 -- Book-author junction table
 CREATE TABLE IF NOT EXISTS book_author (
@@ -101,8 +101,8 @@ CREATE TABLE IF NOT EXISTS book_author (
     FOREIGN KEY (authorId) REFERENCES author(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_book_author_book ON book_author(bookId);
-CREATE INDEX idx_book_author_author ON book_author(authorId);
+CREATE INDEX IF NOT EXISTS idx_book_author_book ON book_author(bookId);
+CREATE INDEX IF NOT EXISTS idx_book_author_author ON book_author(authorId);
 
 -- Lines table
 CREATE TABLE IF NOT EXISTS line (
@@ -116,8 +116,8 @@ CREATE TABLE IF NOT EXISTS line (
     FOREIGN KEY (tocEntryId) REFERENCES tocEntry(id) ON DELETE SET NULL
 );
 
-CREATE INDEX idx_line_book_index ON line(bookId, lineIndex);
-CREATE INDEX idx_line_toc ON line(tocEntryId);
+CREATE INDEX IF NOT EXISTS idx_line_book_index ON line(bookId, lineIndex);
+CREATE INDEX IF NOT EXISTS idx_line_toc ON line(tocEntryId);
 
 -- TOC texts table
 CREATE TABLE IF NOT EXISTS tocText (
@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS tocText (
     text TEXT NOT NULL UNIQUE
 );
 
-CREATE INDEX idx_toc_text ON tocText(text);
+CREATE INDEX IF NOT EXISTS idx_toc_text ON tocText(text);
 
 -- TOC entries table
 CREATE TABLE IF NOT EXISTS tocEntry (
@@ -144,10 +144,10 @@ CREATE TABLE IF NOT EXISTS tocEntry (
     FOREIGN KEY (lineId) REFERENCES line(id) ON DELETE SET NULL
 );
 
-CREATE INDEX idx_toc_book ON tocEntry(bookId);
-CREATE INDEX idx_toc_parent ON tocEntry(parentId);
-CREATE INDEX idx_toc_text_id ON tocEntry(textId);
-CREATE INDEX idx_toc_line ON tocEntry(lineId);
+CREATE INDEX IF NOT EXISTS idx_toc_book ON tocEntry(bookId);
+CREATE INDEX IF NOT EXISTS idx_toc_parent ON tocEntry(parentId);
+CREATE INDEX IF NOT EXISTS idx_toc_text_id ON tocEntry(textId);
+CREATE INDEX IF NOT EXISTS idx_toc_line ON tocEntry(lineId);
 
 -- Links table
 CREATE TABLE IF NOT EXISTS link (
@@ -163,11 +163,11 @@ CREATE TABLE IF NOT EXISTS link (
     FOREIGN KEY (targetLineId) REFERENCES line(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_link_source_book ON link(sourceBookId);
-CREATE INDEX idx_link_source_line ON link(sourceLineId);
-CREATE INDEX idx_link_target_book ON link(targetBookId);
-CREATE INDEX idx_link_target_line ON link(targetLineId);
-CREATE INDEX idx_link_type ON link(connectionType);
+CREATE INDEX IF NOT EXISTS idx_link_source_book ON link(sourceBookId);
+CREATE INDEX IF NOT EXISTS idx_link_source_line ON link(sourceLineId);
+CREATE INDEX IF NOT EXISTS idx_link_target_book ON link(targetBookId);
+CREATE INDEX IF NOT EXISTS idx_link_target_line ON link(targetLineId);
+CREATE INDEX IF NOT EXISTS idx_link_type ON link(connectionType);
 
 -- Standard search table (without FTS5)
 CREATE TABLE IF NOT EXISTS line_search (
@@ -181,6 +181,6 @@ CREATE TABLE IF NOT EXISTS line_search (
     FOREIGN KEY (lineId) REFERENCES line(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_line_search_content ON line_search(content);
-CREATE INDEX idx_line_search_book_title ON line_search(bookTitle);
-CREATE INDEX idx_line_search_book_id ON line_search(bookId);
+CREATE INDEX IF NOT EXISTS idx_line_search_content ON line_search(content);
+CREATE INDEX IF NOT EXISTS idx_line_search_book_title ON line_search(bookTitle);
+CREATE INDEX IF NOT EXISTS idx_line_search_book_id ON line_search(bookId);

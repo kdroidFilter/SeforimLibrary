@@ -14,6 +14,8 @@ kotlin {
         commonMain.dependencies {
             implementation(compose.runtime)
             implementation(compose.foundation)
+            implementation(compose.material)
+            implementation(libs.kermit)
             implementation(project(":core"))
             implementation(project(":dao"))
         }
@@ -21,6 +23,8 @@ kotlin {
 
         jvmMain.dependencies {
             implementation(compose.desktop.currentOs)
+            implementation("app.cash.sqldelight:sqlite-driver:2.1.0")
+            implementation("app.cash.sqldelight:jdbc-driver:2.1.0")
         }
 
     }
@@ -31,6 +35,7 @@ compose.desktop {
         mainClass = "MainKt"
 
         nativeDistributions {
+            modules("java.sql")
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "sample"
             packageVersion = "1.0.0"
