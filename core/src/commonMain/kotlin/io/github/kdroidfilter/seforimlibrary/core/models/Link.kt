@@ -10,11 +10,8 @@ data class Link(
     val id: Long = 0,
     val sourceBookId: Long,
     val targetBookId: Long,
-    val heRef: String,
     val sourceLineId: Long,
     val targetLineId: Long,
-    val sourceLineIndex: Int,
-    val targetLineIndex: Int,
     val connectionType: ConnectionType
 )
 

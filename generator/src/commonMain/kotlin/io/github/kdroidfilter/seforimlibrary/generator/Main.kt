@@ -12,7 +12,7 @@ import co.touchlab.kermit.Severity
 
 fun main() = runBlocking {
     // Configure Kermit to only log warnings and errors
-    Logger.setMinSeverity(Severity.Warn)
+    Logger.setMinSeverity(Severity.Debug)
 
     val logger = Logger.withTag("Main")
 
@@ -32,7 +32,8 @@ fun main() = runBlocking {
 
     val driver = JdbcSqliteDriver(url = "jdbc:sqlite:otzaria.db")
 
-    val sourcePath = Path("/Users/elie/Downloads/otzaria_latest")
+//    val sourcePath = Path("/Users/elie/Downloads/otzaria_latest")
+    val sourcePath = Path("/Users/elie/IdeaProjects/SeforimLibrary/otzaria_latest")
     val dbPath = Paths.get("otzaria.db").toFile().path
 
     if (!sourcePath.toFile().exists()) {

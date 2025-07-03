@@ -155,11 +155,8 @@ CREATE TABLE IF NOT EXISTS link (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sourceBookId INTEGER NOT NULL,
     targetBookId INTEGER NOT NULL,
-    heRef TEXT NOT NULL,
     sourceLineId INTEGER NOT NULL,
     targetLineId INTEGER NOT NULL,
-    sourceLineIndex INTEGER NOT NULL,
-    targetLineIndex INTEGER NOT NULL,
     connectionType TEXT NOT NULL,
     FOREIGN KEY (sourceBookId) REFERENCES book(id) ON DELETE CASCADE,
     FOREIGN KEY (targetBookId) REFERENCES book(id) ON DELETE CASCADE,
@@ -167,9 +164,10 @@ CREATE TABLE IF NOT EXISTS link (
     FOREIGN KEY (targetLineId) REFERENCES line(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_link_source ON link(sourceBookId, sourceLineIndex);
+CREATE INDEX idx_link_source_book ON link(sourceBookId);
 CREATE INDEX idx_link_source_line ON link(sourceLineId);
-CREATE INDEX idx_link_target ON link(targetBookId, targetLineIndex);
+CREATE INDEX idx_link_target_book ON link(targetBookId);
+CREATE INDEX idx_link_target_line ON link(targetLineId);
 CREATE INDEX idx_link_type ON link(connectionType);
 
 -- Table standard pour la recherche (sans FTS5)

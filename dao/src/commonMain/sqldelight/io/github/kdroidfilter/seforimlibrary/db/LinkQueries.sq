@@ -12,13 +12,11 @@ FROM link l
 JOIN book b ON l.targetBookId = b.id
 JOIN line tl ON l.targetLineId = tl.id
 WHERE l.sourceLineId IN ?
-ORDER BY l.sourceLineIndex, b.orderIndex;
+ORDER BY b.orderIndex;
 
-selectBySourceBookRange:
+selectBySourceBook:
 SELECT * FROM link
-WHERE sourceBookId = ?
-AND sourceLineIndex >= ?
-AND sourceLineIndex <= ?;
+WHERE sourceBookId = ?;
 
 selectCommentatorsByBook:
 SELECT DISTINCT l.targetBookId, b.title AS targetBookTitle, a.name AS author, COUNT(*) AS linkCount
@@ -32,8 +30,8 @@ GROUP BY l.targetBookId, b.title, a.name
 ORDER BY b.orderIndex, b.title;
 
 insert:
-INSERT INTO link (sourceBookId, targetBookId, heRef, sourceLineId, targetLineId, sourceLineIndex, targetLineIndex, connectionType)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, connectionType)
+VALUES (?, ?, ?, ?, ?);
 
 delete:
 DELETE FROM link WHERE id = ?;

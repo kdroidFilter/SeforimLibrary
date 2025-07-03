@@ -471,11 +471,8 @@ class DatabaseGenerator(
                     val link = Link(
                         sourceBookId = sourceBook.id,
                         targetBookId = targetBook.id,
-                        heRef = linkData.heRef_2,
                         sourceLineId = sourceLine.id,
                         targetLineId = targetLine.id,
-                        sourceLineIndex = linkData.line_index_1.toInt(),
-                        targetLineIndex = linkData.line_index_2.toInt(),
                         connectionType = ConnectionType.fromString(linkData.connectionType)
                     )
 

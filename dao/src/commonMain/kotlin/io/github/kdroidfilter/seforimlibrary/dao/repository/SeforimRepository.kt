@@ -682,11 +682,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                         id = it.id,
                         sourceBookId = it.sourceBookId,
                         targetBookId = it.targetBookId,
-                        heRef = it.heRef,
                         sourceLineId = it.sourceLineId,
                         targetLineId = it.targetLineId,
-                        sourceLineIndex = it.sourceLineIndex.toInt(),
-                        targetLineIndex = it.targetLineIndex.toInt(),
                         connectionType = ConnectionType.fromString(it.connectionType)
                     ),
                     targetBookTitle = it.targetBookTitle,
@@ -711,17 +708,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     suspend fun insertLink(link: Link): Long = withContext(Dispatchers.IO) {
         logger.d{"Repository inserting link from book ${link.sourceBookId} to book ${link.targetBookId}"}
         logger.d{"Link details - sourceLineId: ${link.sourceLineId}, targetLineId: ${link.targetLineId}"}
-        logger.d{"Link details - sourceLineIndex: ${link.sourceLineIndex}, targetLineIndex: ${link.targetLineIndex}"}
 
         try {
             database.linkQueriesQueries.insert(
                 sourceBookId = link.sourceBookId,
                 targetBookId = link.targetBookId,
-                heRef = link.heRef,
                 sourceLineId = link.sourceLineId,
                 targetLineId = link.targetLineId,
-                sourceLineIndex = link.sourceLineIndex.toLong(),
-                targetLineIndex = link.targetLineIndex.toLong(),
                 connectionType = link.connectionType.name
             )
             val linkId = database.linkQueriesQueries.lastInsertRowId().executeAsOne()

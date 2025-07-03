@@ -149,11 +149,8 @@ fun io.github.kdroidfilter.seforimlibrary.db.Link.toModel(): Link {
         id = id,
         sourceBookId = sourceBookId,
         targetBookId = targetBookId,
-        heRef = heRef,
         sourceLineId = sourceLineId,
         targetLineId = targetLineId,
-        sourceLineIndex = sourceLineIndex.toInt(),
-        targetLineIndex = targetLineIndex.toInt(),
         connectionType = ConnectionType.fromString(connectionType)
     )
 }
