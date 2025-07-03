@@ -117,23 +117,92 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     // --- Books ---
 
     suspend fun getBook(id: Long): Book? = withContext(Dispatchers.IO) {
-        database.bookQueriesQueries.selectById(id).executeAsOneOrNull()?.toModel(json)
+        val bookData = database.bookQueriesQueries.selectById(id).executeAsOneOrNull() ?: return@withContext null
+        val authors = getBookAuthors(bookData.id)
+        return@withContext bookData.toModel(json, authors)
     }
 
     suspend fun getBooksByCategory(categoryId: Long): List<Book> = withContext(Dispatchers.IO) {
-        database.bookQueriesQueries.selectByCategoryId(categoryId).executeAsList()
-            .map { it.toModel(json) }
+        val books = database.bookQueriesQueries.selectByCategoryId(categoryId).executeAsList()
+        return@withContext books.map { bookData ->
+            val authors = getBookAuthors(bookData.id)
+            bookData.toModel(json, authors)
+        }
     }
 
 
 
-    suspend fun searchBooksByAuthor(author: String): List<Book> = withContext(Dispatchers.IO) {
-        database.bookQueriesQueries.selectByAuthor("%$author%").executeAsList()
-            .map { it.toModel(json) }
+    suspend fun searchBooksByAuthor(authorName: String): List<Book> = withContext(Dispatchers.IO) {
+        val books = database.bookQueriesQueries.selectByAuthor("%$authorName%").executeAsList()
+        return@withContext books.map { bookData ->
+            val authors = getBookAuthors(bookData.id)
+            bookData.toModel(json, authors)
+        }
+    }
+
+    // Get all authors for a book
+    private suspend fun getBookAuthors(bookId: Long): List<Author> = withContext(Dispatchers.IO) {
+        logger.d{"Getting authors for book ID: $bookId"}
+        val authors = database.authorQueriesQueries.selectByBookId(bookId).executeAsList()
+        logger.d{"Found ${authors.size} authors for book ID: $bookId"}
+        return@withContext authors.map { it.toModel() }
+    }
+
+    // Get an author by name, returns null if not found
+    suspend fun getAuthorByName(name: String): Author? = withContext(Dispatchers.IO) {
+        logger.d{"Looking for author with name: $name"}
+        val author = database.authorQueriesQueries.selectByName(name).executeAsOneOrNull()
+        if (author != null) {
+            logger.d{"Found author with ID: ${author.id}"}
+        } else {
+            logger.d{"Author not found: $name"}
+        }
+        return@withContext author?.toModel()
+    }
+
+    // Insert an author and return its ID
+    suspend fun insertAuthor(name: String): Long = withContext(Dispatchers.IO) {
+        logger.d{"Inserting author: $name"}
+
+        // Check if author already exists
+        val existingAuthor = database.authorQueriesQueries.selectByName(name).executeAsOneOrNull()
+        if (existingAuthor != null) {
+            logger.d{"Author already exists with ID: ${existingAuthor.id}"}
+            return@withContext existingAuthor.id
+        }
+
+        // Insert the author
+        database.authorQueriesQueries.insert(name)
+
+        // Get the ID of the inserted author
+        val authorId = database.authorQueriesQueries.lastInsertRowId().executeAsOne()
+
+        // If lastInsertRowId returns 0, try to get the ID by name
+        if (authorId == 0L) {
+            logger.w{"lastInsertRowId() returned 0 for author insertion, trying to get ID by name"}
+            val insertedAuthor = database.authorQueriesQueries.selectByName(name).executeAsOneOrNull()
+            if (insertedAuthor != null) {
+                logger.d{"Found author after insertion with ID: ${insertedAuthor.id}"}
+                return@withContext insertedAuthor.id
+            }
+            throw RuntimeException("Failed to insert author '$name'")
+        }
+
+        logger.d{"Author inserted with ID: $authorId"}
+        return@withContext authorId
+    }
+
+    // Link an author to a book
+    suspend fun linkAuthorToBook(authorId: Long, bookId: Long) = withContext(Dispatchers.IO) {
+        logger.d{"Linking author $authorId to book $bookId"}
+        database.authorQueriesQueries.linkBookAuthor(bookId, authorId)
+        logger.d{"Linked author $authorId to book $bookId"}
     }
 
     suspend fun getBookByTitle(title: String): Book? = withContext(Dispatchers.IO) {
-        database.bookQueriesQueries.selectByTitle(title).executeAsOneOrNull()?.toModel(json)
+        val bookData = database.bookQueriesQueries.selectByTitle(title).executeAsOneOrNull() ?: return@withContext null
+        val authors = getBookAuthors(bookData.id)
+        return@withContext bookData.toModel(json, authors)
     }
 
     suspend fun insertBook(book: Book): Long = withContext(Dispatchers.IO) {
@@ -145,7 +214,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 id = book.id,
                 categoryId = book.categoryId,
                 title = book.title,
-                author = book.author,
                 heShortDesc = book.heShortDesc,
                 pubDate = book.pubDate,
                 pubPlace = book.pubPlace,
@@ -165,13 +233,19 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 logger.d{"Corrected categoryId for book ID: ${book.id}"}
             }
 
+            // Process authors
+            for (author in book.authors) {
+                val authorId = insertAuthor(author.name)
+                linkAuthorToBook(authorId, book.id)
+                logger.d{"Processed author '${author.name}' (ID: $authorId) for book '${book.title}' (ID: ${book.id})"}
+            }
+
             return@withContext book.id
         } else {
             // Fall back to auto-generated ID if book.id is 0
             database.bookQueriesQueries.insert(
                 categoryId = book.categoryId,
                 title = book.title,
-                author = book.author,
                 heShortDesc = book.heShortDesc,
                 pubDate = book.pubDate,
                 pubPlace = book.pubPlace,
@@ -182,6 +256,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             )
             val id = database.bookQueriesQueries.lastInsertRowId().executeAsOne()
             logger.d{"Used insert for book '${book.title}', got ID: $id with categoryId: ${book.categoryId}"}
+
+            // Process authors
+            for (author in book.authors) {
+                val authorId = insertAuthor(author.name)
+                linkAuthorToBook(authorId, id)
+                logger.d{"Processed author '${author.name}' (ID: $authorId) for book '${book.title}' (ID: $id)"}
+            }
+
             return@withContext id
         }
     }

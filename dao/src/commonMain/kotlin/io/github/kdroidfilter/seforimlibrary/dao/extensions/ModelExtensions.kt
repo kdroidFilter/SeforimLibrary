@@ -2,6 +2,7 @@ package io.github.kdroidfilter.seforimlibrary.dao.extensions
 
 
 
+import io.github.kdroidfilter.seforimlibrary.core.models.Author
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
 import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
@@ -19,12 +20,19 @@ import co.touchlab.kermit.Logger
 
 private val logger = Logger.withTag("ModelExtensions")
 
-fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json): Book {
+fun io.github.kdroidfilter.seforimlibrary.db.Author.toModel(): Author {
+    return Author(
+        id = id,
+        name = name
+    )
+}
+
+fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json, authors: List<Author> = emptyList()): Book {
     return Book(
         id = id,
         categoryId = categoryId,
         title = title,
-        author = author,
+        authors = authors,
         heShortDesc = heShortDesc,
         pubDate = pubDate,
         pubPlace = pubPlace,

@@ -21,12 +21,14 @@ AND sourceLineIndex >= ?
 AND sourceLineIndex <= ?;
 
 selectCommentatorsByBook:
-SELECT DISTINCT l.targetBookId, b.title AS targetBookTitle, b.author, COUNT(*) AS linkCount
+SELECT DISTINCT l.targetBookId, b.title AS targetBookTitle, a.name AS author, COUNT(*) AS linkCount
 FROM link l
 JOIN book b ON l.targetBookId = b.id
+LEFT JOIN book_author ba ON b.id = ba.bookId
+LEFT JOIN author a ON ba.authorId = a.id
 WHERE l.sourceBookId = ?
 AND l.connectionType IN ('COMMENTARY', 'TARGUM')
-GROUP BY l.targetBookId, b.title, b.author
+GROUP BY l.targetBookId, b.title, a.name
 ORDER BY b.orderIndex, b.title;
 
 insert:

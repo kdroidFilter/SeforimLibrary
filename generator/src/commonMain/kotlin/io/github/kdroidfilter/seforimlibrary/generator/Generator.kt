@@ -177,11 +177,16 @@ class DatabaseGenerator(
         val currentBookId = nextBookId++
         logger.d { "Assigning ID $currentBookId to book '$title' with categoryId: $categoryId" }
 
+        // Create author list if author is available in metadata
+        val authors = meta?.author?.let { authorName ->
+            listOf(Author(name = authorName))
+        } ?: emptyList()
+
         val book = Book(
             id = currentBookId,
             categoryId = categoryId,
             title = title,
-            author = meta?.author,
+            authors = authors,
             heShortDesc = meta?.heShortDesc,
             pubDate = meta?.pubDate,
             pubPlace = meta?.pubPlace,

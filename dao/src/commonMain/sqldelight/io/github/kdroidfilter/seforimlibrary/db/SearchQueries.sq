@@ -38,7 +38,9 @@ SELECT
     0 rank
 FROM line_search ls
 JOIN book b ON b.id = ls.bookId
-WHERE ls.content LIKE '%' || ? || '%' AND b.author = ?
+JOIN book_author ba ON b.id = ba.bookId
+JOIN author a ON ba.authorId = a.id
+WHERE ls.content LIKE '%' || ? || '%' AND a.name = ?
 ORDER BY ls.bookId, ls.lineIndex
 LIMIT ? OFFSET ?;
 

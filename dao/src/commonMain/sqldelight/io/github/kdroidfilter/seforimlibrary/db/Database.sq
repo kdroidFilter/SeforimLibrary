@@ -9,12 +9,19 @@ CREATE TABLE IF NOT EXISTS category (
 
 CREATE INDEX idx_category_parent ON category(parentId);
 
+-- Table des auteurs
+CREATE TABLE IF NOT EXISTS author (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE INDEX idx_author_name ON author(name);
+
 -- Table des livres
 CREATE TABLE IF NOT EXISTS book (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     categoryId INTEGER NOT NULL,
     title TEXT NOT NULL,
-    author TEXT,
     heShortDesc TEXT,
     pubDate TEXT,
     pubPlace TEXT,
@@ -27,8 +34,19 @@ CREATE TABLE IF NOT EXISTS book (
 
 CREATE INDEX idx_book_category ON book(categoryId);
 CREATE INDEX idx_book_title ON book(title);
-CREATE INDEX idx_book_author ON book(author);
 CREATE INDEX idx_book_order ON book(orderIndex);
+
+-- Table de jonction livre-auteur
+CREATE TABLE IF NOT EXISTS book_author (
+    bookId INTEGER NOT NULL,
+    authorId INTEGER NOT NULL,
+    PRIMARY KEY (bookId, authorId),
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
+    FOREIGN KEY (authorId) REFERENCES author(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_book_author_book ON book_author(bookId);
+CREATE INDEX idx_book_author_author ON book_author(authorId);
 
 -- Table des lignes
 CREATE TABLE IF NOT EXISTS line (

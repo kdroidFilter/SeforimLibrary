@@ -10,7 +10,7 @@ data class Book(
     val id: Long = 0,
     val categoryId: Long,
     val title: String,
-    val author: String? = null,
+    val authors: List<Author> = emptyList(),
     val heShortDesc: String? = null,
     val pubDate: String? = null,
     val pubPlace: String? = null,
