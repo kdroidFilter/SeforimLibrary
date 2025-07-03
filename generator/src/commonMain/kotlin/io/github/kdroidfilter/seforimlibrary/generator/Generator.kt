@@ -187,14 +187,19 @@ class DatabaseGenerator(
             listOf(PubPlace(name = pubPlaceName))
         } ?: emptyList()
 
+        // Create publication dates list if pubDate is available in metadata
+        val pubDates = meta?.pubDate?.let { pubDateValue ->
+            listOf(PubDate(date = pubDateValue))
+        } ?: emptyList()
+
         val book = Book(
             id = currentBookId,
             categoryId = categoryId,
             title = title,
             authors = authors,
             pubPlaces = pubPlaces,
+            pubDates = pubDates,
             heShortDesc = meta?.heShortDesc,
-            pubDate = meta?.pubDate,
             order = meta?.order ?: 999f,
             topics = extractTopics(path),
             bookType = if (path.extension == "pdf") BookType.PDF else BookType.TEXT

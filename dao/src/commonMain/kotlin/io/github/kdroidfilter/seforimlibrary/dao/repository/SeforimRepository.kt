@@ -121,7 +121,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val authors = getBookAuthors(bookData.id)
         val topics = getBookTopics(bookData.id)
         val pubPlaces = getBookPubPlaces(bookData.id)
-        return@withContext bookData.toModel(json, authors, pubPlaces).copy(topics = topics)
+        val pubDates = getBookPubDates(bookData.id)
+        return@withContext bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
     }
 
     suspend fun getBooksByCategory(categoryId: Long): List<Book> = withContext(Dispatchers.IO) {
@@ -130,7 +131,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             val authors = getBookAuthors(bookData.id)
             val topics = getBookTopics(bookData.id)
             val pubPlaces = getBookPubPlaces(bookData.id)
-            bookData.toModel(json, authors, pubPlaces).copy(topics = topics)
+            val pubDates = getBookPubDates(bookData.id)
+            bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
         }
     }
 
@@ -142,7 +144,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             val authors = getBookAuthors(bookData.id)
             val topics = getBookTopics(bookData.id)
             val pubPlaces = getBookPubPlaces(bookData.id)
-            bookData.toModel(json, authors, pubPlaces).copy(topics = topics)
+            val pubDates = getBookPubDates(bookData.id)
+            bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
         }
     }
 
@@ -168,6 +171,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val pubPlaces = database.pubPlaceQueriesQueries.selectByBookId(bookId).executeAsList()
         logger.d{"Found ${pubPlaces.size} publication places for book ID: $bookId"}
         return@withContext pubPlaces.map { it.toModel() }
+    }
+
+    // Get all publication dates for a book
+    private suspend fun getBookPubDates(bookId: Long): List<PubDate> = withContext(Dispatchers.IO) {
+        logger.d{"Getting publication dates for book ID: $bookId"}
+        val pubDates = database.pubDateQueriesQueries.selectByBookId(bookId).executeAsList()
+        logger.d{"Found ${pubDates.size} publication dates for book ID: $bookId"}
+        return@withContext pubDates.map { it.toModel() }
     }
 
     // Get an author by name, returns null if not found
@@ -226,7 +237,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val authors = getBookAuthors(bookData.id)
         val topics = getBookTopics(bookData.id)
         val pubPlaces = getBookPubPlaces(bookData.id)
-        return@withContext bookData.toModel(json, authors, pubPlaces).copy(topics = topics)
+        val pubDates = getBookPubDates(bookData.id)
+        return@withContext bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
     }
 
     // Get a topic by name, returns null if not found
@@ -251,6 +263,18 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             logger.d{"Publication place not found: $name"}
         }
         return@withContext pubPlace?.toModel()
+    }
+
+    // Get a publication date by date, returns null if not found
+    suspend fun getPubDateByDate(date: String): PubDate? = withContext(Dispatchers.IO) {
+        logger.d{"Looking for publication date with date: $date"}
+        val pubDate = database.pubDateQueriesQueries.selectByDate(date).executeAsOneOrNull()
+        if (pubDate != null) {
+            logger.d{"Found publication date with ID: ${pubDate.id}"}
+        } else {
+            logger.d{"Publication date not found: $date"}
+        }
+        return@withContext pubDate?.toModel()
     }
 
     // Insert a topic and return its ID
@@ -324,11 +348,50 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         return@withContext pubPlaceId
     }
 
+    // Insert a publication date and return its ID
+    suspend fun insertPubDate(date: String): Long = withContext(Dispatchers.IO) {
+        logger.d{"Inserting publication date: $date"}
+
+        // Check if publication date already exists
+        val existingPubDate = database.pubDateQueriesQueries.selectByDate(date).executeAsOneOrNull()
+        if (existingPubDate != null) {
+            logger.d{"Publication date already exists with ID: ${existingPubDate.id}"}
+            return@withContext existingPubDate.id
+        }
+
+        // Insert the publication date
+        database.pubDateQueriesQueries.insert(date)
+
+        // Get the ID of the inserted publication date
+        val pubDateId = database.pubDateQueriesQueries.lastInsertRowId().executeAsOne()
+
+        // If lastInsertRowId returns 0, try to get the ID by date
+        if (pubDateId == 0L) {
+            logger.w{"lastInsertRowId() returned 0 for publication date insertion, trying to get ID by date"}
+            val insertedPubDate = database.pubDateQueriesQueries.selectByDate(date).executeAsOneOrNull()
+            if (insertedPubDate != null) {
+                logger.d{"Found publication date after insertion with ID: ${insertedPubDate.id}"}
+                return@withContext insertedPubDate.id
+            }
+            throw RuntimeException("Failed to insert publication date '$date'")
+        }
+
+        logger.d{"Publication date inserted with ID: $pubDateId"}
+        return@withContext pubDateId
+    }
+
     // Link a publication place to a book
     suspend fun linkPubPlaceToBook(pubPlaceId: Long, bookId: Long) = withContext(Dispatchers.IO) {
         logger.d{"Linking publication place $pubPlaceId to book $bookId"}
         database.pubPlaceQueriesQueries.linkBookPubPlace(bookId, pubPlaceId)
         logger.d{"Linked publication place $pubPlaceId to book $bookId"}
+    }
+
+    // Link a publication date to a book
+    suspend fun linkPubDateToBook(pubDateId: Long, bookId: Long) = withContext(Dispatchers.IO) {
+        logger.d{"Linking publication date $pubDateId to book $bookId"}
+        database.pubDateQueriesQueries.linkBookPubDate(bookId, pubDateId)
+        logger.d{"Linked publication date $pubDateId to book $bookId"}
     }
 
     suspend fun insertBook(book: Book): Long = withContext(Dispatchers.IO) {
@@ -341,7 +404,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 categoryId = book.categoryId,
                 title = book.title,
                 heShortDesc = book.heShortDesc,
-                pubDate = book.pubDate,
                 orderIndex = book.order.toLong(),
                 bookType = book.bookType.name,
                 totalLines = book.totalLines.toLong()
@@ -378,6 +440,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 logger.d{"Processed publication place '${pubPlace.name}' (ID: $pubPlaceId) for book '${book.title}' (ID: ${book.id})"}
             }
 
+            // Process publication dates
+            for (pubDate in book.pubDates) {
+                val pubDateId = insertPubDate(pubDate.date)
+                linkPubDateToBook(pubDateId, book.id)
+                logger.d{"Processed publication date '${pubDate.date}' (ID: $pubDateId) for book '${book.title}' (ID: ${book.id})"}
+            }
+
             return@withContext book.id
         } else {
             // Fall back to auto-generated ID if book.id is 0
@@ -385,7 +454,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 categoryId = book.categoryId,
                 title = book.title,
                 heShortDesc = book.heShortDesc,
-                pubDate = book.pubDate,
                 orderIndex = book.order.toLong(),
                 bookType = book.bookType.name,
                 totalLines = book.totalLines.toLong()
@@ -412,6 +480,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 val pubPlaceId = insertPubPlace(pubPlace.name)
                 linkPubPlaceToBook(pubPlaceId, id)
                 logger.d{"Processed publication place '${pubPlace.name}' (ID: $pubPlaceId) for book '${book.title}' (ID: $id)"}
+            }
+
+            // Process publication dates
+            for (pubDate in book.pubDates) {
+                val pubDateId = insertPubDate(pubDate.date)
+                linkPubDateToBook(pubDateId, id)
+                logger.d{"Processed publication date '${pubDate.date}' (ID: $pubDateId) for book '${book.title}' (ID: $id)"}
             }
 
             return@withContext id

@@ -33,13 +33,20 @@ CREATE TABLE IF NOT EXISTS pub_place (
 
 CREATE INDEX idx_pub_place_name ON pub_place(name);
 
+-- Table des dates de publication
+CREATE TABLE IF NOT EXISTS pub_date (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL UNIQUE
+);
+
+CREATE INDEX idx_pub_date_date ON pub_date(date);
+
 -- Table des livres
 CREATE TABLE IF NOT EXISTS book (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     categoryId INTEGER NOT NULL,
     title TEXT NOT NULL,
     heShortDesc TEXT,
-    pubDate TEXT,
     orderIndex INTEGER NOT NULL DEFAULT 999,
     bookType TEXT NOT NULL,
     totalLines INTEGER NOT NULL DEFAULT 0,
@@ -61,6 +68,18 @@ CREATE TABLE IF NOT EXISTS book_pub_place (
 
 CREATE INDEX idx_book_pub_place_book ON book_pub_place(bookId);
 CREATE INDEX idx_book_pub_place_place ON book_pub_place(pubPlaceId);
+
+-- Table de jonction livre-date de publication
+CREATE TABLE IF NOT EXISTS book_pub_date (
+    bookId INTEGER NOT NULL,
+    pubDateId INTEGER NOT NULL,
+    PRIMARY KEY (bookId, pubDateId),
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
+    FOREIGN KEY (pubDateId) REFERENCES pub_date(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_book_pub_date_book ON book_pub_date(bookId);
+CREATE INDEX idx_book_pub_date_date ON book_pub_date(pubDateId);
 
 -- Table de jonction livre-topic
 CREATE TABLE IF NOT EXISTS book_topic (

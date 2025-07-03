@@ -13,8 +13,8 @@ data class Book(
     val authors: List<Author> = emptyList(),
     val topics: List<Topic> = emptyList(),
     val pubPlaces: List<PubPlace> = emptyList(),
+    val pubDates: List<PubDate> = emptyList(),
     val heShortDesc: String? = null,
-    val pubDate: String? = null,
     val order: Float = 999f,
     val bookType: BookType,
     val totalLines: Int = 0

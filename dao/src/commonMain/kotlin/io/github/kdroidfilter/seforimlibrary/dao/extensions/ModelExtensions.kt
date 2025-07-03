@@ -8,6 +8,7 @@ import io.github.kdroidfilter.seforimlibrary.core.models.Category
 import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
 import io.github.kdroidfilter.seforimlibrary.core.models.Line
 import io.github.kdroidfilter.seforimlibrary.core.models.Link
+import io.github.kdroidfilter.seforimlibrary.core.models.PubDate
 import io.github.kdroidfilter.seforimlibrary.core.models.PubPlace
 import io.github.kdroidfilter.seforimlibrary.core.models.SearchResult
 import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
@@ -36,7 +37,14 @@ fun io.github.kdroidfilter.seforimlibrary.db.Pub_place.toModel(): PubPlace {
     )
 }
 
-fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json, authors: List<Author> = emptyList(), pubPlaces: List<PubPlace> = emptyList()): Book {
+fun io.github.kdroidfilter.seforimlibrary.db.Pub_date.toModel(): PubDate {
+    return PubDate(
+        id = id,
+        date = date
+    )
+}
+
+fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json, authors: List<Author> = emptyList(), pubPlaces: List<PubPlace> = emptyList(), pubDates: List<PubDate> = emptyList()): Book {
     return Book(
         id = id,
         categoryId = categoryId,
@@ -44,8 +52,8 @@ fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json, authors: L
         authors = authors,
         topics = emptyList(),
         pubPlaces = pubPlaces,
+        pubDates = pubDates,
         heShortDesc = heShortDesc,
-        pubDate = pubDate,
         order = orderIndex.toFloat(),
         bookType = io.github.kdroidfilter.seforimlibrary.core.models.BookType.valueOf(bookType),
         totalLines = totalLines.toInt()
