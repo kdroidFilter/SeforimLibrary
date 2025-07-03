@@ -24,17 +24,14 @@ fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json): Book {
         id = id,
         categoryId = categoryId,
         title = title,
-        extraTitles = json.decodeFromString<List<String>>(extraTitles),
         author = author,
         heShortDesc = heShortDesc,
         pubDate = pubDate,
         pubPlace = pubPlace,
         order = orderIndex.toFloat(),
         topics = topics,
-        path = path,
         bookType = io.github.kdroidfilter.seforimlibrary.core.models.BookType.valueOf(bookType),
-        totalLines = totalLines.toInt(),
-        createdAt = createdAt
+        totalLines = totalLines.toInt()
     )
 }
 

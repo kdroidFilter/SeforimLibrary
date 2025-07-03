@@ -12,19 +12,17 @@ SELECT * FROM book WHERE categoryId = ? ORDER BY orderIndex, title;
 selectByTitle:
 SELECT * FROM book WHERE title = ? LIMIT 1;
 
-selectByPath:
-SELECT * FROM book WHERE path = ?;
 
 selectByAuthor:
 SELECT * FROM book WHERE author LIKE ? ORDER BY orderIndex, title;
 
 insert:
-INSERT INTO book (categoryId, title, extraTitles, author, heShortDesc, pubDate, pubPlace, orderIndex, topics, path, bookType, totalLines, createdAt)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO book (categoryId, title, author, heShortDesc, pubDate, pubPlace, orderIndex, topics, bookType, totalLines)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO book (id, categoryId, title, extraTitles, author, heShortDesc, pubDate, pubPlace, orderIndex, topics, path, bookType, totalLines, createdAt)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO book (id, categoryId, title, author, heShortDesc, pubDate, pubPlace, orderIndex, topics, bookType, totalLines)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateTotalLines:
 UPDATE book SET totalLines = ? WHERE id = ?;

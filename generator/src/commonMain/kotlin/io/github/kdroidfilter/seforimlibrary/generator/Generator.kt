@@ -181,16 +181,13 @@ class DatabaseGenerator(
             id = currentBookId,
             categoryId = categoryId,
             title = title,
-            extraTitles = meta?.extraTitles ?: emptyList(),
             author = meta?.author,
             heShortDesc = meta?.heShortDesc,
             pubDate = meta?.pubDate,
             pubPlace = meta?.pubPlace,
             order = meta?.order ?: 999f,
             topics = extractTopics(path),
-            path = path.toString(),
-            bookType = if (path.extension == "pdf") BookType.PDF else BookType.TEXT,
-            createdAt = System.currentTimeMillis()
+            bookType = if (path.extension == "pdf") BookType.PDF else BookType.TEXT
         )
 
         logger.d { "Inserting book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}" }

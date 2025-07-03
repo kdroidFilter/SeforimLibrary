@@ -145,17 +145,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 id = book.id,
                 categoryId = book.categoryId,
                 title = book.title,
-                extraTitles = json.encodeToString(book.extraTitles),
                 author = book.author,
                 heShortDesc = book.heShortDesc,
                 pubDate = book.pubDate,
                 pubPlace = book.pubPlace,
                 orderIndex = book.order.toLong(),
                 topics = book.topics,
-                path = book.path,
                 bookType = book.bookType.name,
-                totalLines = book.totalLines.toLong(),
-                createdAt = book.createdAt
+                totalLines = book.totalLines.toLong()
             )
             logger.d{"Used insertWithId for book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}"}
 
@@ -174,17 +171,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             database.bookQueriesQueries.insert(
                 categoryId = book.categoryId,
                 title = book.title,
-                extraTitles = json.encodeToString(book.extraTitles),
                 author = book.author,
                 heShortDesc = book.heShortDesc,
                 pubDate = book.pubDate,
                 pubPlace = book.pubPlace,
                 orderIndex = book.order.toLong(),
                 topics = book.topics,
-                path = book.path,
                 bookType = book.bookType.name,
-                totalLines = book.totalLines.toLong(),
-                createdAt = book.createdAt
+                totalLines = book.totalLines.toLong()
             )
             val id = database.bookQueriesQueries.lastInsertRowId().executeAsOne()
             logger.d{"Used insert for book '${book.title}', got ID: $id with categoryId: ${book.categoryId}"}
