@@ -1,4 +1,4 @@
--- Requêtes pour la table des matières
+-- Queries for table of contents
 
 selectByBookId:
 SELECT t.*, tt.text

@@ -3,7 +3,18 @@ package io.github.kdroidfilter.seforimlibrary.core.models
 import kotlinx.serialization.Serializable
 
 /**
- * Entrée de la table des matières
+ * Table of contents entry
+ *
+ * @property id The unique identifier of the TOC entry
+ * @property bookId The identifier of the book this TOC entry belongs to
+ * @property parentId The identifier of the parent TOC entry, or null if this is a root entry
+ * @property textId The identifier of the associated text in the tocText table
+ * @property text The text of the TOC entry (for compatibility with existing code)
+ * @property level The level of the TOC entry in the hierarchy
+ * @property lineId The identifier of the associated line, or null if not linked to a specific line
+ * @property lineIndex The index of the associated line
+ * @property order The display order of the TOC entry within its level
+ * @property path The hierarchical path (e.g., "1.2.3")
  */
 @Serializable
 data class TocEntry(
@@ -11,10 +22,10 @@ data class TocEntry(
     val bookId: Long,
     val parentId: Long? = null,
     val textId: Long? = null,
-    val text: String = "", // Pour la compatibilité avec le code existant
+    val text: String = "",
     val level: Int,
     val lineId: Long? = null,
     val lineIndex: Int,
     val order: Int,
-    val path: String  // Chemin hiérarchique (ex: "1.2.3")
+    val path: String
 )

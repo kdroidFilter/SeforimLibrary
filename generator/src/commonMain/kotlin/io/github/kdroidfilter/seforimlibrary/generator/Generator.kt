@@ -20,6 +20,13 @@ import kotlin.io.path.extension
 import kotlin.io.path.nameWithoutExtension
 import kotlin.io.path.readText
 
+/**
+ * DatabaseGenerator is responsible for generating the Otzaria database from source files.
+ * It processes directories, books, and links to create a structured database.
+ *
+ * @property sourceDirectory The path to the source directory containing the data files
+ * @property repository The repository used to store the generated data
+ */
 class DatabaseGenerator(
     private val sourceDirectory: Path,
     private val repository: SeforimRepository
@@ -37,34 +44,44 @@ class DatabaseGenerator(
     private var nextTocEntryId = 1L // Counter for TOC entry IDs
 
 
+    /**
+     * Generates the database by processing metadata, directories, and links.
+     * This is the main entry point for the database generation process.
+     */
     suspend fun generate(): Unit = coroutineScope {
-        logger.i { "Démarrage de la génération de la base de données..." }
-        logger.i { "Répertoire source: $sourceDirectory" }
+        logger.i { "Starting database generation..." }
+        logger.i { "Source directory: $sourceDirectory" }
 
         try {
-            // Charger les métadonnées
+            // Load metadata
             val metadata = loadMetadata()
-            logger.i { "Métadonnées chargées: ${metadata.size} entrées" }
+            logger.i { "Metadata loaded: ${metadata.size} entries" }
 
-            // Traiter la hiérarchie
+            // Process hierarchy
             val libraryPath = sourceDirectory.resolve("אוצריא")
             if (!libraryPath.exists()) {
-                throw IllegalStateException("Le répertoire אוצריא n'existe pas dans $sourceDirectory")
+                throw IllegalStateException("The directory אוצריא does not exist in $sourceDirectory")
             }
 
             logger.i { "🚀 Starting to process library directory: $libraryPath" }
             processDirectory(libraryPath, null, 0, metadata)
 
-            // Traiter les liens
+            // Process links
             processLinks()
 
-            logger.i { "Génération terminée avec succès!" }
+            logger.i { "Generation completed successfully!" }
         } catch (e: Exception) {
-            logger.e(e) { "Erreur lors de la génération" }
+            logger.e(e) { "Error during generation" }
             throw e
         }
     }
 
+    /**
+     * Loads book metadata from the metadata.json file.
+     * Attempts to parse the file in different formats (Map or List).
+     *
+     * @return A map of book titles to their metadata
+     */
     private suspend fun loadMetadata(): Map<String, BookMetadata> {
         val metadataFile = sourceDirectory.resolve("metadata.json")
         return if (metadataFile.exists()) {
@@ -85,12 +102,20 @@ class DatabaseGenerator(
                 }
             }
         } else {
-            logger.w { "Fichier metadata.json introuvable" }
+            logger.w { "Metadata file metadata.json not found" }
             emptyMap()
         }
     }
 
 
+    /**
+     * Processes a directory recursively, creating categories and books.
+     *
+     * @param directory The directory to process
+     * @param parentCategoryId The ID of the parent category, if any
+     * @param level The current level in the directory hierarchy
+     * @param metadata The metadata for books
+     */
     private suspend fun processDirectory(
         directory: Path,
         parentCategoryId: Long?,
@@ -117,7 +142,7 @@ class DatabaseGenerator(
 
                     Files.isRegularFile(entry) && entry.extension in listOf("txt", "docx", "pdf") -> {
                         if (parentCategoryId == null) {
-                            logger.w { "❌ Livre trouvé sans catégorie: $entry" }
+                            logger.w { "❌ Book found without category: $entry" }
                             continue
                         }
                         logger.i { "📚 Processing book ${entry.fileName} with categoryId: $parentCategoryId" }
@@ -133,13 +158,21 @@ class DatabaseGenerator(
         logger.i { "=== Finished processing directory: ${directory.fileName} ===" }
     }
 
+    /**
+     * Creates a category in the database.
+     *
+     * @param path The path representing the category
+     * @param parentId The ID of the parent category, if any
+     * @param level The level in the category hierarchy
+     * @return The ID of the created category
+     */
     private suspend fun createCategory(
         path: Path,
         parentId: Long?,
         level: Int
     ): Long {
         val title = path.fileName.toString()
-        logger.i { "🏗️ Création de la catégorie: '$title' (niveau $level, parent: $parentId)" }
+        logger.i { "🏗️ Creating category: '$title' (level $level, parent: $parentId)" }
 
         val category = Category(
             parentId = parentId,
@@ -148,20 +181,27 @@ class DatabaseGenerator(
         )
 
         val insertedId = repository.insertCategory(category)
-        logger.i { "✅ Catégorie '$title' créée avec ID: $insertedId" }
+        logger.i { "✅ Category '$title' created with ID: $insertedId" }
 
-        // Vérification supplémentaire
+        // Additional verification
         val insertedCategory = repository.getCategory(insertedId)
         if (insertedCategory == null) {
-            logger.e { "❌ ERREUR: Impossible de récupérer la catégorie qui vient d'être insérée (ID: $insertedId)" }
+            logger.e { "❌ ERROR: Unable to retrieve the category that was just inserted (ID: $insertedId)" }
         } else {
-            logger.d { "✅ Vérification: catégorie récupérée avec ID: ${insertedCategory.id}, parent: ${insertedCategory.parentId}" }
+            logger.d { "✅ Verification: category retrieved with ID: ${insertedCategory.id}, parent: ${insertedCategory.parentId}" }
         }
 
         return insertedId
     }
 
 
+    /**
+     * Creates a book in the database and processes its content.
+     *
+     * @param path The path to the book file
+     * @param categoryId The ID of the category the book belongs to
+     * @param metadata The metadata for the book
+     */
     private suspend fun createAndProcessBook(
         path: Path,
         categoryId: Long,
@@ -171,7 +211,7 @@ class DatabaseGenerator(
         val title = filename.substringBeforeLast('.')
         val meta = metadata[title]
 
-        logger.i { "Traitement du livre: $title avec categoryId: $categoryId" }
+        logger.i { "Processing book: $title with categoryId: $categoryId" }
 
         // Assign a unique ID to this book
         val currentBookId = nextBookId++
@@ -208,48 +248,60 @@ class DatabaseGenerator(
         logger.d { "Inserting book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}" }
         val insertedBookId = repository.insertBook(book)
 
-        // ✅ Vérification importante : s'assurer que l'ID et categoryId sont corrects
+        // ✅ Important verification: ensure that ID and categoryId are correct
         val insertedBook = repository.getBook(insertedBookId)
         if (insertedBook?.categoryId != categoryId) {
-            logger.w { "ATTENTION: Book inserted with wrong categoryId! Expected: $categoryId, Got: ${insertedBook?.categoryId}" }
-            // Corriger le categoryId si nécessaire
+            logger.w { "WARNING: Book inserted with wrong categoryId! Expected: $categoryId, Got: ${insertedBook?.categoryId}" }
+            // Correct the categoryId if necessary
             repository.updateBookCategoryId(insertedBookId, categoryId)
         }
 
         logger.d { "Book '${book.title}' inserted with ID: $insertedBookId and categoryId: $categoryId" }
 
-        // Traiter le contenu pour les livres texte
+        // Process content for text books
         if (book.bookType == BookType.TEXT) {
             processBookContent(path, insertedBookId)
         }
     }
 
+    /**
+     * Processes the content of a book, extracting lines and TOC entries.
+     *
+     * @param path The path to the book file
+     * @param bookId The ID of the book in the database
+     */
     private suspend fun processBookContent(path: Path, bookId: Long) = coroutineScope {
         logger.d { "Processing content for book ID: $bookId" }
-        logger.i { "Traitement du contenu du livre ID: $bookId (ID généré par la base de données)" }
+        logger.i { "Processing content of book ID: $bookId (ID generated by the database)" }
 
         val content = when (path.extension) {
             "txt" -> path.readText(Charsets.UTF_8)
             "docx" -> extractDocxText(path)
             else -> {
-                logger.w { "Type de fichier non supporté: ${path.extension}" }
+                logger.w { "Unsupported file type: ${path.extension}" }
                 return@coroutineScope
             }
         }
 
         val lines = content.lines()
-        logger.i { "Nombre de lignes: ${lines.size}" }
+        logger.i { "Number of lines: ${lines.size}" }
 
         // Process each line one by one, handling TOC entries as we go
         processLinesWithTocEntries(bookId, lines)
 
-        // Mettre à jour le nombre total de lignes
+        // Update the total number of lines
         repository.updateBookTotalLines(bookId, lines.size)
 
-        logger.i { "Contenu traité avec succès pour le livre ID: $bookId (ID généré par la base de données)" }
+        logger.i { "Content processed successfully for book ID: $bookId (ID generated by the database)" }
     }
 
 
+    /**
+     * Processes lines of a book, identifying and creating TOC entries.
+     *
+     * @param bookId The ID of the book in the database
+     * @param lines The lines of the book content
+     */
     private suspend fun processLinesWithTocEntries(bookId: Long, lines: List<String>) {
         logger.d { "Processing lines and TOC entries together for book ID: $bookId" }
 
@@ -331,7 +383,7 @@ class DatabaseGenerator(
 
             // Log progress
             if (lineIndex % 1000 == 0) {
-                logger.i { "Progression: $lineIndex/${lines.size} lignes" }
+                logger.i { "Progress: $lineIndex/${lines.size} lines" }
             }
         }
     }
@@ -368,10 +420,14 @@ class DatabaseGenerator(
         return path.joinToString(".")
     }
 
+    /**
+     * Processes all link files in the links directory.
+     * Links connect lines between different books.
+     */
     private suspend fun processLinks() {
         val linksDir = sourceDirectory.resolve("links")
         if (!linksDir.exists()) {
-            logger.w { "Répertoire links introuvable" }
+            logger.w { "Links directory not found" }
             return
         }
 
@@ -379,7 +435,7 @@ class DatabaseGenerator(
         val linksBefore = repository.countLinks()
         logger.d { "Links in database before processing: $linksBefore" }
 
-        logger.i { "Traitement des liens..." }
+        logger.i { "Processing links..." }
         var totalLinks = 0
 
         Files.list(linksDir).use { stream ->
@@ -397,18 +453,24 @@ class DatabaseGenerator(
         logger.d { "Links in database after processing: $linksAfter" }
         logger.d { "Added ${linksAfter - linksBefore} links to the database" }
 
-        logger.i { "Total de $totalLinks liens traités" }
+        logger.i { "Total of $totalLinks links processed" }
     }
 
+    /**
+     * Processes a single link file, creating links between books.
+     *
+     * @param linkFile The path to the link file
+     * @return The number of links successfully processed
+     */
     private suspend fun processLinkFile(linkFile: Path): Int {
         val bookTitle = linkFile.nameWithoutExtension.removeSuffix("_links")
         logger.d { "Processing link file for book: $bookTitle" }
 
-        // Trouver le livre source
+        // Find the source book
         val sourceBook = repository.getBookByTitle(bookTitle)
 
         if (sourceBook == null) {
-            logger.w { "Livre source introuvable pour les liens: $bookTitle" }
+            logger.w { "Source book not found for links: $bookTitle" }
             return 0
         }
         logger.d { "Found source book with ID: ${sourceBook.id}" }
@@ -422,7 +484,7 @@ class DatabaseGenerator(
 
             for ((index, linkData) in links.withIndex()) {
                 try {
-                    // Trouver le livre cible
+                    // Find the target book
                     // Handle paths with backslashes
                     val path = linkData.path_2
                     val targetTitle = if (path.contains('\\')) {
@@ -447,7 +509,7 @@ class DatabaseGenerator(
                     }
                     logger.d { "Using target book with ID: ${targetBook.id}" }
 
-                    // Trouver les lignes
+                    // Find the lines
                     logger.d { "Looking for source line at index: ${linkData.line_index_1.toInt()} in book ${sourceBook.id}" }
 
                     // Try to find the source line
@@ -481,21 +543,28 @@ class DatabaseGenerator(
                     logger.d { "Link inserted with ID: $linkId" }
                     processed++
                 } catch (e: Exception) {
-                    logger.e(e) { "Erreur lors du traitement du lien: ${linkData.heRef_2}" }
+                    logger.e(e) { "Error processing link: ${linkData.heRef_2}" }
                     logger.d { "Error processing link: ${e.message}" }
                 }
             }
             logger.d { "Processed $processed links out of ${links.size}" }
             return processed
         } catch (e: Exception) {
-            logger.e(e) { "Erreur lors du traitement du fichier de liens: ${linkFile.fileName}" }
+            logger.e(e) { "Error processing link file: ${linkFile.fileName}" }
             logger.d { "Error processing link file: ${e.message}" }
             return 0
         }
     }
 
+    /**
+     * Extracts topics from the file path.
+     * Topics are derived from the directory structure.
+     *
+     * @param path The path to the book file
+     * @return A list of topics extracted from the path
+     */
     private fun extractTopics(path: Path): List<Topic> {
-        // Extraire les topics du chemin
+        // Extract topics from the path
         val parts = path.toString().split(File.separator)
         val topicNames = parts.dropLast(1).takeLast(2)
 
@@ -504,13 +573,24 @@ class DatabaseGenerator(
         }
     }
 
+    /**
+     * Extracts text from a DOCX file.
+     * Currently not implemented.
+     *
+     * @param path The path to the DOCX file
+     * @return The extracted text (currently empty)
+     */
     private fun extractDocxText(path: Path): String {
-        // TODO: Implémenter l'extraction DOCX avec Apache POI
+        // TODO: Implement DOCX extraction with Apache POI
         return ""
     }
 
-    // Classes internes
+    // Internal classes
 
+    /**
+     * Data class representing a link between two books.
+     * Used for deserializing link data from JSON files.
+     */
     @Serializable
     private data class LinkData(
         val heRef_2: String,

@@ -3,7 +3,10 @@ package io.github.kdroidfilter.seforimlibrary.core.models
 import kotlinx.serialization.Serializable
 
 /**
- * Représente un texte utilisé dans les entrées de la table des matières
+ * Represents a text used in table of contents entries
+ *
+ * @property id The unique identifier of the TOC text
+ * @property text The content of the TOC text
  */
 @Serializable
 data class TocText(

@@ -1,4 +1,4 @@
--- Requêtes pour les lignes
+-- Queries for lines
 
 selectById:
 SELECT * FROM line WHERE id = ?;

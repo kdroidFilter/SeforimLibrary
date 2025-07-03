@@ -1,4 +1,4 @@
--- Requêtes pour les lieux de publication
+-- Queries for publication places
 
 selectAll:
 SELECT * FROM pub_place ORDER BY name;

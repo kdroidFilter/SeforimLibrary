@@ -1,4 +1,4 @@
--- Table des catégories
+-- Categories table
 CREATE TABLE IF NOT EXISTS category (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     parentId INTEGER,
@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS category (
 
 CREATE INDEX idx_category_parent ON category(parentId);
 
--- Table des auteurs
+-- Authors table
 CREATE TABLE IF NOT EXISTS author (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE
@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS topic (
 
 CREATE INDEX idx_topic_name ON topic(name);
 
--- Table des lieux de publication
+-- Publication places table
 CREATE TABLE IF NOT EXISTS pub_place (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS pub_place (
 
 CREATE INDEX idx_pub_place_name ON pub_place(name);
 
--- Table des dates de publication
+-- Publication dates table
 CREATE TABLE IF NOT EXISTS pub_date (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     date TEXT NOT NULL UNIQUE
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS pub_date (
 
 CREATE INDEX idx_pub_date_date ON pub_date(date);
 
--- Table des livres
+-- Books table
 CREATE TABLE IF NOT EXISTS book (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     categoryId INTEGER NOT NULL,
@@ -57,7 +57,7 @@ CREATE INDEX idx_book_category ON book(categoryId);
 CREATE INDEX idx_book_title ON book(title);
 CREATE INDEX idx_book_order ON book(orderIndex);
 
--- Table de jonction livre-lieu de publication
+-- Book-publication place junction table
 CREATE TABLE IF NOT EXISTS book_pub_place (
     bookId INTEGER NOT NULL,
     pubPlaceId INTEGER NOT NULL,
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS book_pub_place (
 CREATE INDEX idx_book_pub_place_book ON book_pub_place(bookId);
 CREATE INDEX idx_book_pub_place_place ON book_pub_place(pubPlaceId);
 
--- Table de jonction livre-date de publication
+-- Book-publication date junction table
 CREATE TABLE IF NOT EXISTS book_pub_date (
     bookId INTEGER NOT NULL,
     pubDateId INTEGER NOT NULL,
@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS book_pub_date (
 CREATE INDEX idx_book_pub_date_book ON book_pub_date(bookId);
 CREATE INDEX idx_book_pub_date_date ON book_pub_date(pubDateId);
 
--- Table de jonction livre-topic
+-- Book-topic junction table
 CREATE TABLE IF NOT EXISTS book_topic (
     bookId INTEGER NOT NULL,
     topicId INTEGER NOT NULL,
@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS book_topic (
 CREATE INDEX idx_book_topic_book ON book_topic(bookId);
 CREATE INDEX idx_book_topic_topic ON book_topic(topicId);
 
--- Table de jonction livre-auteur
+-- Book-author junction table
 CREATE TABLE IF NOT EXISTS book_author (
     bookId INTEGER NOT NULL,
     authorId INTEGER NOT NULL,
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS book_author (
 CREATE INDEX idx_book_author_book ON book_author(bookId);
 CREATE INDEX idx_book_author_author ON book_author(authorId);
 
--- Table des lignes
+-- Lines table
 CREATE TABLE IF NOT EXISTS line (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bookId INTEGER NOT NULL,
@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS line (
 CREATE INDEX idx_line_book_index ON line(bookId, lineIndex);
 CREATE INDEX idx_line_toc ON line(tocEntryId);
 
--- Table des textes TOC
+-- TOC texts table
 CREATE TABLE IF NOT EXISTS tocText (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     text TEXT NOT NULL UNIQUE
@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS tocText (
 
 CREATE INDEX idx_toc_text ON tocText(text);
 
--- Table des entrées TOC
+-- TOC entries table
 CREATE TABLE IF NOT EXISTS tocEntry (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bookId INTEGER NOT NULL,
@@ -150,7 +150,7 @@ CREATE INDEX idx_toc_parent ON tocEntry(parentId);
 CREATE INDEX idx_toc_text_id ON tocEntry(textId);
 CREATE INDEX idx_toc_line ON tocEntry(lineId);
 
--- Table des liens
+-- Links table
 CREATE TABLE IF NOT EXISTS link (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sourceBookId INTEGER NOT NULL,
@@ -170,7 +170,7 @@ CREATE INDEX idx_link_target_book ON link(targetBookId);
 CREATE INDEX idx_link_target_line ON link(targetLineId);
 CREATE INDEX idx_link_type ON link(connectionType);
 
--- Table standard pour la recherche (sans FTS5)
+-- Standard search table (without FTS5)
 CREATE TABLE IF NOT EXISTS line_search (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bookId INTEGER NOT NULL,

@@ -1,4 +1,4 @@
--- Requêtes de recherche standard (sans FTS5)
+-- Standard search queries (without FTS5)
 
 searchAll:
 SELECT
@@ -6,8 +6,8 @@ SELECT
     b.title bookTitle,
     ls.lineId,
     ls.lineIndex,
-    SUBSTR(ls.content, 1, 150) snippet, -- Extrait simple du contenu
-    0 rank -- Classement fixe sans FTS5
+    SUBSTR(ls.content, 1, 150) snippet, -- Simple content excerpt
+    0 rank -- Fixed ranking without FTS5
 FROM line_search ls
 JOIN book b ON b.id = ls.bookId
 WHERE ls.content LIKE '%' || ? || '%'
@@ -64,7 +64,7 @@ SELECT COUNT(*)
 FROM line_search
 WHERE content LIKE '%' || ? || '%';
 
--- Nouvelles requêtes pour gérer l'insertion et la mise à jour des données de recherche
+-- New queries for managing the insertion and update of search data
 
 insertSearchEntry:
 INSERT INTO line_search (bookId, lineId, lineIndex, bookTitle, content)

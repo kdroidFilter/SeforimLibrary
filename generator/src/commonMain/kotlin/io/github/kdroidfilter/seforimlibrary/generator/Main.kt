@@ -10,9 +10,14 @@ import kotlin.system.exitProcess
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
 
+/**
+ * Main entry point for the Otzaria database generator.
+ * This function initializes the database, sets up the repository,
+ * and runs the generation process.
+ */
 fun main() = runBlocking {
     // Configure Kermit to only log warnings and errors
-    Logger.setMinSeverity(Severity.Debug)
+    Logger.setMinSeverity(Severity.Error)
 
     val logger = Logger.withTag("Main")
 
@@ -32,18 +37,18 @@ fun main() = runBlocking {
 
     val driver = JdbcSqliteDriver(url = "jdbc:sqlite:otzaria.db")
 
-//    val sourcePath = Path("/Users/elie/Downloads/otzaria_latest")
-    val sourcePath = Path("/Users/elie/IdeaProjects/SeforimLibrary/otzaria_latest")
+    val sourcePath = Path("/Users/elie/Downloads/otzaria_latest")
+//    val sourcePath = Path("/Users/elie/IdeaProjects/SeforimLibrary/otzaria_latest")
     val dbPath = Paths.get("otzaria.db").toFile().path
 
     if (!sourcePath.toFile().exists()) {
-        logger.e{"Le répertoire source n'existe pas: $sourcePath"}
+        logger.e{"The source directory does not exist: $sourcePath"}
         exitProcess(1)
     }
 
-    logger.i{"=== Générateur de base de données Otzaria ==="}
+    logger.i{"=== Otzaria Database Generator ==="}
     logger.i{"Source: $sourcePath"}
-    logger.i{"Base de données: $dbPath"}
+    logger.i{"Database: $dbPath"}
 
     val repository = SeforimRepository(dbPath, driver)
 
@@ -51,10 +56,10 @@ fun main() = runBlocking {
         val generator = DatabaseGenerator(sourcePath, repository)
         generator.generate()
 
-        logger.i{"Génération terminée avec succès!"}
-        logger.i{"Base de données créée: $dbPath"}
+        logger.i{"Generation completed successfully!"}
+        logger.i{"Database created: $dbPath"}
     } catch (e: Exception) {
-        logger.e(e){"Erreur lors de la génération"}
+        logger.e(e){"Error during generation"}
         exitProcess(1)
     } finally {
         repository.close()

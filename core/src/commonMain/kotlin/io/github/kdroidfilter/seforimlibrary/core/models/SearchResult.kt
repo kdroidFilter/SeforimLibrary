@@ -3,7 +3,14 @@ package io.github.kdroidfilter.seforimlibrary.core.models
 import kotlinx.serialization.Serializable
 
 /**
- * Résultat de recherche
+ * Search result
+ *
+ * @property bookId The identifier of the book containing the result
+ * @property bookTitle The title of the book containing the result
+ * @property lineId The identifier of the line containing the result
+ * @property lineIndex The index of the line containing the result
+ * @property snippet The text excerpt with highlighting
+ * @property rank The relevance score of the result
  */
 @Serializable
 data class SearchResult(
@@ -11,6 +18,6 @@ data class SearchResult(
     val bookTitle: String,
     val lineId: Long,
     val lineIndex: Int,
-    val snippet: String,  // Extrait avec surbrillance
-    val rank: Double     // Score de pertinence
+    val snippet: String,
+    val rank: Double
 )

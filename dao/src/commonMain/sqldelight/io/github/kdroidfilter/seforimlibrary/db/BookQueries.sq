@@ -1,4 +1,4 @@
--- Requêtes pour les livres
+-- Queries for books
 
 selectAll:
 SELECT * FROM book ORDER BY orderIndex, title;

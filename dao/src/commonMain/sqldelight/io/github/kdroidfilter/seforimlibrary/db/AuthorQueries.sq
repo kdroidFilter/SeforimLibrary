@@ -1,4 +1,4 @@
--- Requêtes pour les auteurs
+-- Queries for authors
 
 selectAll:
 SELECT * FROM author ORDER BY name;
@@ -36,7 +36,7 @@ SELECT COUNT(*) FROM author;
 lastInsertRowId:
 SELECT last_insert_rowid();
 
--- Requêtes pour la table de jonction book_author
+-- Queries for the book_author junction table
 
 linkBookAuthor:
 INSERT INTO book_author (bookId, authorId)

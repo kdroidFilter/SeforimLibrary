@@ -12,6 +12,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
+/**
+ * Repository class for accessing and manipulating the Seforim database.
+ * Provides methods for CRUD operations on books, categories, lines, TOC entries, and links.
+ *
+ * @property driver The SQL driver used to connect to the database
+ * @constructor Creates a repository with the specified database path and driver
+ */
 class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     private val database = SeforimDb(driver)
     private val json = Json { ignoreUnknownKeys = true }
@@ -22,7 +29,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         logger.d{"Initializing SeforimRepository"}
         // Create the database schema if it doesn't exist
         SeforimDb.Schema.create(driver)
-        // Optimisations SQLite
+        // SQLite optimizations
         driver.execute(null, "PRAGMA journal_mode=WAL", 0)
         driver.execute(null, "PRAGMA synchronous=NORMAL", 0)
         driver.execute(null, "PRAGMA cache_size=10000", 0)
@@ -39,20 +46,45 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     // --- Categories ---
 
+    /**
+     * Retrieves a category by its ID.
+     *
+     * @param id The ID of the category to retrieve
+     * @return The category if found, null otherwise
+     */
     suspend fun getCategory(id: Long): Category? = withContext(Dispatchers.IO) {
         database.categoryQueriesQueries.selectById(id).executeAsOneOrNull()?.toModel()
     }
 
+    /**
+     * Retrieves all root categories (categories without a parent).
+     *
+     * @return A list of root categories
+     */
     suspend fun getRootCategories(): List<Category> = withContext(Dispatchers.IO) {
         database.categoryQueriesQueries.selectRoot().executeAsList().map { it.toModel() }
     }
 
+    /**
+     * Retrieves all child categories of a parent category.
+     *
+     * @param parentId The ID of the parent category
+     * @return A list of child categories
+     */
     suspend fun getCategoryChildren(parentId: Long): List<Category> = withContext(Dispatchers.IO) {
         database.categoryQueriesQueries.selectByParentId(parentId).executeAsList().map { it.toModel() }
     }
 
 
 
+    /**
+     * Inserts a category into the database.
+     * If a category with the same title already exists, returns its ID instead.
+     *
+     * @param category The category to insert
+     * @return The ID of the inserted or existing category
+     * @throws RuntimeException If the insertion fails
+     */
     suspend fun insertCategory(category: Category): Long = withContext(Dispatchers.IO) {
         logger.d { "🔧 Repository: Attempting to insert category '${category.title}'" }
         logger.d { "🔧 Category details: parentId=${category.parentId}, level=${category.level}" }
@@ -67,7 +99,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 return@withContext existingCategory.id
             }
 
-            // Essayer l'insertion
+            // Try the insertion
             database.categoryQueriesQueries.insert(
                 parentId = category.parentId,
                 title = category.title,
@@ -80,7 +112,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             if (insertedId == 0L) {
                 logger.e { "❌ Repository: lastInsertRowId() returned 0! This indicates insertion failed." }
 
-                // Diagnostiquer le problème
+                // Diagnose the problem
                 val categoryCount = database.categoryQueriesQueries.countAll().executeAsOne()
                 logger.d { "📊 Total categories in database: $categoryCount" }
 
@@ -116,6 +148,12 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     // --- Books ---
 
+    /**
+     * Retrieves a book by its ID, including all related data (authors, topics, etc.).
+     *
+     * @param id The ID of the book to retrieve
+     * @return The book if found, null otherwise
+     */
     suspend fun getBook(id: Long): Book? = withContext(Dispatchers.IO) {
         val bookData = database.bookQueriesQueries.selectById(id).executeAsOneOrNull() ?: return@withContext null
         val authors = getBookAuthors(bookData.id)
@@ -125,6 +163,12 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         return@withContext bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
     }
 
+    /**
+     * Retrieves all books in a specific category.
+     *
+     * @param categoryId The ID of the category
+     * @return A list of books in the category
+     */
     suspend fun getBooksByCategory(categoryId: Long): List<Book> = withContext(Dispatchers.IO) {
         val books = database.bookQueriesQueries.selectByCategoryId(categoryId).executeAsList()
         return@withContext books.map { bookData ->
@@ -394,6 +438,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         logger.d{"Linked publication date $pubDateId to book $bookId"}
     }
 
+    /**
+     * Inserts a book into the database, including all related data (authors, topics, etc.).
+     * If the book has an ID greater than 0, uses that ID; otherwise, generates a new ID.
+     *
+     * @param book The book to insert
+     * @return The ID of the inserted book
+     */
     suspend fun insertBook(book: Book): Long = withContext(Dispatchers.IO) {
         logger.d{"Repository inserting book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}"}
 
@@ -410,11 +461,11 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             )
             logger.d{"Used insertWithId for book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}"}
 
-            // ✅ Vérifier que l'insertion s'est bien passée
+            // ✅ Verify that the insertion was successful
             val insertedBook = database.bookQueriesQueries.selectById(book.id).executeAsOneOrNull()
             if (insertedBook?.categoryId != book.categoryId) {
                 logger.e{"ERROR: Book inserted with wrong categoryId! Expected: ${book.categoryId}, Got: ${insertedBook?.categoryId}"}
-                // Corriger immédiatement
+                // Fix immediately
                 database.bookQueriesQueries.updateCategoryId(book.categoryId, book.id)
                 logger.d{"Corrected categoryId for book ID: ${book.id}"}
             }
@@ -728,6 +779,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     // --- Search ---
 
+    /**
+     * Searches for text across all books.
+     *
+     * @param query The search query
+     * @param limit Maximum number of results to return
+     * @param offset Number of results to skip (for pagination)
+     * @return A list of search results
+     */
     suspend fun search(
         query: String,
         limit: Int = 20,
@@ -739,6 +798,15 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             .map { it.toSearchResult() }
     }
 
+    /**
+     * Searches for text within a specific book.
+     *
+     * @param bookId The ID of the book to search in
+     * @param query The search query
+     * @param limit Maximum number of results to return
+     * @param offset Number of results to skip (for pagination)
+     * @return A list of search results
+     */
     suspend fun searchInBook(
         bookId: Long,
         query: String,
@@ -751,6 +819,15 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         ).executeAsList().map { it.toSearchResult() }
     }
 
+    /**
+     * Searches for text in books by a specific author.
+     *
+     * @param author The author name to filter by
+     * @param query The search query
+     * @param limit Maximum number of results to return
+     * @param offset Number of results to skip (for pagination)
+     * @return A list of search results
+     */
     suspend fun searchByAuthor(
         author: String,
         query: String,
@@ -765,6 +842,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     // --- Helpers ---
 
+    /**
+     * Prepares a search query for full-text search.
+     * Adds wildcards and quotes to improve search results.
+     *
+     * @param query The raw search query
+     * @return The formatted query for FTS
+     */
     private fun prepareFtsQuery(query: String): String {
         return query.trim()
             .split("\\s+".toRegex())
@@ -772,12 +856,25 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             .joinToString(" ") { "\"$it\"*" }
     }
 
+    /**
+     * Closes the database connection.
+     * Should be called when the repository is no longer needed.
+     */
     fun close() {
         driver.close()
     }
 }
 
-// Data classes pour résultats enrichis
+// Data classes for enriched results
+
+/**
+ * Information about a commentator (author who comments on other books).
+ *
+ * @property bookId The ID of the commentator's book
+ * @property title The title of the commentator's book
+ * @property author The name of the commentator
+ * @property linkCount The number of links (comments) by this commentator
+ */
 data class CommentatorInfo(
     val bookId: Long,
     val title: String,
@@ -785,6 +882,13 @@ data class CommentatorInfo(
     val linkCount: Int
 )
 
+/**
+ * A commentary with its text content.
+ *
+ * @property link The link connecting the source text to the commentary
+ * @property targetBookTitle The title of the book containing the commentary
+ * @property targetText The text of the commentary
+ */
 data class CommentaryWithText(
     val link: Link,
     val targetBookTitle: String,

@@ -1,4 +1,4 @@
--- Requêtes pour les textes de la table des matières
+-- Queries for table of contents texts
 
 selectAll:
 SELECT * FROM tocText ORDER BY text;

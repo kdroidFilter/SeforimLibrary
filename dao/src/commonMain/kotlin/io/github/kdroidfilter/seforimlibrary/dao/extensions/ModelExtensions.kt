@@ -1,7 +1,5 @@
 package io.github.kdroidfilter.seforimlibrary.dao.extensions
 
-
-
 import io.github.kdroidfilter.seforimlibrary.core.models.Author
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
@@ -21,8 +19,18 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
 import co.touchlab.kermit.Logger
 
+/**
+ * This file contains extension functions to convert database entities to domain models.
+ * These functions facilitate the mapping between the database layer and the domain layer.
+ */
+
 private val logger = Logger.withTag("ModelExtensions")
 
+/**
+ * Converts a database Author entity to a domain Author model.
+ *
+ * @return The domain Author model
+ */
 fun io.github.kdroidfilter.seforimlibrary.db.Author.toModel(): Author {
     return Author(
         id = id,
@@ -30,6 +38,11 @@ fun io.github.kdroidfilter.seforimlibrary.db.Author.toModel(): Author {
     )
 }
 
+/**
+ * Converts a database Pub_place entity to a domain PubPlace model.
+ *
+ * @return The domain PubPlace model
+ */
 fun io.github.kdroidfilter.seforimlibrary.db.Pub_place.toModel(): PubPlace {
     return PubPlace(
         id = id,
@@ -37,6 +50,11 @@ fun io.github.kdroidfilter.seforimlibrary.db.Pub_place.toModel(): PubPlace {
     )
 }
 
+/**
+ * Converts a database Pub_date entity to a domain PubDate model.
+ *
+ * @return The domain PubDate model
+ */
 fun io.github.kdroidfilter.seforimlibrary.db.Pub_date.toModel(): PubDate {
     return PubDate(
         id = id,
@@ -44,6 +62,15 @@ fun io.github.kdroidfilter.seforimlibrary.db.Pub_date.toModel(): PubDate {
     )
 }
 
+/**
+ * Converts a database Book entity to a domain Book model.
+ *
+ * @param json The JSON parser for deserialization
+ * @param authors The list of authors associated with the book
+ * @param pubPlaces The list of publication places associated with the book
+ * @param pubDates The list of publication dates associated with the book
+ * @return The domain Book model
+ */
 fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json, authors: List<Author> = emptyList(), pubPlaces: List<PubPlace> = emptyList(), pubDates: List<PubDate> = emptyList()): Book {
     return Book(
         id = id,
@@ -60,6 +87,11 @@ fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json, authors: L
     )
 }
 
+/**
+ * Converts a database Category entity to a domain Category model.
+ *
+ * @return The domain Category model
+ */
 fun io.github.kdroidfilter.seforimlibrary.db.Category.toModel(): Category {
     return Category(
         id = id,
@@ -69,6 +101,11 @@ fun io.github.kdroidfilter.seforimlibrary.db.Category.toModel(): Category {
     )
 }
 
+/**
+ * Converts a database Line entity to a domain Line model.
+ *
+ * @return The domain Line model
+ */
 fun io.github.kdroidfilter.seforimlibrary.db.Line.toModel(): Line {
     logger.d{"Converting database Line to model with id: $id, bookId: $bookId, tocEntryId: $tocEntryId"}
     return Line(
@@ -80,6 +117,12 @@ fun io.github.kdroidfilter.seforimlibrary.db.Line.toModel(): Line {
     )
 }
 
+/**
+ * Converts a database SelectById result to a domain TocEntry model.
+ * This is used when retrieving a TOC entry by its ID.
+ *
+ * @return The domain TocEntry model
+ */
 fun io.github.kdroidfilter.seforimlibrary.db.SelectById.toModel(): TocEntry {
     logger.d{"Converting database TocEntry (from SelectById) with id: $id, bookId: $bookId, lineId: $lineId"}
     return TocEntry(
@@ -96,6 +139,12 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectById.toModel(): TocEntry {
     )
 }
 
+/**
+ * Converts a database SelectByBookId result to a domain TocEntry model.
+ * This is used when retrieving TOC entries by book ID.
+ *
+ * @return The domain TocEntry model
+ */
 fun io.github.kdroidfilter.seforimlibrary.db.SelectByBookId.toModel(): TocEntry {
     logger.d{"Converting database TocEntry (from SelectByBookId) with id: $id, bookId: $bookId, lineId: $lineId"}
     return TocEntry(
@@ -112,6 +161,12 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectByBookId.toModel(): TocEntry 
     )
 }
 
+/**
+ * Converts a database SelectRootByBookId result to a domain TocEntry model.
+ * This is used when retrieving root TOC entries for a book.
+ *
+ * @return The domain TocEntry model
+ */
 fun io.github.kdroidfilter.seforimlibrary.db.SelectRootByBookId.toModel(): TocEntry {
     logger.d{"Converting database TocEntry (from SelectRootByBookId) with id: $id, bookId: $bookId, lineId: $lineId"}
     return TocEntry(
@@ -128,6 +183,12 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectRootByBookId.toModel(): TocEn
     )
 }
 
+/**
+ * Converts a database SelectChildren result to a domain TocEntry model.
+ * This is used when retrieving child TOC entries for a parent TOC entry.
+ *
+ * @return The domain TocEntry model
+ */
 fun io.github.kdroidfilter.seforimlibrary.db.SelectChildren.toModel(): TocEntry {
     logger.d{"Converting database TocEntry (from SelectChildren) with id: $id, bookId: $bookId, lineId: $lineId"}
     return TocEntry(
@@ -144,6 +205,11 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectChildren.toModel(): TocEntry 
     )
 }
 
+/**
+ * Converts a database Link entity to a domain Link model.
+ *
+ * @return The domain Link model
+ */
 fun io.github.kdroidfilter.seforimlibrary.db.Link.toModel(): Link {
     return Link(
         id = id,
@@ -156,6 +222,12 @@ fun io.github.kdroidfilter.seforimlibrary.db.Link.toModel(): Link {
 }
 
 
+/**
+ * Converts a SearchAll database result to a domain SearchResult model.
+ * This is used for global search across all books.
+ *
+ * @return The domain SearchResult model
+ */
 fun SearchAll.toSearchResult(): SearchResult = SearchResult(
     bookId = bookId,
     bookTitle = bookTitle,
@@ -165,6 +237,12 @@ fun SearchAll.toSearchResult(): SearchResult = SearchResult(
     rank = rank.toDouble()
 )
 
+/**
+ * Converts a SearchInBook database result to a domain SearchResult model.
+ * This is used for searching within a specific book.
+ *
+ * @return The domain SearchResult model
+ */
 fun SearchInBook.toSearchResult(): SearchResult = SearchResult(
     bookId = bookId,
     bookTitle = bookTitle,
@@ -174,6 +252,12 @@ fun SearchInBook.toSearchResult(): SearchResult = SearchResult(
     rank = rank.toDouble()
 )
 
+/**
+ * Converts a SearchByAuthor database result to a domain SearchResult model.
+ * This is used for searching books by a specific author.
+ *
+ * @return The domain SearchResult model
+ */
 fun SearchByAuthor.toSearchResult(): SearchResult = SearchResult(
     bookId = bookId,
     bookTitle = bookTitle,
@@ -183,6 +267,12 @@ fun SearchByAuthor.toSearchResult(): SearchResult = SearchResult(
     rank = rank.toDouble()
 )
 
+/**
+ * Converts a SearchWithBookFilter database result to a domain SearchResult model.
+ * This is used for searching with specific book filters applied.
+ *
+ * @return The domain SearchResult model
+ */
 fun SearchWithBookFilter.toSearchResult(): SearchResult = SearchResult(
     bookId = bookId,
     bookTitle = bookTitle,

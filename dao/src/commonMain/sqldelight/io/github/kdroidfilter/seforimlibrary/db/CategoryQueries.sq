@@ -1,4 +1,4 @@
--- Requêtes pour les catégories
+-- Queries for categories
 
 selectAll:
 SELECT * FROM category ORDER BY title;

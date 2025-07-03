@@ -1,4 +1,4 @@
--- Requêtes pour les dates de publication
+-- Queries for publication dates
 
 selectAll:
 SELECT * FROM pub_date ORDER BY date;

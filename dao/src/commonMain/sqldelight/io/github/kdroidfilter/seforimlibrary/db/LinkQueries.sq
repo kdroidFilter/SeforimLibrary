@@ -1,4 +1,4 @@
--- Requêtes pour les liens
+-- Queries for links
 
 selectById:
 SELECT * FROM link WHERE id = ?;
