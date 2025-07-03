@@ -14,7 +14,6 @@ import kotlinx.serialization.Serializable
  * @property pubDates The list of publication dates for this book
  * @property heShortDesc A short description of the book in Hebrew
  * @property order The display order of the book within its category
- * @property bookType The type of the book (TEXT or PDF)
  * @property totalLines The total number of lines in the book
  */
 @Serializable
@@ -28,17 +27,5 @@ data class Book(
     val pubDates: List<PubDate> = emptyList(),
     val heShortDesc: String? = null,
     val order: Float = 999f,
-    val bookType: BookType,
     val totalLines: Int = 0
 )
-
-/**
- * Represents the type of a book
- *
- * @property TEXT A book stored as text content
- * @property PDF A book stored as a PDF document
- */
-@Serializable
-enum class BookType {
-    TEXT, PDF
-}

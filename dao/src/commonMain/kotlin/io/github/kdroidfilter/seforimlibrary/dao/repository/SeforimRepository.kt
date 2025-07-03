@@ -456,7 +456,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 title = book.title,
                 heShortDesc = book.heShortDesc,
                 orderIndex = book.order.toLong(),
-                bookType = book.bookType.name,
                 totalLines = book.totalLines.toLong()
             )
             logger.d{"Used insertWithId for book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}"}
@@ -506,7 +505,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 title = book.title,
                 heShortDesc = book.heShortDesc,
                 orderIndex = book.order.toLong(),
-                bookType = book.bookType.name,
                 totalLines = book.totalLines.toLong()
             )
             val id = database.bookQueriesQueries.lastInsertRowId().executeAsOne()

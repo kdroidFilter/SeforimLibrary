@@ -21,12 +21,12 @@ WHERE a.name LIKE ?
 ORDER BY b.orderIndex, b.title;
 
 insert:
-INSERT INTO book (categoryId, title, heShortDesc, orderIndex, bookType, totalLines)
-VALUES (?, ?, ?, ?, ?, ?);
+INSERT INTO book (categoryId, title, heShortDesc, orderIndex, totalLines)
+VALUES (?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO book (id, categoryId, title, heShortDesc, orderIndex, bookType, totalLines)
-VALUES (?, ?, ?, ?, ?, ?, ?);
+INSERT INTO book (id, categoryId, title, heShortDesc, orderIndex, totalLines)
+VALUES (?, ?, ?, ?, ?, ?);
 
 updateTotalLines:
 UPDATE book SET totalLines = ? WHERE id = ?;
