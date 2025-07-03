@@ -182,14 +182,19 @@ class DatabaseGenerator(
             listOf(Author(name = authorName))
         } ?: emptyList()
 
+        // Create publication places list if pubPlace is available in metadata
+        val pubPlaces = meta?.pubPlace?.let { pubPlaceName ->
+            listOf(PubPlace(name = pubPlaceName))
+        } ?: emptyList()
+
         val book = Book(
             id = currentBookId,
             categoryId = categoryId,
             title = title,
             authors = authors,
+            pubPlaces = pubPlaces,
             heShortDesc = meta?.heShortDesc,
             pubDate = meta?.pubDate,
-            pubPlace = meta?.pubPlace,
             order = meta?.order ?: 999f,
             topics = extractTopics(path),
             bookType = if (path.extension == "pdf") BookType.PDF else BookType.TEXT

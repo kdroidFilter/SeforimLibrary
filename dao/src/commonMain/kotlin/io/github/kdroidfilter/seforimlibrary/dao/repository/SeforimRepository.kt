@@ -120,7 +120,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val bookData = database.bookQueriesQueries.selectById(id).executeAsOneOrNull() ?: return@withContext null
         val authors = getBookAuthors(bookData.id)
         val topics = getBookTopics(bookData.id)
-        return@withContext bookData.toModel(json, authors).copy(topics = topics)
+        val pubPlaces = getBookPubPlaces(bookData.id)
+        return@withContext bookData.toModel(json, authors, pubPlaces).copy(topics = topics)
     }
 
     suspend fun getBooksByCategory(categoryId: Long): List<Book> = withContext(Dispatchers.IO) {
@@ -128,7 +129,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         return@withContext books.map { bookData ->
             val authors = getBookAuthors(bookData.id)
             val topics = getBookTopics(bookData.id)
-            bookData.toModel(json, authors).copy(topics = topics)
+            val pubPlaces = getBookPubPlaces(bookData.id)
+            bookData.toModel(json, authors, pubPlaces).copy(topics = topics)
         }
     }
 
@@ -139,7 +141,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         return@withContext books.map { bookData ->
             val authors = getBookAuthors(bookData.id)
             val topics = getBookTopics(bookData.id)
-            bookData.toModel(json, authors).copy(topics = topics)
+            val pubPlaces = getBookPubPlaces(bookData.id)
+            bookData.toModel(json, authors, pubPlaces).copy(topics = topics)
         }
     }
 
@@ -157,6 +160,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val topics = database.topicQueriesQueries.selectByBookId(bookId).executeAsList()
         logger.d{"Found ${topics.size} topics for book ID: $bookId"}
         return@withContext topics.map { Topic(id = it.id, name = it.name) }
+    }
+
+    // Get all publication places for a book
+    private suspend fun getBookPubPlaces(bookId: Long): List<PubPlace> = withContext(Dispatchers.IO) {
+        logger.d{"Getting publication places for book ID: $bookId"}
+        val pubPlaces = database.pubPlaceQueriesQueries.selectByBookId(bookId).executeAsList()
+        logger.d{"Found ${pubPlaces.size} publication places for book ID: $bookId"}
+        return@withContext pubPlaces.map { it.toModel() }
     }
 
     // Get an author by name, returns null if not found
@@ -214,7 +225,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val bookData = database.bookQueriesQueries.selectByTitle(title).executeAsOneOrNull() ?: return@withContext null
         val authors = getBookAuthors(bookData.id)
         val topics = getBookTopics(bookData.id)
-        return@withContext bookData.toModel(json, authors).copy(topics = topics)
+        val pubPlaces = getBookPubPlaces(bookData.id)
+        return@withContext bookData.toModel(json, authors, pubPlaces).copy(topics = topics)
     }
 
     // Get a topic by name, returns null if not found
@@ -227,6 +239,18 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             logger.d{"Topic not found: $name"}
         }
         return@withContext topic?.let { Topic(id = it.id, name = it.name) }
+    }
+
+    // Get a publication place by name, returns null if not found
+    suspend fun getPubPlaceByName(name: String): PubPlace? = withContext(Dispatchers.IO) {
+        logger.d{"Looking for publication place with name: $name"}
+        val pubPlace = database.pubPlaceQueriesQueries.selectByName(name).executeAsOneOrNull()
+        if (pubPlace != null) {
+            logger.d{"Found publication place with ID: ${pubPlace.id}"}
+        } else {
+            logger.d{"Publication place not found: $name"}
+        }
+        return@withContext pubPlace?.toModel()
     }
 
     // Insert a topic and return its ID
@@ -268,6 +292,45 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         logger.d{"Linked topic $topicId to book $bookId"}
     }
 
+    // Insert a publication place and return its ID
+    suspend fun insertPubPlace(name: String): Long = withContext(Dispatchers.IO) {
+        logger.d{"Inserting publication place: $name"}
+
+        // Check if publication place already exists
+        val existingPubPlace = database.pubPlaceQueriesQueries.selectByName(name).executeAsOneOrNull()
+        if (existingPubPlace != null) {
+            logger.d{"Publication place already exists with ID: ${existingPubPlace.id}"}
+            return@withContext existingPubPlace.id
+        }
+
+        // Insert the publication place
+        database.pubPlaceQueriesQueries.insert(name)
+
+        // Get the ID of the inserted publication place
+        val pubPlaceId = database.pubPlaceQueriesQueries.lastInsertRowId().executeAsOne()
+
+        // If lastInsertRowId returns 0, try to get the ID by name
+        if (pubPlaceId == 0L) {
+            logger.w{"lastInsertRowId() returned 0 for publication place insertion, trying to get ID by name"}
+            val insertedPubPlace = database.pubPlaceQueriesQueries.selectByName(name).executeAsOneOrNull()
+            if (insertedPubPlace != null) {
+                logger.d{"Found publication place after insertion with ID: ${insertedPubPlace.id}"}
+                return@withContext insertedPubPlace.id
+            }
+            throw RuntimeException("Failed to insert publication place '$name'")
+        }
+
+        logger.d{"Publication place inserted with ID: $pubPlaceId"}
+        return@withContext pubPlaceId
+    }
+
+    // Link a publication place to a book
+    suspend fun linkPubPlaceToBook(pubPlaceId: Long, bookId: Long) = withContext(Dispatchers.IO) {
+        logger.d{"Linking publication place $pubPlaceId to book $bookId"}
+        database.pubPlaceQueriesQueries.linkBookPubPlace(bookId, pubPlaceId)
+        logger.d{"Linked publication place $pubPlaceId to book $bookId"}
+    }
+
     suspend fun insertBook(book: Book): Long = withContext(Dispatchers.IO) {
         logger.d{"Repository inserting book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}"}
 
@@ -279,7 +342,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 title = book.title,
                 heShortDesc = book.heShortDesc,
                 pubDate = book.pubDate,
-                pubPlace = book.pubPlace,
                 orderIndex = book.order.toLong(),
                 bookType = book.bookType.name,
                 totalLines = book.totalLines.toLong()
@@ -309,6 +371,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 logger.d{"Processed topic '${topic.name}' (ID: $topicId) for book '${book.title}' (ID: ${book.id})"}
             }
 
+            // Process publication places
+            for (pubPlace in book.pubPlaces) {
+                val pubPlaceId = insertPubPlace(pubPlace.name)
+                linkPubPlaceToBook(pubPlaceId, book.id)
+                logger.d{"Processed publication place '${pubPlace.name}' (ID: $pubPlaceId) for book '${book.title}' (ID: ${book.id})"}
+            }
+
             return@withContext book.id
         } else {
             // Fall back to auto-generated ID if book.id is 0
@@ -317,7 +386,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 title = book.title,
                 heShortDesc = book.heShortDesc,
                 pubDate = book.pubDate,
-                pubPlace = book.pubPlace,
                 orderIndex = book.order.toLong(),
                 bookType = book.bookType.name,
                 totalLines = book.totalLines.toLong()
@@ -337,6 +405,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 val topicId = insertTopic(topic.name)
                 linkTopicToBook(topicId, id)
                 logger.d{"Processed topic '${topic.name}' (ID: $topicId) for book '${book.title}' (ID: $id)"}
+            }
+
+            // Process publication places
+            for (pubPlace in book.pubPlaces) {
+                val pubPlaceId = insertPubPlace(pubPlace.name)
+                linkPubPlaceToBook(pubPlaceId, id)
+                logger.d{"Processed publication place '${pubPlace.name}' (ID: $pubPlaceId) for book '${book.title}' (ID: $id)"}
             }
 
             return@withContext id
