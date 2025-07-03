@@ -1,26 +1,44 @@
 -- Requêtes pour la table des matières
 
 selectByBookId:
-SELECT * FROM tocEntry WHERE bookId = ? ORDER BY orderIndex;
+SELECT t.*, tt.text
+FROM tocEntry t
+JOIN tocText tt ON t.textId = tt.id
+WHERE t.bookId = ? 
+ORDER BY t.orderIndex;
 
 selectById:
-SELECT * FROM tocEntry WHERE id = ?;
+SELECT t.*, tt.text
+FROM tocEntry t
+JOIN tocText tt ON t.textId = tt.id
+WHERE t.id = ?;
 
 selectRootByBookId:
-SELECT * FROM tocEntry WHERE bookId = ? AND parentId IS NULL ORDER BY orderIndex;
+SELECT t.*, tt.text
+FROM tocEntry t
+JOIN tocText tt ON t.textId = tt.id
+WHERE t.bookId = ? AND t.parentId IS NULL 
+ORDER BY t.orderIndex;
 
 selectChildren:
-SELECT * FROM tocEntry WHERE parentId = ? ORDER BY orderIndex;
+SELECT t.*, tt.text
+FROM tocEntry t
+JOIN tocText tt ON t.textId = tt.id
+WHERE t.parentId = ? 
+ORDER BY t.orderIndex;
 
 selectByLineId:
-SELECT * FROM tocEntry WHERE lineId = ?;
+SELECT t.*, tt.text
+FROM tocEntry t
+JOIN tocText tt ON t.textId = tt.id
+WHERE t.lineId = ?;
 
 insert:
-INSERT INTO tocEntry (bookId, parentId, text, level, lineId, lineIndex, orderIndex, path)
+INSERT INTO tocEntry (bookId, parentId, textId, level, lineId, lineIndex, orderIndex, path)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO tocEntry (id, bookId, parentId, text, level, lineId, lineIndex, orderIndex, path)
+INSERT INTO tocEntry (id, bookId, parentId, textId, level, lineId, lineIndex, orderIndex, path)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateLineId:

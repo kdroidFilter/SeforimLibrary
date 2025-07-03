@@ -1,0 +1,31 @@
+-- Requêtes pour les textes de la table des matières
+
+selectAll:
+SELECT * FROM tocText ORDER BY text;
+
+selectById:
+SELECT * FROM tocText WHERE id = ?;
+
+selectByText:
+SELECT * FROM tocText WHERE text = ? LIMIT 1;
+
+insert:
+INSERT INTO tocText (text)
+VALUES (?)
+ON CONFLICT (text) DO NOTHING;
+
+insertAndGetId:
+INSERT OR IGNORE INTO tocText (text)
+VALUES (?);
+
+selectIdByText:
+SELECT id FROM tocText WHERE text = ? LIMIT 1;
+
+delete:
+DELETE FROM tocText WHERE id = ?;
+
+countAll:
+SELECT COUNT(*) FROM tocText;
+
+lastInsertRowId:
+SELECT last_insert_rowid();

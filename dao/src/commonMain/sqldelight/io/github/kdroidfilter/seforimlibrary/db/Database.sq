@@ -63,12 +63,20 @@ CREATE TABLE IF NOT EXISTS line (
 CREATE INDEX idx_line_book_index ON line(bookId, lineIndex);
 CREATE INDEX idx_line_toc ON line(tocEntryId);
 
+-- Table des textes TOC
+CREATE TABLE IF NOT EXISTS tocText (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL UNIQUE
+);
+
+CREATE INDEX idx_toc_text ON tocText(text);
+
 -- Table des entrées TOC
 CREATE TABLE IF NOT EXISTS tocEntry (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bookId INTEGER NOT NULL,
     parentId INTEGER,
-    text TEXT NOT NULL,
+    textId INTEGER NOT NULL,
     level INTEGER NOT NULL,
     lineId INTEGER,
     lineIndex INTEGER NOT NULL,
@@ -76,11 +84,13 @@ CREATE TABLE IF NOT EXISTS tocEntry (
     path TEXT NOT NULL,
     FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
     FOREIGN KEY (parentId) REFERENCES tocEntry(id) ON DELETE CASCADE,
+    FOREIGN KEY (textId) REFERENCES tocText(id) ON DELETE CASCADE,
     FOREIGN KEY (lineId) REFERENCES line(id) ON DELETE SET NULL
 );
 
 CREATE INDEX idx_toc_book ON tocEntry(bookId);
 CREATE INDEX idx_toc_parent ON tocEntry(parentId);
+CREATE INDEX idx_toc_text_id ON tocEntry(textId);
 CREATE INDEX idx_toc_line ON tocEntry(lineId);
 
 -- Table des liens

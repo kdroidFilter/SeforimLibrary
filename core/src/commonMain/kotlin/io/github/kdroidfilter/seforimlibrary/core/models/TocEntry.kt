@@ -10,7 +10,8 @@ data class TocEntry(
     val id: Long = 0,
     val bookId: Long,
     val parentId: Long? = null,
-    val text: String,
+    val textId: Long? = null,
+    val text: String = "", // Pour la compatibilité avec le code existant
     val level: Int,
     val lineId: Long? = null,
     val lineIndex: Int,

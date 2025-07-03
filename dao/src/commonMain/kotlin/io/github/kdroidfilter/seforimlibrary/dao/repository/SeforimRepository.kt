@@ -352,8 +352,46 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         database.tocQueriesQueries.selectChildren(parentId).executeAsList().map { it.toModel() }
     }
 
+    // --- TocText methods ---
+
+    // Get or create a tocText entry and return its ID
+    private suspend fun getOrCreateTocText(text: String): Long = withContext(Dispatchers.IO) {
+        logger.d{"Getting or creating tocText entry for text: $text"}
+
+        // Check if the text already exists
+        val existingId = database.tocTextQueriesQueries.selectIdByText(text).executeAsOneOrNull()
+        if (existingId != null) {
+            logger.d{"Found existing tocText entry with ID: $existingId"}
+            return@withContext existingId
+        }
+
+        // Insert the text
+        database.tocTextQueriesQueries.insertAndGetId(text)
+
+        // Get the ID of the inserted text
+        val textId = database.tocTextQueriesQueries.lastInsertRowId().executeAsOne()
+
+        // If lastInsertRowId returns 0, try to get the ID by text
+        if (textId == 0L) {
+            logger.w{"lastInsertRowId() returned 0 for tocText insertion, trying to get ID by text"}
+            val insertedId = database.tocTextQueriesQueries.selectIdByText(text).executeAsOneOrNull()
+            if (insertedId != null) {
+                logger.d{"Found tocText after insertion with ID: $insertedId"}
+                return@withContext insertedId
+            }
+            throw RuntimeException("Failed to insert tocText '$text'")
+        }
+
+        logger.d{"Created new tocText entry with ID: $textId"}
+        return@withContext textId
+    }
+
     suspend fun insertTocEntry(entry: TocEntry): Long = withContext(Dispatchers.IO) {
         logger.d{"Repository inserting TOC entry with bookId: ${entry.bookId}, lineId: ${entry.lineId}"}
+
+        // Get or create the tocText entry
+        val textId = entry.textId ?: getOrCreateTocText(entry.text)
+        logger.d{"Using tocText ID: $textId for text: ${entry.text}"}
 
         // Use the ID from the entry object if it's greater than 0
         if (entry.id > 0) {
@@ -361,7 +399,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 id = entry.id,
                 bookId = entry.bookId,
                 parentId = entry.parentId,
-                text = entry.text,
+                textId = textId,
                 level = entry.level.toLong(),
                 lineId = entry.lineId,
                 lineIndex = entry.lineIndex.toLong(),
@@ -375,7 +413,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             database.tocQueriesQueries.insert(
                 bookId = entry.bookId,
                 parentId = entry.parentId,
-                text = entry.text,
+                textId = textId,
                 level = entry.level.toLong(),
                 lineId = entry.lineId,
                 lineIndex = entry.lineIndex.toLong(),

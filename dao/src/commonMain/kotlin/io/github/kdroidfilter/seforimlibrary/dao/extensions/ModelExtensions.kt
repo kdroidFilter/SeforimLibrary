@@ -63,12 +63,61 @@ fun io.github.kdroidfilter.seforimlibrary.db.Line.toModel(): Line {
     )
 }
 
-fun io.github.kdroidfilter.seforimlibrary.db.TocEntry.toModel(): TocEntry {
-    logger.d{"Converting database TocEntry to model with id: $id, bookId: $bookId, lineId: $lineId"}
+fun io.github.kdroidfilter.seforimlibrary.db.SelectById.toModel(): TocEntry {
+    logger.d{"Converting database TocEntry (from SelectById) with id: $id, bookId: $bookId, lineId: $lineId"}
     return TocEntry(
         id = id,
         bookId = bookId,
         parentId = parentId,
+        textId = textId,
+        text = text,
+        level = level.toInt(),
+        lineId = lineId,
+        lineIndex = lineIndex.toInt(),
+        order = orderIndex.toInt(),
+        path = path
+    )
+}
+
+fun io.github.kdroidfilter.seforimlibrary.db.SelectByBookId.toModel(): TocEntry {
+    logger.d{"Converting database TocEntry (from SelectByBookId) with id: $id, bookId: $bookId, lineId: $lineId"}
+    return TocEntry(
+        id = id,
+        bookId = bookId,
+        parentId = parentId,
+        textId = textId,
+        text = text,
+        level = level.toInt(),
+        lineId = lineId,
+        lineIndex = lineIndex.toInt(),
+        order = orderIndex.toInt(),
+        path = path
+    )
+}
+
+fun io.github.kdroidfilter.seforimlibrary.db.SelectRootByBookId.toModel(): TocEntry {
+    logger.d{"Converting database TocEntry (from SelectRootByBookId) with id: $id, bookId: $bookId, lineId: $lineId"}
+    return TocEntry(
+        id = id,
+        bookId = bookId,
+        parentId = parentId,
+        textId = textId,
+        text = text,
+        level = level.toInt(),
+        lineId = lineId,
+        lineIndex = lineIndex.toInt(),
+        order = orderIndex.toInt(),
+        path = path
+    )
+}
+
+fun io.github.kdroidfilter.seforimlibrary.db.SelectChildren.toModel(): TocEntry {
+    logger.d{"Converting database TocEntry (from SelectChildren) with id: $id, bookId: $bookId, lineId: $lineId"}
+    return TocEntry(
+        id = id,
+        bookId = bookId,
+        parentId = parentId,
+        textId = textId,
         text = text,
         level = level.toInt(),
         lineId = lineId,
