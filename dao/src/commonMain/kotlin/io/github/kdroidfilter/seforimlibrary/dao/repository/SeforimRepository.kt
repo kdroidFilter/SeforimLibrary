@@ -119,14 +119,16 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     suspend fun getBook(id: Long): Book? = withContext(Dispatchers.IO) {
         val bookData = database.bookQueriesQueries.selectById(id).executeAsOneOrNull() ?: return@withContext null
         val authors = getBookAuthors(bookData.id)
-        return@withContext bookData.toModel(json, authors)
+        val topics = getBookTopics(bookData.id)
+        return@withContext bookData.toModel(json, authors).copy(topics = topics)
     }
 
     suspend fun getBooksByCategory(categoryId: Long): List<Book> = withContext(Dispatchers.IO) {
         val books = database.bookQueriesQueries.selectByCategoryId(categoryId).executeAsList()
         return@withContext books.map { bookData ->
             val authors = getBookAuthors(bookData.id)
-            bookData.toModel(json, authors)
+            val topics = getBookTopics(bookData.id)
+            bookData.toModel(json, authors).copy(topics = topics)
         }
     }
 
@@ -136,7 +138,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val books = database.bookQueriesQueries.selectByAuthor("%$authorName%").executeAsList()
         return@withContext books.map { bookData ->
             val authors = getBookAuthors(bookData.id)
-            bookData.toModel(json, authors)
+            val topics = getBookTopics(bookData.id)
+            bookData.toModel(json, authors).copy(topics = topics)
         }
     }
 
@@ -146,6 +149,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val authors = database.authorQueriesQueries.selectByBookId(bookId).executeAsList()
         logger.d{"Found ${authors.size} authors for book ID: $bookId"}
         return@withContext authors.map { it.toModel() }
+    }
+
+    // Get all topics for a book
+    private suspend fun getBookTopics(bookId: Long): List<Topic> = withContext(Dispatchers.IO) {
+        logger.d{"Getting topics for book ID: $bookId"}
+        val topics = database.topicQueriesQueries.selectByBookId(bookId).executeAsList()
+        logger.d{"Found ${topics.size} topics for book ID: $bookId"}
+        return@withContext topics.map { Topic(id = it.id, name = it.name) }
     }
 
     // Get an author by name, returns null if not found
@@ -202,7 +213,59 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     suspend fun getBookByTitle(title: String): Book? = withContext(Dispatchers.IO) {
         val bookData = database.bookQueriesQueries.selectByTitle(title).executeAsOneOrNull() ?: return@withContext null
         val authors = getBookAuthors(bookData.id)
-        return@withContext bookData.toModel(json, authors)
+        val topics = getBookTopics(bookData.id)
+        return@withContext bookData.toModel(json, authors).copy(topics = topics)
+    }
+
+    // Get a topic by name, returns null if not found
+    suspend fun getTopicByName(name: String): Topic? = withContext(Dispatchers.IO) {
+        logger.d{"Looking for topic with name: $name"}
+        val topic = database.topicQueriesQueries.selectByName(name).executeAsOneOrNull()
+        if (topic != null) {
+            logger.d{"Found topic with ID: ${topic.id}"}
+        } else {
+            logger.d{"Topic not found: $name"}
+        }
+        return@withContext topic?.let { Topic(id = it.id, name = it.name) }
+    }
+
+    // Insert a topic and return its ID
+    suspend fun insertTopic(name: String): Long = withContext(Dispatchers.IO) {
+        logger.d{"Inserting topic: $name"}
+
+        // Check if topic already exists
+        val existingTopic = database.topicQueriesQueries.selectByName(name).executeAsOneOrNull()
+        if (existingTopic != null) {
+            logger.d{"Topic already exists with ID: ${existingTopic.id}"}
+            return@withContext existingTopic.id
+        }
+
+        // Insert the topic
+        database.topicQueriesQueries.insert(name)
+
+        // Get the ID of the inserted topic
+        val topicId = database.topicQueriesQueries.lastInsertRowId().executeAsOne()
+
+        // If lastInsertRowId returns 0, try to get the ID by name
+        if (topicId == 0L) {
+            logger.w{"lastInsertRowId() returned 0 for topic insertion, trying to get ID by name"}
+            val insertedTopic = database.topicQueriesQueries.selectByName(name).executeAsOneOrNull()
+            if (insertedTopic != null) {
+                logger.d{"Found topic after insertion with ID: ${insertedTopic.id}"}
+                return@withContext insertedTopic.id
+            }
+            throw RuntimeException("Failed to insert topic '$name'")
+        }
+
+        logger.d{"Topic inserted with ID: $topicId"}
+        return@withContext topicId
+    }
+
+    // Link a topic to a book
+    suspend fun linkTopicToBook(topicId: Long, bookId: Long) = withContext(Dispatchers.IO) {
+        logger.d{"Linking topic $topicId to book $bookId"}
+        database.topicQueriesQueries.linkBookTopic(bookId, topicId)
+        logger.d{"Linked topic $topicId to book $bookId"}
     }
 
     suspend fun insertBook(book: Book): Long = withContext(Dispatchers.IO) {
@@ -218,7 +281,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 pubDate = book.pubDate,
                 pubPlace = book.pubPlace,
                 orderIndex = book.order.toLong(),
-                topics = book.topics,
                 bookType = book.bookType.name,
                 totalLines = book.totalLines.toLong()
             )
@@ -240,6 +302,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 logger.d{"Processed author '${author.name}' (ID: $authorId) for book '${book.title}' (ID: ${book.id})"}
             }
 
+            // Process topics
+            for (topic in book.topics) {
+                val topicId = insertTopic(topic.name)
+                linkTopicToBook(topicId, book.id)
+                logger.d{"Processed topic '${topic.name}' (ID: $topicId) for book '${book.title}' (ID: ${book.id})"}
+            }
+
             return@withContext book.id
         } else {
             // Fall back to auto-generated ID if book.id is 0
@@ -250,7 +319,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 pubDate = book.pubDate,
                 pubPlace = book.pubPlace,
                 orderIndex = book.order.toLong(),
-                topics = book.topics,
                 bookType = book.bookType.name,
                 totalLines = book.totalLines.toLong()
             )
@@ -262,6 +330,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 val authorId = insertAuthor(author.name)
                 linkAuthorToBook(authorId, id)
                 logger.d{"Processed author '${author.name}' (ID: $authorId) for book '${book.title}' (ID: $id)"}
+            }
+
+            // Process topics
+            for (topic in book.topics) {
+                val topicId = insertTopic(topic.name)
+                linkTopicToBook(topicId, id)
+                logger.d{"Processed topic '${topic.name}' (ID: $topicId) for book '${book.title}' (ID: $id)"}
             }
 
             return@withContext id

@@ -10,6 +10,7 @@ import io.github.kdroidfilter.seforimlibrary.core.models.Line
 import io.github.kdroidfilter.seforimlibrary.core.models.Link
 import io.github.kdroidfilter.seforimlibrary.core.models.SearchResult
 import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
+import io.github.kdroidfilter.seforimlibrary.core.models.Topic
 import io.github.kdroidfilter.seforimlibrary.db.SearchAll
 import io.github.kdroidfilter.seforimlibrary.db.SearchByAuthor
 import io.github.kdroidfilter.seforimlibrary.db.SearchInBook
@@ -33,11 +34,11 @@ fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json, authors: L
         categoryId = categoryId,
         title = title,
         authors = authors,
+        topics = emptyList(),
         heShortDesc = heShortDesc,
         pubDate = pubDate,
         pubPlace = pubPlace,
         order = orderIndex.toFloat(),
-        topics = topics,
         bookType = io.github.kdroidfilter.seforimlibrary.core.models.BookType.valueOf(bookType),
         totalLines = totalLines.toInt()
     )

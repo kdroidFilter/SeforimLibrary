@@ -487,10 +487,14 @@ class DatabaseGenerator(
         }
     }
 
-    private fun extractTopics(path: Path): String {
+    private fun extractTopics(path: Path): List<Topic> {
         // Extraire les topics du chemin
         val parts = path.toString().split(File.separator)
-        return parts.dropLast(1).takeLast(2).joinToString(", ")
+        val topicNames = parts.dropLast(1).takeLast(2)
+
+        return topicNames.map { name ->
+            Topic(name = name)
+        }
     }
 
     private fun extractDocxText(path: Path): String {

@@ -17,6 +17,14 @@ CREATE TABLE IF NOT EXISTS author (
 
 CREATE INDEX idx_author_name ON author(name);
 
+-- Table des topics
+CREATE TABLE IF NOT EXISTS topic (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE INDEX idx_topic_name ON topic(name);
+
 -- Table des livres
 CREATE TABLE IF NOT EXISTS book (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,7 +34,6 @@ CREATE TABLE IF NOT EXISTS book (
     pubDate TEXT,
     pubPlace TEXT,
     orderIndex INTEGER NOT NULL DEFAULT 999,
-    topics TEXT NOT NULL DEFAULT '',
     bookType TEXT NOT NULL,
     totalLines INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (categoryId) REFERENCES category(id) ON DELETE CASCADE
@@ -35,6 +42,18 @@ CREATE TABLE IF NOT EXISTS book (
 CREATE INDEX idx_book_category ON book(categoryId);
 CREATE INDEX idx_book_title ON book(title);
 CREATE INDEX idx_book_order ON book(orderIndex);
+
+-- Table de jonction livre-topic
+CREATE TABLE IF NOT EXISTS book_topic (
+    bookId INTEGER NOT NULL,
+    topicId INTEGER NOT NULL,
+    PRIMARY KEY (bookId, topicId),
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
+    FOREIGN KEY (topicId) REFERENCES topic(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_book_topic_book ON book_topic(bookId);
+CREATE INDEX idx_book_topic_topic ON book_topic(topicId);
 
 -- Table de jonction livre-auteur
 CREATE TABLE IF NOT EXISTS book_author (

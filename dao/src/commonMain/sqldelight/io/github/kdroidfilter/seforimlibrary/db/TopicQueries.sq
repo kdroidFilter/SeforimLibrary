@@ -1,0 +1,53 @@
+-- Requêtes pour les topics
+
+selectAll:
+SELECT * FROM topic ORDER BY name;
+
+selectById:
+SELECT * FROM topic WHERE id = ?;
+
+selectByName:
+SELECT * FROM topic WHERE name = ? LIMIT 1;
+
+selectByBookId:
+SELECT t.* FROM topic t
+JOIN book_topic bt ON t.id = bt.topicId
+WHERE bt.bookId = ?
+ORDER BY t.name;
+
+insert:
+INSERT INTO topic (name)
+VALUES (?)
+ON CONFLICT (name) DO NOTHING;
+
+insertAndGetId:
+INSERT OR IGNORE INTO topic (name)
+VALUES (?);
+
+selectIdByName:
+SELECT id FROM topic WHERE name = ? LIMIT 1;
+
+delete:
+DELETE FROM topic WHERE id = ?;
+
+countAll:
+SELECT COUNT(*) FROM topic;
+
+lastInsertRowId:
+SELECT last_insert_rowid();
+
+-- Requêtes pour la table de jonction book_topic
+
+linkBookTopic:
+INSERT INTO book_topic (bookId, topicId)
+VALUES (?, ?)
+ON CONFLICT (bookId, topicId) DO NOTHING;
+
+unlinkBookTopic:
+DELETE FROM book_topic WHERE bookId = ? AND topicId = ?;
+
+deleteAllBookTopics:
+DELETE FROM book_topic WHERE bookId = ?;
+
+countBookTopics:
+SELECT COUNT(*) FROM book_topic WHERE bookId = ?;
