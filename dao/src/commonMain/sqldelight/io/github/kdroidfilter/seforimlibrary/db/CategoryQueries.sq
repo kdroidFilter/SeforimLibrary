@@ -30,5 +30,8 @@ WHERE id = ?;
 delete:
 DELETE FROM category WHERE id = ?;
 
+countAll:
+SELECT COUNT(*) FROM category;
+
 lastInsertRowId:
 SELECT last_insert_rowid();

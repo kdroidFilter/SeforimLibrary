@@ -36,6 +36,7 @@ class DatabaseGenerator(
     private var nextLineId = 1L // Counter for line IDs
     private var nextTocEntryId = 1L // Counter for TOC entry IDs
 
+
     suspend fun generate(): Unit = coroutineScope {
         logger.i { "Démarrage de la génération de la base de données..." }
         logger.i { "Répertoire source: $sourceDirectory" }
@@ -51,6 +52,7 @@ class DatabaseGenerator(
                 throw IllegalStateException("Le répertoire אוצריא n'existe pas dans $sourceDirectory")
             }
 
+            logger.i { "🚀 Starting to process library directory: $libraryPath" }
             processDirectory(libraryPath, null, 0, metadata)
 
             // Traiter les liens
@@ -88,34 +90,47 @@ class DatabaseGenerator(
         }
     }
 
+
     private suspend fun processDirectory(
         directory: Path,
         parentCategoryId: Long?,
         level: Int,
         metadata: Map<String, BookMetadata>
     ) {
+        logger.i { "=== Processing directory: ${directory.fileName} with parentCategoryId: $parentCategoryId (level: $level) ===" }
+
         Files.list(directory).use { stream ->
             val entries = stream.sorted { a, b ->
                 a.fileName.toString().compareTo(b.fileName.toString())
             }.toList()
 
+            logger.d { "Found ${entries.size} entries in directory ${directory.fileName}" }
+
             for (entry in entries) {
                 when {
                     Files.isDirectory(entry) -> {
+                        logger.d { "Processing subdirectory: ${entry.fileName} with parentId: $parentCategoryId" }
                         val categoryId = createCategory(entry, parentCategoryId, level)
+                        logger.i { "✅ Created category '${entry.fileName}' with ID: $categoryId (parent: $parentCategoryId)" }
                         processDirectory(entry, categoryId, level + 1, metadata)
                     }
 
                     Files.isRegularFile(entry) && entry.extension in listOf("txt", "docx", "pdf") -> {
                         if (parentCategoryId == null) {
-                            logger.w { "Livre trouvé sans catégorie: $entry" }
+                            logger.w { "❌ Livre trouvé sans catégorie: $entry" }
                             continue
                         }
+                        logger.i { "📚 Processing book ${entry.fileName} with categoryId: $parentCategoryId" }
                         createAndProcessBook(entry, parentCategoryId, metadata)
+                    }
+
+                    else -> {
+                        logger.d { "Skipping entry: ${entry.fileName} (not a supported file type)" }
                     }
                 }
             }
         }
+        logger.i { "=== Finished processing directory: ${directory.fileName} ===" }
     }
 
     private suspend fun createCategory(
@@ -124,7 +139,7 @@ class DatabaseGenerator(
         level: Int
     ): Long {
         val title = path.fileName.toString()
-        logger.i { "Création de la catégorie: $title (niveau $level)" }
+        logger.i { "🏗️ Création de la catégorie: '$title' (niveau $level, parent: $parentId)" }
 
         val category = Category(
             parentId = parentId,
@@ -134,8 +149,20 @@ class DatabaseGenerator(
             createdAt = System.currentTimeMillis()
         )
 
-        return repository.insertCategory(category)
+        val insertedId = repository.insertCategory(category)
+        logger.i { "✅ Catégorie '$title' créée avec ID: $insertedId" }
+
+        // Vérification supplémentaire
+        val insertedCategory = repository.getCategory(insertedId)
+        if (insertedCategory == null) {
+            logger.e { "❌ ERREUR: Impossible de récupérer la catégorie qui vient d'être insérée (ID: $insertedId)" }
+        } else {
+            logger.d { "✅ Vérification: catégorie récupérée avec ID: ${insertedCategory.id}, parent: ${insertedCategory.parentId}" }
+        }
+
+        return insertedId
     }
+
 
     private suspend fun createAndProcessBook(
         path: Path,
@@ -146,14 +173,14 @@ class DatabaseGenerator(
         val title = filename.substringBeforeLast('.')
         val meta = metadata[title]
 
-        logger.i { "Traitement du livre: $title" }
+        logger.i { "Traitement du livre: $title avec categoryId: $categoryId" }
 
         // Assign a unique ID to this book
         val currentBookId = nextBookId++
-        logger.d { "Assigning ID $currentBookId to book '$title'" }
+        logger.d { "Assigning ID $currentBookId to book '$title' with categoryId: $categoryId" }
 
         val book = Book(
-            id = currentBookId, // Set the ID explicitly
+            id = currentBookId,
             categoryId = categoryId,
             title = title,
             extraTitles = meta?.extraTitles ?: emptyList(),
@@ -169,14 +196,21 @@ class DatabaseGenerator(
         )
 
         logger.d { "Inserting book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}" }
-        val bookId = repository.insertBook(book)
-        logger.d { "Book '${book.title}' inserted with ID: $bookId" }
-        logger.i { "Livre créé avec ID: $bookId (ID généré par la base de données)" }
+        val insertedBookId = repository.insertBook(book)
+
+        // ✅ Vérification importante : s'assurer que l'ID et categoryId sont corrects
+        val insertedBook = repository.getBook(insertedBookId)
+        if (insertedBook?.categoryId != categoryId) {
+            logger.w { "ATTENTION: Book inserted with wrong categoryId! Expected: $categoryId, Got: ${insertedBook?.categoryId}" }
+            // Corriger le categoryId si nécessaire
+            repository.updateBookCategoryId(insertedBookId, categoryId)
+        }
+
+        logger.d { "Book '${book.title}' inserted with ID: $insertedBookId and categoryId: $categoryId" }
 
         // Traiter le contenu pour les livres texte
         if (book.bookType == BookType.TEXT) {
-            // Use the ID returned by the database, which might be different from currentBookId
-            processBookContent(path, bookId)
+            processBookContent(path, insertedBookId)
         }
     }
 

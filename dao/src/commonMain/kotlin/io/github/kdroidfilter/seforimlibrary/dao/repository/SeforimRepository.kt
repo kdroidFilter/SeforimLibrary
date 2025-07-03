@@ -51,18 +51,66 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         database.categoryQueriesQueries.selectByParentId(parentId).executeAsList().map { it.toModel() }
     }
 
+
+
     suspend fun insertCategory(category: Category): Long = withContext(Dispatchers.IO) {
-        database.categoryQueriesQueries.insert(
-            parentId = category.parentId,
-            title = category.title,
-            description = category.description,
-            shortDescription = category.shortDescription,
-            orderIndex = category.order.toLong(),
-            path = category.path,
-            level = category.level.toLong(),
-            createdAt = category.createdAt
-        )
-        database.categoryQueriesQueries.lastInsertRowId().executeAsOne()
+        logger.d { "🔧 Repository: Attempting to insert category '${category.title}'" }
+        logger.d { "🔧 Category details: parentId=${category.parentId}, path='${category.path}', level=${category.level}" }
+
+        try {
+            // Vérifier s'il y a déjà une catégorie avec ce path
+            val existingCategory = database.categoryQueriesQueries.selectByPath(category.path).executeAsOneOrNull()
+            if (existingCategory != null) {
+                logger.w { "⚠️ Category with path '${category.path}' already exists with ID: ${existingCategory.id}" }
+                return@withContext existingCategory.id
+            }
+
+            // Essayer l'insertion
+            database.categoryQueriesQueries.insert(
+                parentId = category.parentId,
+                title = category.title,
+                description = category.description,
+                shortDescription = category.shortDescription,
+                orderIndex = category.order.toLong(),
+                path = category.path,
+                level = category.level.toLong(),
+                createdAt = category.createdAt
+            )
+
+            val insertedId = database.categoryQueriesQueries.lastInsertRowId().executeAsOne()
+            logger.d { "✅ Repository: Category inserted with ID: $insertedId" }
+
+            if (insertedId == 0L) {
+                logger.e { "❌ Repository: lastInsertRowId() returned 0! This indicates insertion failed." }
+
+                // Diagnostiquer le problème
+                val categoryCount = database.categoryQueriesQueries.countAll().executeAsOne()
+                logger.d { "📊 Total categories in database: $categoryCount" }
+
+                // Vérifier si la catégorie existe maintenant (peut-être un conflit résolu)
+                val retryCategory = database.categoryQueriesQueries.selectByPath(category.path).executeAsOneOrNull()
+                if (retryCategory != null) {
+                    logger.w { "🔄 Category found after failed insertion, returning existing ID: ${retryCategory.id}" }
+                    return@withContext retryCategory.id
+                }
+
+                throw RuntimeException("Failed to insert category '${category.title}' - insertion returned ID 0")
+            }
+
+            return@withContext insertedId
+
+        } catch (e: Exception) {
+            logger.e(e) { "❌ Repository: Error inserting category '${category.title}': ${e.message}" }
+
+            // En cas d'erreur, vérifier si la catégorie existe quand même
+            val existingCategory = database.categoryQueriesQueries.selectByPath(category.path).executeAsOneOrNull()
+            if (existingCategory != null) {
+                logger.w { "🔄 Category exists after error, returning existing ID: ${existingCategory.id}" }
+                return@withContext existingCategory.id
+            }
+
+            throw e
+        }
     }
 
     // --- Books ---
@@ -88,7 +136,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     suspend fun insertBook(book: Book): Long = withContext(Dispatchers.IO) {
-        logger.d{"Repository inserting book '${book.title}' with ID: ${book.id}"}
+        logger.d{"Repository inserting book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}"}
 
         // Use the ID from the book object if it's greater than 0
         if (book.id > 0) {
@@ -108,7 +156,17 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 totalLines = book.totalLines.toLong(),
                 createdAt = book.createdAt
             )
-            logger.d{"Used insertWithId for book '${book.title}' with ID: ${book.id}"}
+            logger.d{"Used insertWithId for book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}"}
+
+            // ✅ Vérifier que l'insertion s'est bien passée
+            val insertedBook = database.bookQueriesQueries.selectById(book.id).executeAsOneOrNull()
+            if (insertedBook?.categoryId != book.categoryId) {
+                logger.e{"ERROR: Book inserted with wrong categoryId! Expected: ${book.categoryId}, Got: ${insertedBook?.categoryId}"}
+                // Corriger immédiatement
+                database.bookQueriesQueries.updateCategoryId(book.categoryId, book.id)
+                logger.d{"Corrected categoryId for book ID: ${book.id}"}
+            }
+
             return@withContext book.id
         } else {
             // Fall back to auto-generated ID if book.id is 0
@@ -128,7 +186,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 createdAt = book.createdAt
             )
             val id = database.bookQueriesQueries.lastInsertRowId().executeAsOne()
-            logger.d{"Used insert for book '${book.title}', got ID: $id"}
+            logger.d{"Used insert for book '${book.title}', got ID: $id with categoryId: ${book.categoryId}"}
             return@withContext id
         }
     }
