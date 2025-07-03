@@ -10,10 +10,5 @@ data class Category(
     val id: Long = 0,
     val parentId: Long? = null,
     val title: String,
-    val description: String = "",
-    val shortDescription: String = "",
-    val order: Int = 999,
-    val path: String,
-    val level: Int = 0,
-    val createdAt: Long = System.currentTimeMillis()
+    val level: Int = 0
 )

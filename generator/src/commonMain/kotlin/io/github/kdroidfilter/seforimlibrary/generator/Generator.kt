@@ -144,9 +144,7 @@ class DatabaseGenerator(
         val category = Category(
             parentId = parentId,
             title = title,
-            path = path.toString(),
-            level = level,
-            createdAt = System.currentTimeMillis()
+            level = level
         )
 
         val insertedId = repository.insertCategory(category)

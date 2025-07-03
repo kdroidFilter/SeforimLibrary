@@ -1,30 +1,24 @@
 -- Requêtes pour les catégories
 
 selectAll:
-SELECT * FROM category ORDER BY orderIndex, title;
+SELECT * FROM category ORDER BY title;
 
 selectById:
 SELECT * FROM category WHERE id = ?;
 
 selectByParentId:
-SELECT * FROM category WHERE parentId = ? ORDER BY orderIndex, title;
+SELECT * FROM category WHERE parentId = ? ORDER BY title;
 
 selectRoot:
-SELECT * FROM category WHERE parentId IS NULL ORDER BY orderIndex, title;
-
-selectByPath:
-SELECT * FROM category WHERE path = ?;
+SELECT * FROM category WHERE parentId IS NULL ORDER BY title;
 
 insert:
-INSERT INTO category (parentId, title, description, shortDescription, orderIndex, path, level, createdAt)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO category (parentId, title, level)
+VALUES (?, ?, ?);
 
 update:
 UPDATE category SET
-    title = ?,
-    description = ?,
-    shortDescription = ?,
-    orderIndex = ?
+    title = ?
 WHERE id = ?;
 
 delete:

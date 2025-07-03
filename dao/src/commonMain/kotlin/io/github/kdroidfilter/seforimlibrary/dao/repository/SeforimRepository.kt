@@ -55,13 +55,15 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     suspend fun insertCategory(category: Category): Long = withContext(Dispatchers.IO) {
         logger.d { "🔧 Repository: Attempting to insert category '${category.title}'" }
-        logger.d { "🔧 Category details: parentId=${category.parentId}, path='${category.path}', level=${category.level}" }
+        logger.d { "🔧 Category details: parentId=${category.parentId}, level=${category.level}" }
 
         try {
-            // Vérifier s'il y a déjà une catégorie avec ce path
-            val existingCategory = database.categoryQueriesQueries.selectByPath(category.path).executeAsOneOrNull()
+            // Check if a category with the same title already exists
+            val existingCategories = database.categoryQueriesQueries.selectAll().executeAsList()
+            val existingCategory = existingCategories.find { it.title == category.title }
+
             if (existingCategory != null) {
-                logger.w { "⚠️ Category with path '${category.path}' already exists with ID: ${existingCategory.id}" }
+                logger.d { "⚠️ Category with title '${category.title}' already exists with ID: ${existingCategory.id}" }
                 return@withContext existingCategory.id
             }
 
@@ -69,12 +71,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             database.categoryQueriesQueries.insert(
                 parentId = category.parentId,
                 title = category.title,
-                description = category.description,
-                shortDescription = category.shortDescription,
-                orderIndex = category.order.toLong(),
-                path = category.path,
-                level = category.level.toLong(),
-                createdAt = category.createdAt
+                level = category.level.toLong()
             )
 
             val insertedId = database.categoryQueriesQueries.lastInsertRowId().executeAsOne()
@@ -87,11 +84,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 val categoryCount = database.categoryQueriesQueries.countAll().executeAsOne()
                 logger.d { "📊 Total categories in database: $categoryCount" }
 
-                // Vérifier si la catégorie existe maintenant (peut-être un conflit résolu)
-                val retryCategory = database.categoryQueriesQueries.selectByPath(category.path).executeAsOneOrNull()
-                if (retryCategory != null) {
-                    logger.w { "🔄 Category found after failed insertion, returning existing ID: ${retryCategory.id}" }
-                    return@withContext retryCategory.id
+                // Check again if the category was inserted despite lastInsertRowId() returning 0
+                val updatedCategories = database.categoryQueriesQueries.selectAll().executeAsList()
+                val newCategory = updatedCategories.find { it.title == category.title }
+
+                if (newCategory != null) {
+                    logger.d { "🔄 Category found after failed insertion, returning existing ID: ${newCategory.id}" }
+                    return@withContext newCategory.id
                 }
 
                 throw RuntimeException("Failed to insert category '${category.title}' - insertion returned ID 0")
@@ -102,10 +101,12 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         } catch (e: Exception) {
             logger.e(e) { "❌ Repository: Error inserting category '${category.title}': ${e.message}" }
 
-            // En cas d'erreur, vérifier si la catégorie existe quand même
-            val existingCategory = database.categoryQueriesQueries.selectByPath(category.path).executeAsOneOrNull()
+            // In case of error, check if the category exists anyway
+            val categories = database.categoryQueriesQueries.selectAll().executeAsList()
+            val existingCategory = categories.find { it.title == category.title }
+
             if (existingCategory != null) {
-                logger.w { "🔄 Category exists after error, returning existing ID: ${existingCategory.id}" }
+                logger.d { "🔄 Category exists after error, returning existing ID: ${existingCategory.id}" }
                 return@withContext existingCategory.id
             }
 

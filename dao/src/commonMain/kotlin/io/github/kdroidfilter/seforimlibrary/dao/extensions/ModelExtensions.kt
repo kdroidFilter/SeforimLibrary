@@ -43,12 +43,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.Category.toModel(): Category {
         id = id,
         parentId = parentId,
         title = title,
-        description = description,
-        shortDescription = shortDescription,
-        order = orderIndex.toInt(),
-        path = path,
-        level = level.toInt(),
-        createdAt = createdAt
+        level = level.toInt()
     )
 }
 

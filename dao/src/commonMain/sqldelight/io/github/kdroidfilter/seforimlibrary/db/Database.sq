@@ -3,18 +3,11 @@ CREATE TABLE IF NOT EXISTS category (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     parentId INTEGER,
     title TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    shortDescription TEXT NOT NULL DEFAULT '',
-    orderIndex INTEGER NOT NULL DEFAULT 999,
-    path TEXT NOT NULL UNIQUE,
     level INTEGER NOT NULL DEFAULT 0,
-    createdAt INTEGER NOT NULL,
     FOREIGN KEY (parentId) REFERENCES category(id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_category_parent ON category(parentId);
-CREATE INDEX idx_category_order ON category(orderIndex);
-CREATE INDEX idx_category_path ON category(path);
 
 -- Table des livres
 CREATE TABLE IF NOT EXISTS book (
