@@ -10,7 +10,7 @@ selectByCategoryId:
 SELECT * FROM book WHERE categoryId = ? ORDER BY orderIndex, title;
 
 selectByTitle:
-SELECT * FROM book WHERE title = ?;
+SELECT * FROM book WHERE title = ? LIMIT 1;
 
 selectByPath:
 SELECT * FROM book WHERE path = ?;
@@ -40,6 +40,9 @@ SELECT COUNT(*) FROM book;
 
 getMaxId:
 SELECT MAX(id) FROM book;
+
+updateCategoryId:
+UPDATE book SET categoryId = ? WHERE id = ?;
 
 lastInsertRowId:
 SELECT last_insert_rowid();

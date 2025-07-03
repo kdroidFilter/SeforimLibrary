@@ -137,6 +137,12 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         database.bookQueriesQueries.updateTotalLines(totalLines.toLong(), bookId)
     }
 
+    suspend fun updateBookCategoryId(bookId: Long, categoryId: Long) = withContext(Dispatchers.IO) {
+        logger.d{"Updating book $bookId with categoryId: $categoryId"}
+        database.bookQueriesQueries.updateCategoryId(categoryId, bookId)
+        logger.d{"Updated book $bookId with categoryId: $categoryId"}
+    }
+
     // --- Lines ---
 
     suspend fun getLine(id: Long): Line? = withContext(Dispatchers.IO) {
