@@ -18,6 +18,7 @@ kotlin {
             implementation(libs.kermit)
             implementation(project(":core"))
             implementation(project(":dao"))
+            implementation("com.mohamedrejeb.richeditor:richeditor-compose:1.0.0-rc13")
         }
 
 

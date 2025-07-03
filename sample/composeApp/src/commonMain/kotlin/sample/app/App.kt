@@ -283,10 +283,9 @@ fun App() {
                     .padding(8.dp)
             ) {
                 if (selectedBook != null) {
-                    // Book content - 75% of the height
                     Box(
                         modifier = Modifier
-                            .weight(0.75f)
+                            .weight(0.5f)
                             .fillMaxWidth()
                     ) {
                         BookContentView(
@@ -297,15 +296,17 @@ fun App() {
                             selectedLine = selectedLine,
                             onLineSelected = { line ->
                                 selectedLine = line
-                                // We don't need to load commentaries again since they're already loaded for all visible lines
+                                // Load commentaries for this line
+                                coroutineScope.launch {
+                                    bookCommentaries = repository.getCommentariesForLines(listOf(line.id))
+                                }
                             }
                         )
                     }
 
-                    // Line comments - 25% of the height
                     Box(
                         modifier = Modifier
-                            .weight(0.25f)
+                            .weight(0.5f)
                             .fillMaxWidth()
                             .background(Color.LightGray.copy(alpha = 0.05f))
                     ) {

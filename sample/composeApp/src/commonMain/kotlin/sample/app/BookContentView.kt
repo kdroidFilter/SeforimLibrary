@@ -17,6 +17,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mohamedrejeb.richeditor.model.rememberRichTextState
+import com.mohamedrejeb.richeditor.ui.material.RichText
+import com.mohamedrejeb.richeditor.ui.material3.RichTextEditor
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Line
 import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
@@ -87,16 +90,14 @@ fun BookContent(
         ) {
             items(lines) { line ->
                 val isSelected = selectedLine?.id == line.id
-                Text(
-                    text = line.plainText,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onLineSelected(line) }
+                val state = rememberRichTextState()
+                RichText(
+                    state = state,
+                    modifier = Modifier.fillMaxWidth() .clickable { onLineSelected(line) }
                         .background(if (isSelected) Color.LightGray.copy(alpha = 0.3f) else Color.Transparent)
                         .padding(vertical = 4.dp),
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                 )
-                Divider(color = Color.LightGray, thickness = 0.5.dp)
+                state.setHtml(line.content)
             }
         }
     }
