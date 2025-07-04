@@ -121,7 +121,7 @@ fun CategoryItem(
     ) {
         // Simple text indicator instead of icon
         Text(
-            text = if (isExpanded) "▼" else "▶",
+            text = if (isExpanded) "▼" else "◀",
             color = Color.Gray,
             modifier = Modifier.width(24.dp)
         )

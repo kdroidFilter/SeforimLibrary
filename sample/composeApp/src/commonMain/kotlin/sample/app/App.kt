@@ -10,6 +10,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.lightColors
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
@@ -21,6 +22,7 @@ import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentatorInfo
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import kotlinx.coroutines.launch
 import javax.print.attribute.standard.Severity
+import sample.app.BookPopup
 
 @Composable
 expect fun getDatabasePath(): String
@@ -53,12 +55,37 @@ fun App() {
     // State for selected line and its comments
     var selectedLine by remember { mutableStateOf<Line?>(null) }
 
+    // State for popup book display
+    var showBookPopup by remember { mutableStateOf(false) }
+    var popupBook by remember { mutableStateOf<Book?>(null) }
+    var popupBookLines by remember { mutableStateOf<List<Line>>(emptyList()) }
+    var popupBookCommentaries by remember { mutableStateOf<List<CommentaryWithText>>(emptyList()) }
+    var popupCommentators by remember { mutableStateOf<List<CommentatorInfo>>(emptyList()) }
+
     // Load root categories on startup
     LaunchedEffect(repository) {
         rootCategories = repository.getRootCategories()
     }
 
-    MaterialTheme {
+    // Define monochromatic color palette
+    val monochromeColors = lightColors(
+        primary = Color(0xFF333333),
+        primaryVariant = Color(0xFF555555),
+        secondary = Color(0xFF666666),
+        secondaryVariant = Color(0xFF888888),
+        background = Color.White,
+        surface = Color(0xFFF5F5F5),
+        error = Color(0xFF555555),
+        onPrimary = Color.White,
+        onSecondary = Color.White,
+        onBackground = Color(0xFF333333),
+        onSurface = Color(0xFF333333),
+        onError = Color.White
+    )
+
+    MaterialTheme(
+        colors = monochromeColors
+    ) {
         // Main content area - 4 vertical columns
         Row(modifier = Modifier.fillMaxSize()) {
             // First column - Book tree
@@ -66,7 +93,7 @@ fun App() {
                 modifier = Modifier
                     .weight(0.25f)
                     .fillMaxHeight()
-                    .background(Color.LightGray.copy(alpha = 0.2f))
+                    .background(MaterialTheme.colors.surface)
                     .padding(8.dp)
             ) {
                 CategoryBookTree(
@@ -184,7 +211,7 @@ fun App() {
                 modifier = Modifier
                     .weight(0.20f)
                     .fillMaxHeight()
-                    .background(Color.LightGray.copy(alpha = 0.1f))
+                    .background(MaterialTheme.colors.surface.copy(alpha = 0.7f))
                     .padding(8.dp)
             ) {
                 if (selectedBook != null) {
@@ -290,8 +317,6 @@ fun App() {
                         BookContentView(
                             book = selectedBook!!,
                             lines = bookLines,
-                            commentaries = bookCommentaries,
-                            commentators = commentators,
                             selectedLine = selectedLine,
                             onLineSelected = { line ->
                                 selectedLine = line
@@ -307,11 +332,36 @@ fun App() {
                         modifier = Modifier
                             .weight(0.5f)
                             .fillMaxWidth()
-                            .background(Color.LightGray.copy(alpha = 0.05f))
+                            .background(MaterialTheme.colors.surface.copy(alpha = 0.5f))
                     ) {
                         LineCommentsView(
                             selectedLine = selectedLine,
-                            commentaries = bookCommentaries
+                            commentaries = bookCommentaries,
+                            onCommentClick = { commentary ->
+                                // Load the target book and its content
+                                coroutineScope.launch {
+                                    // Get the book
+                                    val targetBook = repository.getBook(commentary.link.targetBookId)
+                                    if (targetBook != null) {
+                                        popupBook = targetBook
+
+                                        // Load the first 100 lines of the book
+                                        popupBookLines = repository.getLines(targetBook.id, 0, 100)
+
+                                        // Load commentaries for the first few lines
+                                        if (popupBookLines.isNotEmpty()) {
+                                            val lineIds = popupBookLines.map { it.id }
+                                            popupBookCommentaries = repository.getCommentariesForLines(lineIds)
+                                        }
+
+                                        // Load commentators for this book
+                                        popupCommentators = repository.getAvailableCommentators(targetBook.id)
+
+                                        // Show the popup
+                                        showBookPopup = true
+                                    }
+                                }
+                            }
                         )
                     }
                 } else {
@@ -323,6 +373,17 @@ fun App() {
                     }
                 }
             }
+        }
+
+        // Show book popup if needed
+        if (showBookPopup && popupBook != null) {
+            BookPopup(
+                book = popupBook!!,
+                lines = popupBookLines,
+                commentaries = popupBookCommentaries,
+                commentators = popupCommentators,
+                onDismiss = { showBookPopup = false }
+            )
         }
     }
 }

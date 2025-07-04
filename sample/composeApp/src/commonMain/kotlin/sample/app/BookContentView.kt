@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.MaterialTheme
 import androidx.compose.material.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,8 +27,6 @@ import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentatorInfo
 fun BookContentView(
     book: Book,
     lines: List<Line>,
-    commentaries: List<CommentaryWithText>,
-    commentators: List<CommentatorInfo>,
     selectedLine: Line? = null,
     onLineSelected: (Line) -> Unit = {}
 ) {
@@ -84,16 +83,26 @@ fun BookContent(
             state = listState,
             modifier = Modifier.fillMaxSize().padding(16.dp)
         ) {
-            items(lines) { line ->
+            items(
+                items = lines,
+                key = { it.id } // Use line.id as key for stable identity
+            ) { line ->
                 val isSelected = selectedLine?.id == line.id
                 val state = rememberRichTextState()
+
+                // Use LaunchedEffect to set HTML content only when line changes
+                LaunchedEffect(line.id) {
+                    state.setHtml(line.content)
+                }
+
                 RichText(
                     state = state,
-                    modifier = Modifier.fillMaxWidth() .clickable { onLineSelected(line) }
-                        .background(if (isSelected) Color.LightGray.copy(alpha = 0.3f) else Color.Transparent)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onLineSelected(line) }
+                        .background(if (isSelected) MaterialTheme.colors.primary.copy(alpha = 0.1f) else Color.Transparent)
                         .padding(vertical = 4.dp),
                 )
-                state.setHtml(line.content)
             }
         }
     }
@@ -156,8 +165,8 @@ fun TocEntryItem(
             // Expand/collapse icon if entry has children
             if (childEntries.isNotEmpty()) {
                 Text(
-                    text = if (isExpanded) "▼" else "▶",
-                    color = Color.Gray,
+                    text = if (isExpanded) "▼" else "◀",
+                    color = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
                     modifier = Modifier
                         .width(24.dp)
                         .clickable { onEntryExpand(entry) }

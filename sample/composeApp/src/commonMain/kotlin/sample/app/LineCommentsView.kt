@@ -1,6 +1,7 @@
 package sample.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,7 +20,8 @@ import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentaryWithText
 @Composable
 fun LineCommentsView(
     selectedLine: Line?,
-    commentaries: List<CommentaryWithText>
+    commentaries: List<CommentaryWithText>,
+    onCommentClick: (CommentaryWithText) -> Unit = {}
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         // Header
@@ -124,7 +126,7 @@ fun LineCommentsView(
                                 fontSize = 16.sp,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(Color.LightGray.copy(alpha = 0.3f))
+                                    .background(MaterialTheme.colors.secondary.copy(alpha = 0.2f))
                                     .padding(8.dp)
                             )
                         }
@@ -133,6 +135,7 @@ fun LineCommentsView(
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .clickable { onCommentClick(commentary) }
                                     .padding(vertical = 8.dp, horizontal = 16.dp)
                             ) {
                                 Text(
@@ -140,7 +143,7 @@ fun LineCommentsView(
                                     fontSize = 14.sp
                                 )
                             }
-                            Divider(color = Color.LightGray, thickness = 0.5.dp)
+                            Divider(color = MaterialTheme.colors.onSurface.copy(alpha = 0.2f), thickness = 0.5.dp)
                         }
                     }
                 }

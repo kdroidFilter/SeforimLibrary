@@ -17,7 +17,7 @@ import co.touchlab.kermit.Severity
  */
 fun main() = runBlocking {
     // Configure Kermit to show warnings and errors
-        Logger.setMinSeverity(Severity.Error)
+        Logger.setMinSeverity(Severity.Info)
 
     val logger = Logger.withTag("Main")
 
