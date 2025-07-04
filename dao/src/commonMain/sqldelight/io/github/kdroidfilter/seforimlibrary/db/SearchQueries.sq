@@ -5,7 +5,7 @@ searchAll:
 SELECT
     ls.bookId,
     ls.bookTitle,
-    ls.lineId,
+    ls.id,
     ls.lineIndex,
     snippet(line_search, 4, '<b>', '</b>', '...', 10) snippet, -- colonne 4 = plainText
     bm25(line_search) rank -- Utilisation de bm25 pour un meilleur ranking
@@ -19,7 +19,7 @@ searchInBook:
 SELECT
     ls.bookId,
     ls.bookTitle,
-    ls.lineId,
+    ls.id,
     ls.lineIndex,
     snippet(line_search, 4, '<b>', '</b>', '...', 10) snippet,
     bm25(line_search) rank
@@ -33,7 +33,7 @@ searchByAuthor:
 SELECT
     ls.bookId,
     ls.bookTitle,
-    ls.lineId,
+    ls.id,
     ls.lineIndex,
     snippet(line_search, 4, '<b>', '</b>', '...', 10) snippet,
     bm25(line_search) rank
@@ -49,7 +49,7 @@ searchWithBookFilter:
 SELECT
     ls.bookId,
     ls.bookTitle,
-    ls.lineId,
+    ls.id,
     ls.lineIndex,
     snippet(line_search, 4, '<b>', '</b>', '...', 10) snippet,
     bm25(line_search) rank
@@ -64,7 +64,7 @@ searchExactPhrase:
 SELECT
     ls.bookId,
     ls.bookTitle,
-    ls.lineId,
+    ls.id,
     ls.lineIndex,
     snippet(line_search, 4, '<b>', '</b>', '...', 10) snippet,
     bm25(line_search) rank
@@ -78,7 +78,7 @@ searchWithOperators:
 SELECT
     ls.bookId,
     ls.bookTitle,
-    ls.lineId,
+    ls.id,
     ls.lineIndex,
     snippet(line_search, 4, '<b>', '</b>', '...', 10) snippet,
     bm25(line_search) rank
