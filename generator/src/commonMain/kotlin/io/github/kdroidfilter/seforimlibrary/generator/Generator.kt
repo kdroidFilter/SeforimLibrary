@@ -77,6 +77,10 @@ class DatabaseGenerator(
             logger.i { "Re-enabling foreign keys..." }
             enableForeignKeys()
 
+            // Rebuild FTS5 index
+            logger.i { "Rebuilding FTS5 index..." }
+            rebuildFts5Index()
+
             logger.i { "Generation completed successfully!" }
         } catch (e: Exception) {
             // Make sure to re-enable foreign keys even if an error occurs
@@ -584,6 +588,16 @@ class DatabaseGenerator(
     private suspend fun enableForeignKeys() {
         logger.d { "Re-enabling foreign key constraints" }
         repository.executeRawQuery("PRAGMA foreign_keys = ON")
+    }
+
+    /**
+     * Rebuilds the FTS5 index for the line_search table.
+     * This should be called after all data has been inserted to ensure optimal search performance.
+     */
+    private suspend fun rebuildFts5Index() {
+        logger.d { "Rebuilding FTS5 index for line_search table" }
+        repository.rebuildFts5Index()
+        logger.i { "FTS5 index rebuilt successfully" }
     }
 
 

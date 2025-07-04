@@ -62,6 +62,9 @@ fun App() {
     var popupBookCommentaries by remember { mutableStateOf<List<CommentaryWithText>>(emptyList()) }
     var popupCommentators by remember { mutableStateOf<List<CommentatorInfo>>(emptyList()) }
 
+    // State for search popup
+    var showSearchPopup by remember { mutableStateOf(false) }
+
     // Load root categories on startup
     LaunchedEffect(repository) {
         rootCategories = repository.getRootCategories()
@@ -86,6 +89,7 @@ fun App() {
     MaterialTheme(
         colors = monochromeColors
     ) {
+
         // Main content area - 4 vertical columns
         Row(modifier = Modifier.fillMaxSize()) {
             // First column - Book tree
@@ -383,6 +387,59 @@ fun App() {
                 commentaries = popupBookCommentaries,
                 commentators = popupCommentators,
                 onDismiss = { showBookPopup = false }
+            )
+        }
+
+        // Floating action button for search
+        Box(modifier = Modifier.fillMaxSize()) {
+            Button(
+                onClick = { showSearchPopup = true },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+            ) {
+                Text("חיפוש")
+            }
+        }
+
+        // Show search popup if needed
+        if (showSearchPopup) {
+            SearchPopup(
+                repository = repository,
+                onDismiss = { showSearchPopup = false },
+                onResultClick = { searchResult ->
+                    // When a search result is clicked, load the book and navigate to the line
+                    coroutineScope.launch {
+                        // Get the book
+                        val book = repository.getBook(searchResult.bookId)
+                        if (book != null) {
+                            // Set as selected book
+                            selectedBook = book
+                            selectedCategory = repository.getCategory(book.categoryId)
+
+                            // Get the line
+                            val line = repository.getLine(searchResult.lineId)
+                            if (line != null) {
+                                // Load a section of lines around the selected line
+                                val startIndex = maxOf(0, line.lineIndex - 5)
+                                val endIndex = line.lineIndex + 5
+                                bookLines = repository.getLines(book.id, startIndex, endIndex)
+
+                                // Set the selected line
+                                selectedLine = line
+
+                                // Load commentaries for this line
+                                bookCommentaries = repository.getCommentariesForLines(listOf(line.id))
+
+                                // Load TOC data for the book
+                                bookToc = repository.getBookRootToc(book.id)
+
+                                // Close the search popup
+                                showSearchPopup = false
+                            }
+                        }
+                    }
+                }
             )
         }
     }

@@ -1108,6 +1108,16 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     /**
+     * Rebuilds the FTS5 index for the line_search table.
+     * This should be called after all data has been inserted to ensure optimal search performance.
+     */
+    suspend fun rebuildFts5Index() = withContext(Dispatchers.IO) {
+        logger.d { "Rebuilding FTS5 index for line_search table" }
+        database.searchQueriesQueries.rebuildFts5Index()
+        logger.d { "FTS5 index rebuilt successfully" }
+    }
+
+    /**
      * Closes the database connection.
      * Should be called when the repository is no longer needed.
      */
