@@ -32,7 +32,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         // SQLite optimizations
         driver.execute(null, "PRAGMA journal_mode=WAL", 0)
         driver.execute(null, "PRAGMA synchronous=NORMAL", 0)
-        driver.execute(null, "PRAGMA cache_size=10000", 0)
+        driver.execute(null, "PRAGMA cache_size=40000", 0)
         driver.execute(null, "PRAGMA temp_store=MEMORY", 0)
 
         // Check if the database is empty

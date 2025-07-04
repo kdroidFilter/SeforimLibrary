@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS tocText (
 );
 
 CREATE INDEX IF NOT EXISTS idx_toc_text ON tocText(text);
+CREATE INDEX IF NOT EXISTS idx_toctext_text_length ON tocText(text, length(text));
 
 -- TOC entries table
 CREATE TABLE IF NOT EXISTS tocEntry (
@@ -145,6 +146,8 @@ CREATE INDEX IF NOT EXISTS idx_toc_book ON tocEntry(bookId);
 CREATE INDEX IF NOT EXISTS idx_toc_parent ON tocEntry(parentId);
 CREATE INDEX IF NOT EXISTS idx_toc_text_id ON tocEntry(textId);
 CREATE INDEX IF NOT EXISTS idx_toc_line ON tocEntry(lineId);
+CREATE INDEX IF NOT EXISTS idx_tocentry_text_level ON tocEntry(textId, level);
+CREATE INDEX IF NOT EXISTS idx_tocentry_level_book ON tocEntry(level, bookId);
 
 -- Connection types table
 CREATE TABLE IF NOT EXISTS connection_type (
