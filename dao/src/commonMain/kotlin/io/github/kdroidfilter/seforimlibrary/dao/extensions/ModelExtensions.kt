@@ -131,10 +131,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectTocById.toModel(): TocEntry {
         textId = textId,
         text = text,
         level = level.toInt(),
-        lineId = lineId,
-        lineIndex = lineIndex.toInt(),
-        order = orderIndex.toInt(),
-        path = path
+        lineId = lineId
     )
 }
 
@@ -153,10 +150,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectByBookId.toModel(): TocEntry 
         textId = textId,
         text = text,
         level = level.toInt(),
-        lineId = lineId,
-        lineIndex = lineIndex.toInt(),
-        order = orderIndex.toInt(),
-        path = path
+        lineId = lineId
     )
 }
 
@@ -175,10 +169,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectRootByBookId.toModel(): TocEn
         textId = textId,
         text = text,
         level = level.toInt(),
-        lineId = lineId,
-        lineIndex = lineIndex.toInt(),
-        order = orderIndex.toInt(),
-        path = path
+        lineId = lineId
     )
 }
 
@@ -197,10 +188,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectChildren.toModel(): TocEntry 
         textId = textId,
         text = text,
         level = level.toInt(),
-        lineId = lineId,
-        lineIndex = lineIndex.toInt(),
-        order = orderIndex.toInt(),
-        path = path
+        lineId = lineId
     )
 }
 

@@ -313,7 +313,6 @@ class DatabaseGenerator(
 
         // Map to track TOC entry parent relationships by level
         val parentStack = mutableMapOf<Int, Long>()
-        var tocOrder = 0
 
         for ((lineIndex, line) in lines.withIndex()) {
             val plainText = cleanHtml(line)
@@ -327,7 +326,6 @@ class DatabaseGenerator(
                     (level - 1 downTo 1).firstNotNullOfOrNull { parentStack[it] }
                 } else null
 
-                val path = buildTocPath(parentStack, level, tocOrder)
 
                 // Assign explicit IDs
                 val currentTocEntryId = nextTocEntryId++
@@ -340,9 +338,6 @@ class DatabaseGenerator(
                     text = plainText,
                     level = level,
                     lineId = null, // Will be set after line is inserted
-                    lineIndex = lineIndex,
-                    order = tocOrder++,
-                    path = path
                 )
 
                 logger.d { "Inserting TOC entry with ID: $currentTocEntryId, bookId: $bookId, lineIndex: $lineIndex" }
@@ -412,18 +407,6 @@ class DatabaseGenerator(
             line.startsWith("<h6", ignoreCase = true) -> 6
             else -> 0
         }
-    }
-
-    private fun buildTocPath(parentStack: Map<Int, Long>, level: Int, order: Int): String {
-        val path = mutableListOf<Int>()
-        for (i in 1..level) {
-            if (i == level) {
-                path.add(order + 1)
-            } else {
-                parentStack[i]?.let { path.add(it.toInt()) }
-            }
-        }
-        return path.joinToString(".")
     }
 
     /**

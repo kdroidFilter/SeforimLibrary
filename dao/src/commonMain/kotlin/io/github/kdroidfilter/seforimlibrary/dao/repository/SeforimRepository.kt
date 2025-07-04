@@ -798,10 +798,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 parentId = entry.parentId,
                 textId = textId,
                 level = entry.level.toLong(),
-                lineId = entry.lineId,
-                lineIndex = entry.lineIndex.toLong(),
-                orderIndex = entry.order.toLong(),
-                path = entry.path
+                lineId = entry.lineId
             )
             logger.d{"Repository inserted TOC entry with explicit ID: ${entry.id}, bookId: ${entry.bookId}, lineId: ${entry.lineId}"}
             return@withContext entry.id
@@ -812,10 +809,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 parentId = entry.parentId,
                 textId = textId,
                 level = entry.level.toLong(),
-                lineId = entry.lineId,
-                lineIndex = entry.lineIndex.toLong(),
-                orderIndex = entry.order.toLong(),
-                path = entry.path
+                lineId = entry.lineId
             )
             val tocId = database.tocQueriesQueries.lastInsertRowId().executeAsOne()
             logger.d{"Repository inserted TOC entry with auto-generated ID: $tocId, bookId: ${entry.bookId}, lineId: ${entry.lineId}"}
@@ -836,7 +830,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                     return@withContext matchingEntry.id
                 }
 
-                throw RuntimeException("Failed to insert TOC entry for book ${entry.bookId} with text '${entry.text.take(30)}${if (entry.text.length > 30) "..." else ""}' - insertion returned ID 0. Context: parentId=${entry.parentId}, level=${entry.level}, lineId=${entry.lineId}, lineIndex=${entry.lineIndex}, order=${entry.order}, path='${entry.path}'")
+                throw RuntimeException("Failed to insert TOC entry for book ${entry.bookId} with text '${entry.text.take(30)}${if (entry.text.length > 30) "..." else ""}' - insertion returned ID 0. Context: parentId=${entry.parentId}, level=${entry.level}, lineId=${entry.lineId}")
             }
 
             return@withContext tocId

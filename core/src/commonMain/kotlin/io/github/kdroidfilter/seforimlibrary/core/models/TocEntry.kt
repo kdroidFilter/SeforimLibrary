@@ -12,9 +12,6 @@ import kotlinx.serialization.Serializable
  * @property text The text of the TOC entry (for compatibility with existing code)
  * @property level The level of the TOC entry in the hierarchy
  * @property lineId The identifier of the associated line, or null if not linked to a specific line
- * @property lineIndex The index of the associated line
- * @property order The display order of the TOC entry within its level
- * @property path The hierarchical path (e.g., "1.2.3")
  */
 @Serializable
 data class TocEntry(
@@ -24,8 +21,5 @@ data class TocEntry(
     val textId: Long? = null,
     val text: String = "",
     val level: Int,
-    val lineId: Long? = null,
-    val lineIndex: Int,
-    val order: Int,
-    val path: String
+    val lineId: Long? = null
 )

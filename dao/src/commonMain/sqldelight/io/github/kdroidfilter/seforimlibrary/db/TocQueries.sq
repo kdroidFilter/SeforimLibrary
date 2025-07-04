@@ -4,8 +4,7 @@ selectByBookId:
 SELECT t.*, tt.text
 FROM tocEntry t
 JOIN tocText tt ON t.textId = tt.id
-WHERE t.bookId = ? 
-ORDER BY t.orderIndex;
+WHERE t.bookId = ?;
 
 selectTocById:
 SELECT t.*, tt.text
@@ -17,15 +16,13 @@ selectRootByBookId:
 SELECT t.*, tt.text
 FROM tocEntry t
 JOIN tocText tt ON t.textId = tt.id
-WHERE t.bookId = ? AND t.parentId IS NULL 
-ORDER BY t.orderIndex;
+WHERE t.bookId = ? AND t.parentId IS NULL;
 
 selectChildren:
 SELECT t.*, tt.text
 FROM tocEntry t
 JOIN tocText tt ON t.textId = tt.id
-WHERE t.parentId = ? 
-ORDER BY t.orderIndex;
+WHERE t.parentId = ?;
 
 selectByLineId:
 SELECT t.*, tt.text
@@ -34,12 +31,12 @@ JOIN tocText tt ON t.textId = tt.id
 WHERE t.lineId = ?;
 
 insert:
-INSERT INTO tocEntry (bookId, parentId, textId, level, lineId, lineIndex, orderIndex, path)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO tocEntry (bookId, parentId, textId, level, lineId)
+VALUES (?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO tocEntry (id, bookId, parentId, textId, level, lineId, lineIndex, orderIndex, path)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO tocEntry (id, bookId, parentId, textId, level, lineId)
+VALUES (?, ?, ?, ?, ?, ?);
 
 updateLineId:
 UPDATE tocEntry SET lineId = ? WHERE id = ?;
