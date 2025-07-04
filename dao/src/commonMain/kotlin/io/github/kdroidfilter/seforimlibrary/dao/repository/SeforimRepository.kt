@@ -1021,6 +1021,19 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     /**
+     * Executes a raw SQL query.
+     * This is useful for operations that are not covered by the generated queries,
+     * such as enabling or disabling foreign key constraints.
+     *
+     * @param sql The SQL query to execute
+     */
+    suspend fun executeRawQuery(sql: String) = withContext(Dispatchers.IO) {
+        logger.d { "Executing raw SQL query: $sql" }
+        driver.execute(null, sql, 0)
+        logger.d { "Raw SQL query executed successfully" }
+    }
+
+    /**
      * Closes the database connection.
      * Should be called when the repository is no longer needed.
      */

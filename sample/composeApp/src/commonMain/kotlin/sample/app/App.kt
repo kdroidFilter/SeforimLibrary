@@ -52,7 +52,6 @@ fun App() {
 
     // State for selected line and its comments
     var selectedLine by remember { mutableStateOf<Line?>(null) }
-    var lineCommentaries by remember { mutableStateOf<List<CommentaryWithText>>(emptyList()) }
 
     // Load root categories on startup
     LaunchedEffect(repository) {

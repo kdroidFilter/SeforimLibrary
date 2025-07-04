@@ -53,6 +53,10 @@ class DatabaseGenerator(
         logger.i { "Source directory: $sourceDirectory" }
 
         try {
+            // Disable foreign keys for better performance during bulk insertion
+            logger.i { "Disabling foreign keys for better performance..." }
+            disableForeignKeys()
+
             // Load metadata
             val metadata = loadMetadata()
             logger.i { "Metadata loaded: ${metadata.size} entries" }
@@ -69,8 +73,19 @@ class DatabaseGenerator(
             // Process links
             processLinks()
 
+            // Re-enable foreign keys after all data is inserted
+            logger.i { "Re-enabling foreign keys..." }
+            enableForeignKeys()
+
             logger.i { "Generation completed successfully!" }
         } catch (e: Exception) {
+            // Make sure to re-enable foreign keys even if an error occurs
+            try {
+                enableForeignKeys()
+            } catch (innerEx: Exception) {
+                logger.w(innerEx) { "Error re-enabling foreign keys after failure" }
+            }
+
             logger.e(e) { "Error during generation" }
             throw e
         }
@@ -501,22 +516,26 @@ class DatabaseGenerator(
                     logger.d { "Using target book with ID: ${targetBook.id}" }
 
                     // Find the lines
-                    logger.d { "Looking for source line at index: ${linkData.line_index_1.toInt()} in book ${sourceBook.id}" }
+                    // Adjust indices from 1-based to 0-based
+                    val sourceLineIndex = (linkData.line_index_1.toInt() - 1).coerceAtLeast(0)
+                    val targetLineIndex = (linkData.line_index_2.toInt() - 1).coerceAtLeast(0)
+
+                    logger.d { "Looking for source line at index: $sourceLineIndex (original: ${linkData.line_index_1}) in book ${sourceBook.id}" }
 
                     // Try to find the source line
-                    val sourceLine = repository.getLineByIndex(sourceBook.id, linkData.line_index_1.toInt())
+                    val sourceLine = repository.getLineByIndex(sourceBook.id, sourceLineIndex)
                     if (sourceLine == null) {
-                        logger.d { "Source line not found at index: ${linkData.line_index_1.toInt()}, skipping this link but continuing with others" }
+                        logger.d { "Source line not found at index: $sourceLineIndex, skipping this link but continuing with others" }
                         continue
                     }
                     logger.d { "Using source line with ID: ${sourceLine.id}" }
 
-                    logger.d { "Looking for target line at index: ${linkData.line_index_2.toInt()} in book ${targetBook.id}" }
+                    logger.d { "Looking for target line at index: $targetLineIndex (original: ${linkData.line_index_2}) in book ${targetBook.id}" }
 
                     // Try to find the target line
-                    val targetLine = repository.getLineByIndex(targetBook.id, linkData.line_index_2.toInt())
+                    val targetLine = repository.getLineByIndex(targetBook.id, targetLineIndex)
                     if (targetLine == null) {
-                        logger.d { "Target line not found at index: ${linkData.line_index_2.toInt()}, skipping this link but continuing with others" }
+                        logger.d { "Target line not found at index: $targetLineIndex, skipping this link but continuing with others" }
                         continue
                     }
                     logger.d { "Using target line with ID: ${targetLine.id}" }
@@ -564,6 +583,24 @@ class DatabaseGenerator(
         return topicNames.map { name ->
             Topic(name = name)
         }
+    }
+
+    /**
+     * Disables foreign key constraints in the database to improve performance during bulk insertion.
+     * This should be called before starting the data generation process.
+     */
+    private suspend fun disableForeignKeys() {
+        logger.d { "Disabling foreign key constraints" }
+        repository.executeRawQuery("PRAGMA foreign_keys = OFF")
+    }
+
+    /**
+     * Re-enables foreign key constraints in the database after data insertion is complete.
+     * This should be called after all data has been inserted to ensure data integrity.
+     */
+    private suspend fun enableForeignKeys() {
+        logger.d { "Re-enabling foreign key constraints" }
+        repository.executeRawQuery("PRAGMA foreign_keys = ON")
     }
 
 

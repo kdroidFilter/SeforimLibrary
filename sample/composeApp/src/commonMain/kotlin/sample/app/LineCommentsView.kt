@@ -99,8 +99,14 @@ fun LineCommentsView(
                     lineCommentaries
                 } else {
                     // Filter by selected connection type
-                    val selectedType = connectionTypes[selectedTabIndex - 1]
-                    lineCommentaries.filter { it.link.connectionType == selectedType }
+                    // Check if the index is within bounds
+                    if (selectedTabIndex - 1 < connectionTypes.size) {
+                        val selectedType = connectionTypes[selectedTabIndex - 1]
+                        lineCommentaries.filter { it.link.connectionType == selectedType }
+                    } else {
+                        // Fallback to showing all commentaries if the index is out of bounds
+                        lineCommentaries
+                    }
                 }
 
                 // Group commentaries by book
