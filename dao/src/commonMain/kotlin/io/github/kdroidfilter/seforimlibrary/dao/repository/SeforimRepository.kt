@@ -144,7 +144,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             return@withContext insertedId
 
         } catch (e: Exception) {
-            logger.e(e) { "❌ Repository: Error inserting category '${category.title}': ${e.message}" }
+            // Changed from error to warning level to reduce unnecessary error logs
+            logger.w(e) { "❌ Repository: Error inserting category '${category.title}': ${e.message}" }
 
             // In case of error, check if the category exists anyway
             val categories = if (category.parentId != null) {
@@ -528,7 +529,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             // ✅ Verify that the insertion was successful
             val insertedBook = database.bookQueriesQueries.selectById(book.id).executeAsOneOrNull()
             if (insertedBook?.categoryId != book.categoryId) {
-                logger.e{"ERROR: Book inserted with wrong categoryId! Expected: ${book.categoryId}, Got: ${insertedBook?.categoryId}"}
+                // Changed from error to warning level to reduce unnecessary error logs
+                logger.w{"WARNING: Book inserted with wrong categoryId! Expected: ${book.categoryId}, Got: ${insertedBook?.categoryId}"}
                 // Fix immediately
                 database.bookQueriesQueries.updateCategoryId(book.categoryId, book.id)
                 logger.d{"Corrected categoryId for book ID: ${book.id}"}
@@ -577,7 +579,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
             // Check if insertion failed
             if (id == 0L) {
-                logger.e { "❌ Repository: lastInsertRowId() returned 0! This indicates insertion failed. Context: book='${book.title}', categoryId=${book.categoryId}, authors=${book.authors.map { it.name }}, topics=${book.topics.map { it.name }}" }
+                // Changed from error to warning level to reduce unnecessary error logs
+                logger.w { "⚠️ Repository: lastInsertRowId() returned 0! This indicates insertion failed. Context: book='${book.title}', categoryId=${book.categoryId}, authors=${book.authors.map { it.name }}, topics=${book.topics.map { it.name }}" }
 
                 // Try to find the book by title
                 val existingBook = database.bookQueriesQueries.selectByTitle(book.title).executeAsOneOrNull()
@@ -680,7 +683,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
             // Check if insertion failed
             if (lineId == 0L) {
-                logger.e { "❌ Repository: lastInsertRowId() returned 0! This indicates insertion failed. Context: bookId=${line.bookId}, lineIndex=${line.lineIndex}, content='${line.content.take(30)}${if (line.content.length > 30) "..." else ""}'" }
+                // Changed from error to warning level to reduce unnecessary error logs
+                logger.w { "⚠️ Repository: lastInsertRowId() returned 0! This indicates insertion failed. Context: bookId=${line.bookId}, lineIndex=${line.lineIndex}, content='${line.content.take(30)}${if (line.content.length > 30) "..." else ""}'" }
 
                 // Try to find the line by bookId and lineIndex
                 val existingLine = database.lineQueriesQueries.selectByBookIdAndIndex(line.bookId, line.lineIndex.toLong()).executeAsOneOrNull()
@@ -764,7 +768,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 val totalTocTexts = database.tocTextQueriesQueries.countAll().executeAsOne()
 
                 // Log more details about the failure
-                logger.e{"Failed to insert tocText and couldn't find it after insertion. This is unexpected since the text should either be inserted or already exist. Text: '$truncatedText', Length: ${text.length}, Hash: ${text.hashCode()}, Total TocTexts: $totalTocTexts"}
+                // Changed from error to warning level to reduce unnecessary error logs
+                logger.w{"Failed to insert tocText and couldn't find it after insertion. This is unexpected since the text should either be inserted or already exist. Text: '$truncatedText', Length: ${text.length}, Hash: ${text.hashCode()}, Total TocTexts: $totalTocTexts"}
 
                 throw RuntimeException("Failed to insert tocText '$truncatedText' - insertion returned ID 0 and couldn't find text afterward. This is unexpected since the text should either be inserted or already exist. Context: textLength=${text.length}, textHash=${text.hashCode()}, totalTocTexts=$totalTocTexts")
             }
@@ -772,7 +777,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             logger.d{"Created new tocText entry with ID: $textId for text: '$truncatedText'"}
             return@withContext textId
         } catch (e: Exception) {
-            logger.e(e){"Exception in getOrCreateTocText for text: '$truncatedText', Length: ${text.length}, Hash: ${text.hashCode()}. Error: ${e.message}"}
+            // Changed from error to warning level to reduce unnecessary error logs
+            logger.w(e){"Exception in getOrCreateTocText for text: '$truncatedText', Length: ${text.length}, Hash: ${text.hashCode()}. Error: ${e.message}"}
             throw e
         }
     }
@@ -816,7 +822,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
             // Check if insertion failed
             if (tocId == 0L) {
-                logger.e { "❌ Repository: lastInsertRowId() returned 0! This indicates insertion failed. Context: bookId=${entry.bookId}, parentId=${entry.parentId}, level=${entry.level}, text='${entry.text.take(30)}${if (entry.text.length > 30) "..." else ""}'" }
+                // Changed from error to warning level to reduce unnecessary error logs
+                logger.w { "⚠️ Repository: lastInsertRowId() returned 0! This indicates insertion failed. Context: bookId=${entry.bookId}, parentId=${entry.parentId}, level=${entry.level}, text='${entry.text.take(30)}${if (entry.text.length > 30) "..." else ""}'" }
 
                 // Try to find a matching TOC entry by bookId and text
                 val existingEntries = database.tocQueriesQueries.selectByBookId(entry.bookId).executeAsList()
@@ -907,7 +914,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
             // Check if insertion failed
             if (linkId == 0L) {
-                logger.e { "❌ Repository: lastInsertRowId() returned 0! This indicates insertion failed. Context: sourceBookId=${link.sourceBookId}, targetBookId=${link.targetBookId}, sourceLineId=${link.sourceLineId}, targetLineId=${link.targetLineId}, connectionType=${link.connectionType.name}" }
+                // Changed from error to warning level to reduce unnecessary error logs
+                logger.w { "⚠️ Repository: lastInsertRowId() returned 0! This indicates insertion failed. Context: sourceBookId=${link.sourceBookId}, targetBookId=${link.targetBookId}, sourceLineId=${link.sourceLineId}, targetLineId=${link.targetLineId}, connectionType=${link.connectionType.name}" }
 
                 // Try to find a matching link
                 val existingLinks = database.linkQueriesQueries.selectBySourceBook(link.sourceBookId).executeAsList()
@@ -927,7 +935,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
             return@withContext linkId
         } catch (e: Exception) {
-            logger.e(e){"Error inserting link: ${e.message}"}
+            // Changed from error to warning level to reduce unnecessary error logs
+            logger.w(e){"Error inserting link: ${e.message}"}
             throw e
         }
     }

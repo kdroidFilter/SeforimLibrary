@@ -6,9 +6,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.Divider
-import androidx.compose.material.Tab
-import androidx.compose.material.TabRow
 import androidx.compose.material.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,7 +16,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mohamedrejeb.richeditor.model.rememberRichTextState
 import com.mohamedrejeb.richeditor.ui.material.RichText
-import com.mohamedrejeb.richeditor.ui.material3.RichTextEditor
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Line
 import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
@@ -100,181 +96,6 @@ fun BookContent(
                 state.setHtml(line.content)
             }
         }
-    }
-}
-
-@Composable
-fun CommentariesView(
-    commentaries: List<CommentaryWithText>,
-    commentators: List<CommentatorInfo>
-) {
-    if (commentaries.isEmpty() && commentators.isEmpty()) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("אין פירושים זמינים")
-        }
-    } else {
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            // Commentators info
-            if (commentators.isNotEmpty()) {
-                Text(
-                    text = "פרשנים זמינים:",
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-
-                commentators.forEach { commentator ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "📚",
-                            modifier = Modifier.width(24.dp)
-                        )
-                        Column {
-                            Text(
-                                text = commentator.title,
-                                fontWeight = FontWeight.Bold
-                            )
-                            if (commentator.author != null) {
-                                Text(
-                                    text = "מאת ${commentator.author}",
-                                    fontSize = 12.sp,
-                                    color = Color.Gray
-                                )
-                            }
-                            Text(
-                                text = "${commentator.linkCount} פירושים",
-                                fontSize = 12.sp,
-                                color = Color.Gray
-                            )
-                        }
-                    }
-                    Divider(color = Color.LightGray, thickness = 0.5.dp)
-                }
-            }
-
-            // Commentaries
-            if (commentaries.isNotEmpty()) {
-                Text(
-                    text = "פירושים:",
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)
-                )
-
-                LazyColumn {
-                    items(commentaries) { commentary ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp)
-                        ) {
-                            Text(
-                                text = commentary.targetBookTitle,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = commentary.targetText,
-                                modifier = Modifier.padding(top = 4.dp)
-                            )
-                        }
-                        Divider(color = Color.LightGray, thickness = 0.5.dp)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun BookInfoView(book: Book) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp)
-    ) {
-        // Authors
-        if (book.authors.isNotEmpty()) {
-            Text(
-                text = "מחברים:",
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-            book.authors.forEach { author ->
-                Text(
-                    text = "• ${author.name}",
-                    modifier = Modifier.padding(start = 16.dp, bottom = 2.dp)
-                )
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
-        // Topics
-        if (book.topics.isNotEmpty()) {
-            Text(
-                text = "נושאים:",
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-            book.topics.forEach { topic ->
-                Text(
-                    text = "• ${topic.name}",
-                    modifier = Modifier.padding(start = 16.dp, bottom = 2.dp)
-                )
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
-        // Publication info
-        if (book.pubPlaces.isNotEmpty() || book.pubDates.isNotEmpty()) {
-            Text(
-                text = "מידע על הפרסום:",
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-
-            book.pubPlaces.forEach { place ->
-                Text(
-                    text = "• מקום: ${place.name}",
-                    modifier = Modifier.padding(start = 16.dp, bottom = 2.dp)
-                )
-            }
-
-            book.pubDates.forEach { date ->
-                Text(
-                    text = "• תאריך: ${date.date}",
-                    modifier = Modifier.padding(start = 16.dp, bottom = 2.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
-        // Description
-        book.heShortDesc?.let { desc ->
-            Text(
-                text = "תיאור:",
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-            Text(
-                text = desc,
-                modifier = Modifier.padding(start = 16.dp)
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
-        // Stats
-        Text(
-            text = "סטטיסטיקה:",
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 4.dp)
-        )
-        Text(
-            text = "• סך הכל שורות: ${book.totalLines}",
-            modifier = Modifier.padding(start = 16.dp, bottom = 2.dp)
-        )
     }
 }
 

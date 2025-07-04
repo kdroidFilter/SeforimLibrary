@@ -186,7 +186,8 @@ class DatabaseGenerator(
         // Additional verification
         val insertedCategory = repository.getCategory(insertedId)
         if (insertedCategory == null) {
-            logger.e { "❌ ERROR: Unable to retrieve the category that was just inserted (ID: $insertedId)" }
+            // Changed from error to warning level to reduce unnecessary error logs
+            logger.w { "❌ WARNING: Unable to retrieve the category that was just inserted (ID: $insertedId)" }
         } else {
             logger.d { "✅ Verification: category retrieved with ID: ${insertedCategory.id}, parent: ${insertedCategory.parentId}" }
         }
@@ -533,14 +534,16 @@ class DatabaseGenerator(
                     logger.d { "Link inserted with ID: $linkId" }
                     processed++
                 } catch (e: Exception) {
-                    logger.e(e) { "Error processing link: ${linkData.heRef_2}" }
+                    // Changed from error to debug level to reduce unnecessary error logs
+                    logger.d(e) { "Error processing link: ${linkData.heRef_2}" }
                     logger.d { "Error processing link: ${e.message}" }
                 }
             }
             logger.d { "Processed $processed links out of ${links.size}" }
             return processed
         } catch (e: Exception) {
-            logger.e(e) { "Error processing link file: ${linkFile.fileName}" }
+            // Changed from error to warning level to reduce unnecessary error logs
+            logger.w(e) { "Error processing link file: ${linkFile.fileName}" }
             logger.d { "Error processing link file: ${e.message}" }
             return 0
         }
