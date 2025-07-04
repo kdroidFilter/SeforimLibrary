@@ -99,3 +99,6 @@ SELECT COUNT(*)
 FROM line_search
 WHERE plainText MATCH ? AND bookId = ?;
 
+-- Rebuild the FTS5 index
+rebuildFts5Index:
+INSERT INTO line_search(line_search) VALUES('rebuild');
