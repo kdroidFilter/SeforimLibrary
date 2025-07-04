@@ -121,7 +121,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             logger.d { "✅ Repository: Category inserted with ID: $insertedId" }
 
             if (insertedId == 0L) {
-                logger.d { "lastInsertRowId() returned 0 for category '${category.title}', checking if it exists" }
 
                 // Check again if the category was inserted despite lastInsertRowId() returning 0
                 val updatedCategories = if (category.parentId != null) {
@@ -277,7 +276,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         // If lastInsertRowId returns 0, it might be because the insertion was ignored due to a conflict
         // Try to get the ID by name
         if (authorId == 0L) {
-            logger.d { "lastInsertRowId() returned 0 for author '$name', checking if it exists" }
 
             val insertedAuthor = database.authorQueriesQueries.selectByName(name).executeAsOneOrNull()
             if (insertedAuthor != null) {
@@ -378,7 +376,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         // If lastInsertRowId returns 0, it might be because the insertion was ignored due to a conflict
         // Try to get the ID by name
         if (topicId == 0L) {
-            logger.d { "lastInsertRowId() returned 0 for topic '$name', checking if it exists" }
 
             val insertedTopic = database.topicQueriesQueries.selectByName(name).executeAsOneOrNull()
             if (insertedTopic != null) {
@@ -434,7 +431,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         // If lastInsertRowId returns 0, it might be because the insertion was ignored due to a conflict
         // Try to get the ID by name
         if (pubPlaceId == 0L) {
-            logger.d { "lastInsertRowId() returned 0 for publication place '$name', checking if it exists" }
 
             val insertedPubPlace = database.pubPlaceQueriesQueries.selectByName(name).executeAsOneOrNull()
             if (insertedPubPlace != null) {
@@ -472,7 +468,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         // If lastInsertRowId returns 0, it might be because the insertion was ignored due to a conflict
         // Try to get the ID by date
         if (pubDateId == 0L) {
-            logger.d { "lastInsertRowId() returned 0 for publication date '$date', checking if it exists" }
 
             val insertedPubDate = database.pubDateQueriesQueries.selectByDate(date).executeAsOneOrNull()
             if (insertedPubDate != null) {
@@ -579,9 +574,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
             // Check if insertion failed
             if (id == 0L) {
-                // Changed from error to warning level to reduce unnecessary error logs
-                logger.w { "⚠️ Repository: lastInsertRowId() returned 0! This indicates insertion failed. Context: book='${book.title}', categoryId=${book.categoryId}, authors=${book.authors.map { it.name }}, topics=${book.topics.map { it.name }}" }
-
                 // Try to find the book by title
                 val existingBook = database.bookQueriesQueries.selectByTitle(book.title).executeAsOneOrNull()
                 if (existingBook != null) {
@@ -683,9 +675,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
             // Check if insertion failed
             if (lineId == 0L) {
-                // Changed from error to warning level to reduce unnecessary error logs
-                logger.w { "⚠️ Repository: lastInsertRowId() returned 0! This indicates insertion failed. Context: bookId=${line.bookId}, lineIndex=${line.lineIndex}, content='${line.content.take(30)}${if (line.content.length > 30) "..." else ""}'" }
-
                 // Try to find the line by bookId and lineIndex
                 val existingLine = database.lineQueriesQueries.selectByBookIdAndIndex(line.bookId, line.lineIndex.toLong()).executeAsOneOrNull()
                 if (existingLine != null) {
@@ -816,8 +805,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
             // Check if insertion failed
             if (tocId == 0L) {
-                // Changed from error to warning level to reduce unnecessary error logs
-                logger.w { "⚠️ Repository: lastInsertRowId() returned 0! This indicates insertion failed. Context: bookId=${entry.bookId}, parentId=${entry.parentId}, level=${entry.level}, text='${entry.text.take(30)}${if (entry.text.length > 30) "..." else ""}'" }
 
                 // Try to find a matching TOC entry by bookId and text
                 val existingEntries = database.tocQueriesQueries.selectByBookId(entry.bookId).executeAsList()
@@ -869,7 +856,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
         // If lastInsertRowId returns 0, try to get the ID by name
         if (typeId == 0L) {
-            logger.d{"lastInsertRowId() returned 0 for connection type '$name', checking if it exists"}
 
             val insertedType = database.connectionTypeQueriesQueries.selectByName(name).executeAsOneOrNull()
             if (insertedType != null) {
@@ -964,8 +950,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
             // Check if insertion failed
             if (linkId == 0L) {
-                // Changed from error to warning level to reduce unnecessary error logs
-                logger.w { "⚠️ Repository: lastInsertRowId() returned 0! This indicates insertion failed. Context: sourceBookId=${link.sourceBookId}, targetBookId=${link.targetBookId}, sourceLineId=${link.sourceLineId}, targetLineId=${link.targetLineId}, connectionType=${link.connectionType.name}" }
 
                 // Try to find a matching link
                 val existingLinks = database.linkQueriesQueries.selectLinksBySourceBook(link.sourceBookId).executeAsList()
