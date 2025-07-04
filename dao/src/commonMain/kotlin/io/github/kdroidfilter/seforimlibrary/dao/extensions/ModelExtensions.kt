@@ -257,12 +257,12 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectLinksBySourceBook.toModel(): 
  * @return The domain SearchResult model
  */
 fun SearchAll.toSearchResult(): SearchResult = SearchResult(
-    bookId = bookId,
-    bookTitle = bookTitle,
-    lineId = lineId,
-    lineIndex = lineIndex.toInt(),
-    snippet = snippet,
-    rank = rank.toDouble()
+    bookId = bookId ?: 0,
+    bookTitle = bookTitle ?: "",
+    lineId = lineId ?: 0,
+    lineIndex = lineIndex?.toInt() ?: 0,
+    snippet = snippet ?: "",
+    rank = rank
 )
 
 /**
@@ -272,12 +272,12 @@ fun SearchAll.toSearchResult(): SearchResult = SearchResult(
  * @return The domain SearchResult model
  */
 fun SearchInBook.toSearchResult(): SearchResult = SearchResult(
-    bookId = bookId,
-    bookTitle = bookTitle,
-    lineId = lineId,
-    lineIndex = lineIndex.toInt(),
-    snippet = snippet,
-    rank = rank.toDouble()
+    bookId = bookId ?: 0,
+    bookTitle = bookTitle ?: "",
+    lineId = lineId ?: 0,
+    lineIndex = lineIndex?.toInt() ?: 0,
+    snippet = snippet ?: "",
+    rank = rank
 )
 
 /**
@@ -287,12 +287,12 @@ fun SearchInBook.toSearchResult(): SearchResult = SearchResult(
  * @return The domain SearchResult model
  */
 fun SearchByAuthor.toSearchResult(): SearchResult = SearchResult(
-    bookId = bookId,
-    bookTitle = bookTitle,
-    lineId = lineId,
-    lineIndex = lineIndex.toInt(),
-    snippet = snippet,
-    rank = rank.toDouble()
+    bookId = bookId ?: 0,
+    bookTitle = bookTitle ?: "",
+    lineId = lineId ?: 0,
+    lineIndex = lineIndex?.toInt() ?: 0,
+    snippet = snippet ?: "",
+    rank = rank
 )
 
 /**
@@ -302,10 +302,10 @@ fun SearchByAuthor.toSearchResult(): SearchResult = SearchResult(
  * @return The domain SearchResult model
  */
 fun SearchWithBookFilter.toSearchResult(): SearchResult = SearchResult(
-    bookId = bookId,
-    bookTitle = bookTitle,
-    lineId = lineId,
-    lineIndex = lineIndex.toInt(),
-    snippet = snippet,
-    rank = rank.toDouble()
+    bookId = bookId ?: 0,
+    bookTitle = bookTitle ?: "",
+    lineId = lineId ?: 0,
+    lineIndex = lineIndex?.toInt() ?: 0,
+    snippet = snippet ?: "",
+    rank = rank
 )

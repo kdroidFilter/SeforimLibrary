@@ -178,18 +178,13 @@ CREATE INDEX IF NOT EXISTS idx_link_target_book ON link(targetBookId);
 CREATE INDEX IF NOT EXISTS idx_link_target_line ON link(targetLineId);
 CREATE INDEX IF NOT EXISTS idx_link_type ON link(connectionTypeId);
 
--- Standard search table (without FTS5)
-CREATE TABLE IF NOT EXISTS line_search (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    bookId INTEGER NOT NULL,
-    lineId INTEGER NOT NULL,
-    lineIndex INTEGER NOT NULL,
-    bookTitle TEXT NOT NULL,
-    content TEXT NOT NULL,
-    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
-    FOREIGN KEY (lineId) REFERENCES line(id) ON DELETE CASCADE
+-- FTS5 virtual table for line search using external content
+CREATE VIRTUAL TABLE line_search USING fts5(
+    bookId INTEGER UNINDEXED,
+    lineId INTEGER UNINDEXED,
+    lineIndex INTEGER UNINDEXED,
+    bookTitle TEXT UNINDEXED,
+    plainText TEXT,
+    content='line',
+    content_rowid='id'
 );
-
-CREATE INDEX IF NOT EXISTS idx_line_search_content ON line_search(content);
-CREATE INDEX IF NOT EXISTS idx_line_search_book_title ON line_search(bookTitle);
-CREATE INDEX IF NOT EXISTS idx_line_search_book_id ON line_search(bookId);
