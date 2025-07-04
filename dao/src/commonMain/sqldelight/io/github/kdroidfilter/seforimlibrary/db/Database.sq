@@ -178,6 +178,17 @@ CREATE INDEX IF NOT EXISTS idx_link_target_book ON link(targetBookId);
 CREATE INDEX IF NOT EXISTS idx_link_target_line ON link(targetLineId);
 CREATE INDEX IF NOT EXISTS idx_link_type ON link(connectionTypeId);
 
+-- View for FTS5 content source that includes book title
+CREATE VIEW IF NOT EXISTS line_with_book_title AS
+SELECT 
+    l.id,
+    l.bookId,
+    l.lineIndex,
+    b.title AS bookTitle,
+    l.plainText
+FROM line l
+JOIN book b ON l.bookId = b.id;
+
 -- FTS5 virtual table for line search using external content
 CREATE VIRTUAL TABLE IF NOT EXISTS line_search USING fts5(
     bookId INTEGER UNINDEXED,
@@ -185,6 +196,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS line_search USING fts5(
     lineIndex INTEGER UNINDEXED,
     bookTitle TEXT UNINDEXED,
     plainText TEXT,
-    content='line',
+    content='line_with_book_title',
     content_rowid='id'
 );

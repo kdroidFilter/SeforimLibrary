@@ -12,6 +12,8 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.text.input.TextFieldValue
+import com.mohamedrejeb.richeditor.model.rememberRichTextState
+import com.mohamedrejeb.richeditor.ui.material.RichText
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import io.github.kdroidfilter.seforimlibrary.core.models.SearchResult
@@ -135,6 +137,7 @@ fun SearchPopup(
     }
 }
 
+
 /**
  * A composable that displays a single search result.
  *
@@ -163,11 +166,18 @@ fun SearchResultItem(
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            // Use the snippet which already contains HTML highlighting
-            // We need to render it as HTML
-            Text(
-                text = result.snippet,
-                style = MaterialTheme.typography.body2
+            // Use RichText to render HTML snippet
+            val richTextState = rememberRichTextState()
+
+            // Set HTML content
+            LaunchedEffect(result.snippet) {
+                richTextState.setHtml(result.snippet)
+            }
+
+            // Render rich text
+            RichText(
+                state = richTextState,
+                modifier = Modifier.fillMaxWidth()
             )
 
             Spacer(modifier = Modifier.height(4.dp))
