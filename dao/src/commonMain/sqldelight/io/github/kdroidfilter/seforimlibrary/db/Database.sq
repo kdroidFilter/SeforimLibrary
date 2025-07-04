@@ -149,6 +149,14 @@ CREATE INDEX IF NOT EXISTS idx_toc_parent ON tocEntry(parentId);
 CREATE INDEX IF NOT EXISTS idx_toc_text_id ON tocEntry(textId);
 CREATE INDEX IF NOT EXISTS idx_toc_line ON tocEntry(lineId);
 
+-- Connection types table
+CREATE TABLE IF NOT EXISTS connection_type (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_connection_type_name ON connection_type(name);
+
 -- Links table
 CREATE TABLE IF NOT EXISTS link (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,18 +164,19 @@ CREATE TABLE IF NOT EXISTS link (
     targetBookId INTEGER NOT NULL,
     sourceLineId INTEGER NOT NULL,
     targetLineId INTEGER NOT NULL,
-    connectionType TEXT NOT NULL,
+    connectionTypeId INTEGER NOT NULL,
     FOREIGN KEY (sourceBookId) REFERENCES book(id) ON DELETE CASCADE,
     FOREIGN KEY (targetBookId) REFERENCES book(id) ON DELETE CASCADE,
     FOREIGN KEY (sourceLineId) REFERENCES line(id) ON DELETE CASCADE,
-    FOREIGN KEY (targetLineId) REFERENCES line(id) ON DELETE CASCADE
+    FOREIGN KEY (targetLineId) REFERENCES line(id) ON DELETE CASCADE,
+    FOREIGN KEY (connectionTypeId) REFERENCES connection_type(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_link_source_book ON link(sourceBookId);
 CREATE INDEX IF NOT EXISTS idx_link_source_line ON link(sourceLineId);
 CREATE INDEX IF NOT EXISTS idx_link_target_book ON link(targetBookId);
 CREATE INDEX IF NOT EXISTS idx_link_target_line ON link(targetLineId);
-CREATE INDEX IF NOT EXISTS idx_link_type ON link(connectionType);
+CREATE INDEX IF NOT EXISTS idx_link_type ON link(connectionTypeId);
 
 -- Standard search table (without FTS5)
 CREATE TABLE IF NOT EXISTS line_search (

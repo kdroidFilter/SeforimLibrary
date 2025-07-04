@@ -117,13 +117,13 @@ fun io.github.kdroidfilter.seforimlibrary.db.Line.toModel(): Line {
 }
 
 /**
- * Converts a database SelectById result to a domain TocEntry model.
+ * Converts a database SelectTocById result to a domain TocEntry model.
  * This is used when retrieving a TOC entry by its ID.
  *
  * @return The domain TocEntry model
  */
-fun io.github.kdroidfilter.seforimlibrary.db.SelectById.toModel(): TocEntry {
-    logger.d{"Converting database TocEntry (from SelectById) with id: $id, bookId: $bookId, lineId: $lineId"}
+fun io.github.kdroidfilter.seforimlibrary.db.SelectTocById.toModel(): TocEntry {
+    logger.d{"Converting database TocEntry (from SelectTocById) with id: $id, bookId: $bookId, lineId: $lineId"}
     return TocEntry(
         id = id,
         bookId = bookId,
@@ -205,11 +205,52 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectChildren.toModel(): TocEntry 
 }
 
 /**
- * Converts a database Link entity to a domain Link model.
+ * Converts a database Connection_type entity to a domain ConnectionType enum.
+ *
+ * @return The domain ConnectionType enum
+ */
+fun io.github.kdroidfilter.seforimlibrary.db.Connection_type.toModel(): ConnectionType {
+    return ConnectionType.fromString(name)
+}
+
+/**
+ * Converts a database SelectLinkById result to a domain Link model.
  *
  * @return The domain Link model
  */
-fun io.github.kdroidfilter.seforimlibrary.db.Link.toModel(): Link {
+fun io.github.kdroidfilter.seforimlibrary.db.SelectLinkById.toModel(): Link {
+    return Link(
+        id = id,
+        sourceBookId = sourceBookId,
+        targetBookId = targetBookId,
+        sourceLineId = sourceLineId,
+        targetLineId = targetLineId,
+        connectionType = ConnectionType.fromString(connectionType)
+    )
+}
+
+/**
+ * Converts a database SelectLinksBySourceLineIds result to a domain Link model.
+ *
+ * @return The domain Link model
+ */
+fun io.github.kdroidfilter.seforimlibrary.db.SelectLinksBySourceLineIds.toModel(): Link {
+    return Link(
+        id = id,
+        sourceBookId = sourceBookId,
+        targetBookId = targetBookId,
+        sourceLineId = sourceLineId,
+        targetLineId = targetLineId,
+        connectionType = ConnectionType.fromString(connectionType)
+    )
+}
+
+/**
+ * Converts a database SelectLinksBySourceBook result to a domain Link model.
+ *
+ * @return The domain Link model
+ */
+fun io.github.kdroidfilter.seforimlibrary.db.SelectLinksBySourceBook.toModel(): Link {
     return Link(
         id = id,
         sourceBookId = sourceBookId,

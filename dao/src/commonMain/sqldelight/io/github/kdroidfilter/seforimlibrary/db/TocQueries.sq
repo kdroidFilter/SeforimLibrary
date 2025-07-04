@@ -7,7 +7,7 @@ JOIN tocText tt ON t.textId = tt.id
 WHERE t.bookId = ? 
 ORDER BY t.orderIndex;
 
-selectById:
+selectTocById:
 SELECT t.*, tt.text
 FROM tocEntry t
 JOIN tocText tt ON t.textId = tt.id

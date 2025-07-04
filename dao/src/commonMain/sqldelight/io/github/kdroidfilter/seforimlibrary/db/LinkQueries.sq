@@ -1,36 +1,43 @@
 -- Queries for links
 
-selectById:
-SELECT * FROM link WHERE id = ?;
+selectLinkById:
+SELECT l.*, ct.name AS connectionType
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+WHERE l.id = ?;
 
-countAll:
+countAllLinks:
 SELECT COUNT(*) FROM link;
 
-selectBySourceLineIds:
-SELECT l.*, b.title AS targetBookTitle, tl.plainText AS targetText
+selectLinksBySourceLineIds:
+SELECT l.*, ct.name AS connectionType, b.title AS targetBookTitle, tl.plainText AS targetText
 FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
 JOIN book b ON l.targetBookId = b.id
 JOIN line tl ON l.targetLineId = tl.id
 WHERE l.sourceLineId IN ?
 ORDER BY b.orderIndex;
 
-selectBySourceBook:
-SELECT * FROM link
-WHERE sourceBookId = ?;
+selectLinksBySourceBook:
+SELECT l.*, ct.name AS connectionType
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+WHERE l.sourceBookId = ?;
 
 selectCommentatorsByBook:
 SELECT DISTINCT l.targetBookId, b.title AS targetBookTitle, a.name AS author, COUNT(*) AS linkCount
 FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
 JOIN book b ON l.targetBookId = b.id
 LEFT JOIN book_author ba ON b.id = ba.bookId
 LEFT JOIN author a ON ba.authorId = a.id
 WHERE l.sourceBookId = ?
-AND l.connectionType IN ('COMMENTARY', 'TARGUM')
+AND ct.name IN ('COMMENTARY', 'TARGUM')
 GROUP BY l.targetBookId, b.title, a.name
 ORDER BY b.orderIndex, b.title;
 
 insert:
-INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, connectionType)
+INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, connectionTypeId)
 VALUES (?, ?, ?, ?, ?);
 
 delete:

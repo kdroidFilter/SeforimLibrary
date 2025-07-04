@@ -709,7 +709,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     // --- Table of Contents ---
 
     suspend fun getTocEntry(id: Long): TocEntry? = withContext(Dispatchers.IO) {
-        database.tocQueriesQueries.selectById(id).executeAsOneOrNull()?.toModel()
+        database.tocQueriesQueries.selectTocById(id).executeAsOneOrNull()?.toModel()
     }
 
     suspend fun getBookToc(bookId: Long): List<TocEntry> = withContext(Dispatchers.IO) {
@@ -849,15 +849,67 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         logger.d{"Repository updated TOC entry $tocEntryId with lineId: $lineId"}
     }
 
+    // --- Connection Types ---
+
+    /**
+     * Gets a connection type by name, or creates it if it doesn't exist.
+     *
+     * @param name The name of the connection type
+     * @return The ID of the connection type
+     */
+    private suspend fun getOrCreateConnectionType(name: String): Long = withContext(Dispatchers.IO) {
+        logger.d{"Getting or creating connection type: $name"}
+
+        // Check if the connection type already exists
+        val existingType = database.connectionTypeQueriesQueries.selectByName(name).executeAsOneOrNull()
+        if (existingType != null) {
+            logger.d{"Found existing connection type with ID: ${existingType.id}"}
+            return@withContext existingType.id
+        }
+
+        // Insert the connection type
+        database.connectionTypeQueriesQueries.insert(name)
+
+        // Get the ID of the inserted connection type
+        val typeId = database.connectionTypeQueriesQueries.lastInsertRowId().executeAsOne()
+
+        // If lastInsertRowId returns 0, try to get the ID by name
+        if (typeId == 0L) {
+            logger.d{"lastInsertRowId() returned 0 for connection type '$name', checking if it exists"}
+
+            val insertedType = database.connectionTypeQueriesQueries.selectByName(name).executeAsOneOrNull()
+            if (insertedType != null) {
+                logger.d{"Found connection type after insertion with ID: ${insertedType.id}"}
+                return@withContext insertedType.id
+            }
+
+            throw RuntimeException("Failed to insert connection type '$name' - insertion returned ID 0 and couldn't find type afterward")
+        }
+
+        logger.d{"Created new connection type with ID: $typeId"}
+        return@withContext typeId
+    }
+
+    /**
+     * Gets all connection types from the database.
+     *
+     * @return A list of all connection types
+     */
+    suspend fun getAllConnectionTypes(): List<ConnectionType> = withContext(Dispatchers.IO) {
+        database.connectionTypeQueriesQueries.selectAll().executeAsList().map { 
+            ConnectionType.fromString(it.name)
+        }
+    }
+
     // --- Links ---
 
     suspend fun getLink(id: Long): Link? = withContext(Dispatchers.IO) {
-        database.linkQueriesQueries.selectById(id).executeAsOneOrNull()?.toModel()
+        database.linkQueriesQueries.selectLinkById(id).executeAsOneOrNull()?.toModel()
     }
 
     suspend fun countLinks(): Long = withContext(Dispatchers.IO) {
         logger.d{"Counting links in database"}
-        val count = database.linkQueriesQueries.countAll().executeAsOne()
+        val count = database.linkQueriesQueries.countAllLinks().executeAsOne()
         logger.d{"Found $count links in database"}
         count
     }
@@ -866,7 +918,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         lineIds: List<Long>,
         activeCommentatorIds: Set<Long> = emptySet()
     ): List<CommentaryWithText> = withContext(Dispatchers.IO) {
-        database.linkQueriesQueries.selectBySourceLineIds(lineIds).executeAsList()
+        database.linkQueriesQueries.selectLinksBySourceLineIds(lineIds).executeAsList()
             .filter { activeCommentatorIds.isEmpty() || it.targetBookId in activeCommentatorIds }
             .map {
                 CommentaryWithText(
@@ -899,15 +951,19 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     suspend fun insertLink(link: Link): Long = withContext(Dispatchers.IO) {
         logger.d{"Repository inserting link from book ${link.sourceBookId} to book ${link.targetBookId}"}
-        logger.d{"Link details - sourceLineId: ${link.sourceLineId}, targetLineId: ${link.targetLineId}"}
+        logger.d{"Link details - sourceLineId: ${link.sourceLineId}, targetLineId: ${link.targetLineId}, connectionType: ${link.connectionType.name}"}
 
         try {
+            // Get or create the connection type
+            val connectionTypeId = getOrCreateConnectionType(link.connectionType.name)
+            logger.d{"Using connection type ID: $connectionTypeId for type: ${link.connectionType.name}"}
+
             database.linkQueriesQueries.insert(
                 sourceBookId = link.sourceBookId,
                 targetBookId = link.targetBookId,
                 sourceLineId = link.sourceLineId,
                 targetLineId = link.targetLineId,
-                connectionType = link.connectionType.name
+                connectionTypeId = connectionTypeId
             )
             val linkId = database.linkQueriesQueries.lastInsertRowId().executeAsOne()
             logger.d{"Repository inserted link with ID: $linkId"}
@@ -918,7 +974,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 logger.w { "⚠️ Repository: lastInsertRowId() returned 0! This indicates insertion failed. Context: sourceBookId=${link.sourceBookId}, targetBookId=${link.targetBookId}, sourceLineId=${link.sourceLineId}, targetLineId=${link.targetLineId}, connectionType=${link.connectionType.name}" }
 
                 // Try to find a matching link
-                val existingLinks = database.linkQueriesQueries.selectBySourceBook(link.sourceBookId).executeAsList()
+                val existingLinks = database.linkQueriesQueries.selectLinksBySourceBook(link.sourceBookId).executeAsList()
                 val matchingLink = existingLinks.find { 
                     it.targetBookId == link.targetBookId && 
                     it.sourceLineId == link.sourceLineId && 
@@ -937,6 +993,46 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         } catch (e: Exception) {
             // Changed from error to warning level to reduce unnecessary error logs
             logger.w(e){"Error inserting link: ${e.message}"}
+            throw e
+        }
+    }
+
+    /**
+     * Migrates existing links to use the new connection_type table.
+     * This should be called once after updating the database schema.
+     */
+    suspend fun migrateConnectionTypes() = withContext(Dispatchers.IO) {
+        logger.d{"Starting migration of connection types"}
+
+        try {
+            // Make sure all connection types exist in the connection_type table
+            for (type in ConnectionType.values()) {
+                getOrCreateConnectionType(type.name)
+            }
+
+            // Get all links from the database
+            val links = database.linkQueriesQueries.selectLinksBySourceBook(0).executeAsList()
+            logger.d{"Found ${links.size} links to migrate"}
+
+            // For each link, update the connectionTypeId
+            var migratedCount = 0
+            for (link in links) {
+                val connectionTypeId = getOrCreateConnectionType(link.connectionType)
+
+                // Execute a raw SQL query to update the link
+                val updateSql = "UPDATE link SET connectionTypeId = $connectionTypeId WHERE id = ${link.id}"
+                executeRawQuery(updateSql)
+
+                migratedCount++
+                if (migratedCount % 100 == 0) {
+                    logger.d{"Migrated $migratedCount links so far"}
+                }
+            }
+
+            logger.d{"Successfully migrated $migratedCount links"}
+            logger.d{"Connection types migration completed successfully"}
+        } catch (e: Exception) {
+            logger.e(e){"Error during connection types migration: ${e.message}"}
             throw e
         }
     }
