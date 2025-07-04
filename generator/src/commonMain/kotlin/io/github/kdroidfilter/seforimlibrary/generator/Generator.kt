@@ -395,9 +395,11 @@ class DatabaseGenerator(
 
 
     private fun cleanHtml(html: String): String {
-        return Jsoup.clean(html, Safelist.none())
-            .trim()
-            .replace("\\s+".toRegex(), " ")
+        return HebrewTextUtils.removeNikud(
+            Jsoup.clean(html, Safelist.none())
+                .trim()
+                .replace("\\s+".toRegex(), " ")
+        )
     }
 
 
