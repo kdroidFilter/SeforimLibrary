@@ -31,6 +31,9 @@ expect fun getDatabasePath(): String
 expect fun getRepository(): SeforimRepository
 
 @Composable
+expect fun DatabaseSelectionButtonIfAvailable()
+
+@Composable
 fun App() {
     Logger.setMinSeverity(co.touchlab.kermit.Severity.Error)
     val repository = getRepository()
@@ -390,15 +393,21 @@ fun App() {
             )
         }
 
-        // Floating action button for search
+        // Floating action buttons for search and database selection
         Box(modifier = Modifier.fillMaxSize()) {
-            Button(
-                onClick = { showSearchPopup = true },
+            Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(16.dp)
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("חיפוש")
+                // Database selection button (only shown on desktop)
+                DatabaseSelectionButtonIfAvailable()
+
+                // Search button
+                Button(onClick = { showSearchPopup = true }) {
+                    Text("חיפוש")
+                }
             }
         }
 

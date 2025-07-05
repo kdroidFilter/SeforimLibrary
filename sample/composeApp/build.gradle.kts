@@ -19,6 +19,9 @@ kotlin {
             implementation(project(":core"))
             implementation(project(":dao"))
             implementation("com.mohamedrejeb.richeditor:richeditor-compose:1.0.0-rc13")
+            implementation("io.github.vinceglb:filekit-core:0.10.0-beta04")
+            implementation("io.github.vinceglb:filekit-dialogs:0.10.0-beta04")
+            implementation("io.github.vinceglb:filekit-dialogs-compose:0.10.0-beta04")
         }
 
 
