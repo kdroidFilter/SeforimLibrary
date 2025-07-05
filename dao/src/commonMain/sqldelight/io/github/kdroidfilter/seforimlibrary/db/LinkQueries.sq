@@ -48,3 +48,11 @@ DELETE FROM link WHERE sourceBookId = ? OR targetBookId = ?;
 
 lastInsertRowId:
 SELECT last_insert_rowid();
+
+-- Count links by source book
+countLinksBySourceBook:
+SELECT COUNT(*) FROM link WHERE sourceBookId = ?;
+
+-- Count links by target book
+countLinksByTargetBook:
+SELECT COUNT(*) FROM link WHERE targetBookId = ?;

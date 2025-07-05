@@ -199,3 +199,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS line_search USING fts5(
     content='line_with_book_title',
     content_rowid='id'
 );
+
+-- Table to track whether books have links (as source or target)
+CREATE TABLE IF NOT EXISTS book_has_links (
+    bookId INTEGER PRIMARY KEY,
+    hasSourceLinks INTEGER NOT NULL DEFAULT 0, -- 0 = false, 1 = true
+    hasTargetLinks INTEGER NOT NULL DEFAULT 0, -- 0 = false, 1 = true
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_book_has_source_links ON book_has_links(hasSourceLinks);
+CREATE INDEX IF NOT EXISTS idx_book_has_target_links ON book_has_links(hasTargetLinks);
