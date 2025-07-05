@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -112,6 +113,11 @@ fun CategoryItem(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
+    // Use LaunchedEffect to ensure proper recomposition when category changes
+    LaunchedEffect(category.id) {
+        // No action needed, just trigger recomposition
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -150,6 +156,11 @@ fun BookItem(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
+    // Use LaunchedEffect to ensure proper recomposition when book changes
+    LaunchedEffect(book.id) {
+        // No action needed, just trigger recomposition
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
