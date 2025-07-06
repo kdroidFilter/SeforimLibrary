@@ -302,6 +302,29 @@ fun App() {
                                                     // We don't automatically expand children anymore, 
                                                     // we just load the first level of children
                                                     // and let the user click on them to expand further
+
+                                                    // Recursive function to check for children at all levels
+                                                    suspend fun checkChildrenRecursively(entries: List<TocEntry>, currentMap: MutableMap<Long, List<TocEntry>>) {
+                                                        for (entry in entries) {
+                                                            if (!currentMap.containsKey(entry.id)) {
+                                                                val entryChildren = repository.getTocChildren(entry.id)
+                                                                // Always add the entry to the map, even if children is empty
+                                                                // This allows us to track that we've checked for children for this entry
+                                                                currentMap[entry.id] = entryChildren
+
+                                                                // Recursively check children of this entry
+                                                                if (entryChildren.isNotEmpty()) {
+                                                                    checkChildrenRecursively(entryChildren, currentMap)
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    // Check if each child has children of its own and all descendants
+                                                    // This helps us determine which entries should show the expand/collapse icon
+                                                    val updatedChildrenMap = tocChildren.toMutableMap()
+                                                    checkChildrenRecursively(children, updatedChildrenMap)
+                                                    tocChildren = updatedChildrenMap
                                                 }
                                             }
                                         }
