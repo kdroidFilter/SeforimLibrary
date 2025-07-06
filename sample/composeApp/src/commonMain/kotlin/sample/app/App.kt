@@ -42,6 +42,19 @@ fun App() {
     val repository = getRepository()
     val coroutineScope = rememberCoroutineScope()
 
+    // Helper function to get all descendant IDs recursively
+    fun getAllDescendantIds(entryId: Long, childrenMap: Map<Long, List<TocEntry>>): Set<Long> {
+        val result = mutableSetOf<Long>()
+        val children = childrenMap[entryId] ?: return result
+
+        for (child in children) {
+            result.add(child.id)
+            result.addAll(getAllDescendantIds(child.id, childrenMap))
+        }
+
+        return result
+    }
+
     // State for the UI
     var rootCategories by remember { mutableStateOf<List<Category>>(emptyList()) }
     var selectedCategory by remember { mutableStateOf<Category?>(null) }
@@ -177,28 +190,22 @@ fun App() {
                                     )
                                 }
 
-                                // Charger TOC racine
+                                // Charger uniquement la TOC racine
                                 bookToc = rootTocDeferred.await()
-                                expandedTocEntries = bookToc.map { it.id }.toSet()
 
-                                // Charger tous les niveaux de TOC de manière récursive
-                                val childrenMap = mutableMapOf<Long, List<TocEntry>>()
-
-                                // Fonction récursive pour charger tous les enfants TOC sans limitation de profondeur
-                                suspend fun loadAllTocChildren(entries: List<TocEntry>) {
-                                    for (entry in entries) {
-                                        val children = repository.getTocChildren(entry.id)
-                                        if (children.isNotEmpty()) {
-                                            childrenMap[entry.id] = children
-                                            // Charger récursivement les enfants des enfants
-                                            loadAllTocChildren(children)
-                                        }
-                                    }
+                                // Si la TOC racine est vide, essayer de charger toutes les entrées TOC
+                                if (bookToc.isEmpty()) {
+                                    bookToc = repository.getBookToc(book.id)
                                 }
 
-                                // Charger tous les niveaux de TOC
-                                loadAllTocChildren(bookToc)
+                                // Ne pas développer automatiquement les entrées TOC
+                                // et ne pas charger leurs enfants
+                                // Les enfants seront chargés uniquement lorsque l'utilisateur clique sur une entrée
+                                val expandedEntries = mutableSetOf<Long>()
+                                val childrenMap = mutableMapOf<Long, List<TocEntry>>()
+
                                 tocChildren = childrenMap
+                                expandedTocEntries = expandedEntries
                                 isLoadingToc = false  // ✅ TOC chargé
 
                             } catch (e: Exception) {
@@ -271,34 +278,32 @@ fun App() {
                                 },
                                 onEntryExpand = { tocEntry ->
                                     // Toggle expanded state
-                                    expandedTocEntries = if (expandedTocEntries.contains(tocEntry.id)) {
-                                        expandedTocEntries - tocEntry.id
+                                    val isCurrentlyExpanded = expandedTocEntries.contains(tocEntry.id)
+
+                                    if (isCurrentlyExpanded) {
+                                        // If currently expanded, collapse this entry and all its descendants
+                                        val descendantIds = getAllDescendantIds(tocEntry.id, tocChildren)
+                                        expandedTocEntries = expandedTocEntries - tocEntry.id - descendantIds
                                     } else {
-                                        expandedTocEntries + tocEntry.id
-                                    }
+                                        // If currently collapsed, expand this entry
+                                        expandedTocEntries = expandedTocEntries + tocEntry.id
 
-                                    // Load children if expanded and not already loaded
-                                    if (expandedTocEntries.contains(tocEntry.id) && !tocChildren.containsKey(tocEntry.id)) {
-                                        coroutineScope.launch {
-                                            // Recursive function to load all TOC children without depth limitation
-                                            suspend fun loadTocChildrenOnExpand(entry: TocEntry) {
-                                                val children = repository.getTocChildren(entry.id)
+                                        // Load children if not already loaded
+                                        if (!tocChildren.containsKey(tocEntry.id)) {
+                                            coroutineScope.launch {
+                                                // Load immediate children of the expanded entry
+                                                val children = repository.getTocChildren(tocEntry.id)
+
+                                                // Always update the children map, even if children is empty
+                                                // This allows us to track that we've checked for children for this entry
+                                                tocChildren = tocChildren + Pair(tocEntry.id, children)
+
                                                 if (children.isNotEmpty()) {
-                                                    // Update the children map with the new children
-                                                    tocChildren = tocChildren + Pair(entry.id, children)
-
-                                                    // Recursively load children of children
-                                                    for (child in children) {
-                                                        // Only load if not already loaded
-                                                        if (!tocChildren.containsKey(child.id)) {
-                                                            loadTocChildrenOnExpand(child)
-                                                        }
-                                                    }
+                                                    // We don't automatically expand children anymore, 
+                                                    // we just load the first level of children
+                                                    // and let the user click on them to expand further
                                                 }
                                             }
-
-                                            // Load all levels when expanding
-                                            loadTocChildrenOnExpand(tocEntry)
                                         }
                                     }
                                 }

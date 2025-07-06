@@ -260,6 +260,11 @@ fun TocEntryItem(
     onEntryClick: (TocEntry) -> Unit,
     onEntryExpand: (TocEntry) -> Unit
 ) {
+    // Check if we've already attempted to load children for this entry
+    val hasCheckedForChildren = childrenMap.containsKey(entry.id)
+    // If we've checked and the list is empty, then it truly has no children
+    val hasNoChildren = hasCheckedForChildren && childEntries.isEmpty()
+
     Column {
         Row(
             modifier = Modifier
@@ -268,8 +273,8 @@ fun TocEntryItem(
                 .padding(start = (level * 16).dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Expand/collapse icon if entry has children
-            if (childEntries.isNotEmpty()) {
+            // Show expand/collapse icon unless we've confirmed the entry has no children
+            if (!hasNoChildren) {
                 Icon(
                     imageVector = if (isExpanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = if (isExpanded) "Collapse" else "Expand",
