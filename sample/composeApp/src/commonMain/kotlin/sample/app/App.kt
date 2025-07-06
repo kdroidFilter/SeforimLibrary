@@ -4,28 +4,23 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.material3.*
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
 import io.github.kdroidfilter.seforimlibrary.core.models.Line
-import io.github.kdroidfilter.seforimlibrary.core.models.Link
 import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
 import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentaryWithText
 import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentatorInfo
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import javax.print.attribute.standard.Severity
-import sample.app.BookPopup
 
 @Composable
 expect fun getDatabasePath(): String
@@ -66,7 +61,6 @@ fun App() {
 
     var bookLines by remember { mutableStateOf<List<Line>>(emptyList()) }
     var bookCommentaries by remember { mutableStateOf<List<CommentaryWithText>>(emptyList()) }
-    var commentators by remember { mutableStateOf<List<CommentatorInfo>>(emptyList()) }
     var bookToc by remember { mutableStateOf<List<TocEntry>>(emptyList()) }
     var expandedTocEntries by remember { mutableStateOf(setOf<Long>()) }
     var tocChildren by remember { mutableStateOf<Map<Long, List<TocEntry>>>(emptyMap()) }
@@ -77,7 +71,6 @@ fun App() {
     // ✅ États de chargement
     var isLoadingBook by remember { mutableStateOf(false) }
     var isLoadingToc by remember { mutableStateOf(false) }
-    var isLoadingCategory by remember { mutableStateOf(false) }
 
     // State for popup book display
     var showBookPopup by remember { mutableStateOf(false) }
@@ -117,7 +110,6 @@ fun App() {
                     selectedBook = selectedBook,
                     onCategoryClick = { category: Category ->
                         selectedCategory = category
-                        isLoadingCategory = true
 
                         expandedCategories = if (expandedCategories.contains(category.id)) {
                             expandedCategories - category.id
@@ -151,15 +143,12 @@ fun App() {
                                         booksInCategory = booksInCategory + books
                                     }
 
-                                    isLoadingCategory = false
 
                                 } catch (e: Exception) {
-                                    isLoadingCategory = false
                                     Logger.e { "Erreur lors du chargement de la catégorie: ${e.message}" }
                                 }
                             }
                         } else {
-                            isLoadingCategory = false
                         }
                     },
                     onBookClick = { book: Book ->
@@ -175,13 +164,11 @@ fun App() {
                                     repository.getLines(book.id, 0, 30)
                                 }
                                 val rootTocDeferred = async { repository.getBookRootToc(book.id) }
-                                val commentatorsDeferred = async { repository.getAvailableCommentators(book.id) }
 
                                 // Charger le contenu principal
                                 bookLines = bookDataDeferred.await()
                                 isLoadingBook = false  // ✅ Livre chargé
 
-                                commentators = commentatorsDeferred.await()
 
                                 // Charger commentaires pour les 5 premières lignes seulement
                                 if (bookLines.isNotEmpty()) {
@@ -198,14 +185,51 @@ fun App() {
                                     bookToc = repository.getBookToc(book.id)
                                 }
 
-                                // Ne pas développer automatiquement les entrées TOC
-                                // et ne pas charger leurs enfants
-                                // Les enfants seront chargés uniquement lorsque l'utilisateur clique sur une entrée
+                                // Développer automatiquement la première entrée TOC (titre du livre)
+                                // Les autres enfants seront chargés uniquement lorsque l'utilisateur clique sur une entrée
                                 val expandedEntries = mutableSetOf<Long>()
+                                // Si la TOC n'est pas vide, ajouter la première entrée à la liste des entrées développées
+                                if (bookToc.isNotEmpty()) {
+                                    expandedEntries.add(bookToc.first().id)
+                                }
                                 val childrenMap = mutableMapOf<Long, List<TocEntry>>()
 
                                 tocChildren = childrenMap
                                 expandedTocEntries = expandedEntries
+
+                                // Si la TOC n'est pas vide, charger les enfants de la première entrée
+                                if (bookToc.isNotEmpty()) {
+                                    val firstEntry = bookToc.first()
+                                    val children = repository.getTocChildren(firstEntry.id)
+
+                                    // Toujours mettre à jour la carte des enfants, même si children est vide
+                                    // Cela nous permet de savoir qu'on a vérifié les enfants pour cette entrée
+                                    tocChildren = tocChildren + Pair(firstEntry.id, children)
+
+                                    if (children.isNotEmpty()) {
+                                        // Fonction récursive pour vérifier les enfants à tous les niveaux
+                                        suspend fun checkChildrenRecursively(entries: List<TocEntry>, currentMap: MutableMap<Long, List<TocEntry>>) {
+                                            for (entry in entries) {
+                                                if (!currentMap.containsKey(entry.id)) {
+                                                    val entryChildren = repository.getTocChildren(entry.id)
+                                                    // Toujours ajouter l'entrée à la carte, même si entryChildren est vide
+                                                    currentMap[entry.id] = entryChildren
+
+                                                    // Vérifier récursivement les enfants de cette entrée
+                                                    if (entryChildren.isNotEmpty()) {
+                                                        checkChildrenRecursively(entryChildren, currentMap)
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Vérifier si chaque enfant a ses propres enfants et tous les descendants
+                                        val updatedChildrenMap = tocChildren.toMutableMap()
+                                        checkChildrenRecursively(children, updatedChildrenMap)
+                                        tocChildren = updatedChildrenMap
+                                    }
+                                }
+
                                 isLoadingToc = false  // ✅ TOC chargé
 
                             } catch (e: Exception) {

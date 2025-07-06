@@ -5,7 +5,6 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-// Define Material 3 color scheme
 private val MonochromeColorScheme = lightColorScheme(
     primary = Color(0xFF333333),
     onPrimary = Color.White,
@@ -35,7 +34,6 @@ private val MonochromeColorScheme = lightColorScheme(
 
 @Composable
 fun AppTheme(content: @Composable () -> Unit) {
-    // Use Material 3 theme with our color scheme and typography
     MaterialTheme(
         colorScheme = MonochromeColorScheme,
         typography = notoFont(),

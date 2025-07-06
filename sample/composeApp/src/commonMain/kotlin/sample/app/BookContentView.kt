@@ -9,7 +9,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -25,12 +24,6 @@ import com.mohamedrejeb.richeditor.ui.material.RichText
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Line
 import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
-import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentaryWithText
-import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentatorInfo
-import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
-import sample.app.getRepository
-import sample.app.LineWithUniqueKey
-import sample.app.withUniqueKeys
 
 @Composable
 fun BookContentView(
@@ -94,11 +87,6 @@ fun BookContent(
 
         // Repository to load more lines
         val repository = getRepository()
-
-        // Find the index of the selected line in the list
-        val selectedIndex = selectedLine?.let { selected ->
-            currentLines.indexOfFirst { it.id == selected.id }
-        } ?: 0
 
         // Scroll to the selected line when it changes
         LaunchedEffect(selectedLine, lines) {
