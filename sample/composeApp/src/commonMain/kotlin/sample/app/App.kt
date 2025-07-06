@@ -318,9 +318,15 @@ fun App() {
                     .padding(8.dp)
             ) {
                 if (selectedBook != null) {
+                    // Check if there are comments for the selected line
+                    val hasComments = selectedLine?.let { line ->
+                        bookCommentaries.any { it.link.sourceLineId == line.id }
+                    } ?: false
+
+                    // Adjust weight based on whether there are comments
                     Box(
                         modifier = Modifier
-                            .weight(0.5f)
+                            .weight(if (hasComments) 0.5f else 1f)
                             .fillMaxWidth()
                     ) {
                         BookContentView(
@@ -337,48 +343,44 @@ fun App() {
                         )
                     }
 
-                    Box(
-                        modifier = Modifier
-                            .weight(0.5f)
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colors.surface.copy(alpha = 0.5f))
-                    ) {
-                        LineCommentsView(
-                            selectedLine = selectedLine,
-                            commentaries = bookCommentaries,
-                            onCommentClick = { commentary ->
-                                // Load the target book and its content
-                                coroutineScope.launch {
-                                    // Get the book
-                                    val targetBook = repository.getBook(commentary.link.targetBookId)
-                                    if (targetBook != null) {
-                                        popupBook = targetBook
+                    // Only show comments view if there are comments for the selected line
+                    if (hasComments) {
+                        Box(
+                            modifier = Modifier
+                                .weight(0.5f)
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colors.surface.copy(alpha = 0.5f))
+                        ) {
+                            LineCommentsView(
+                                selectedLine = selectedLine,
+                                commentaries = bookCommentaries,
+                                onCommentClick = { commentary ->
+                                    // Load the target book and its content
+                                    coroutineScope.launch {
+                                        // Get the book
+                                        val targetBook = repository.getBook(commentary.link.targetBookId)
+                                        if (targetBook != null) {
+                                            popupBook = targetBook
 
-                                        // Load the first 100 lines of the book
-                                        popupBookLines = repository.getLines(targetBook.id, 0, 100)
+                                            // Load the first 100 lines of the book
+                                            popupBookLines = repository.getLines(targetBook.id, 0, 100)
 
-                                        // Load commentaries for the first few lines
-                                        if (popupBookLines.isNotEmpty()) {
-                                            val lineIds = popupBookLines.map { it.id }
-                                            popupBookCommentaries = repository.getCommentariesForLines(lineIds)
+                                            // Load commentaries for the first few lines
+                                            if (popupBookLines.isNotEmpty()) {
+                                                val lineIds = popupBookLines.map { it.id }
+                                                popupBookCommentaries = repository.getCommentariesForLines(lineIds)
+                                            }
+
+                                            // Load commentators for this book
+                                            popupCommentators = repository.getAvailableCommentators(targetBook.id)
+
+                                            // Show the popup
+                                            showBookPopup = true
                                         }
-
-                                        // Load commentators for this book
-                                        popupCommentators = repository.getAvailableCommentators(targetBook.id)
-
-                                        // Show the popup
-                                        showBookPopup = true
                                     }
                                 }
-                            }
-                        )
-                    }
-                } else {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("בחר ספר כדי לצפות בתוכן שלו")
+                            )
+                        }
                     }
                 }
             }
