@@ -6,8 +6,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.Icon
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -164,11 +169,12 @@ fun TocEntryItem(
         ) {
             // Expand/collapse icon if entry has children
             if (childEntries.isNotEmpty()) {
-                Text(
-                    text = if (isExpanded) "▼" else "◀",
-                    color = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = if (isExpanded) "Collapse" else "Expand",
+                    tint = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
                     modifier = Modifier
-                        .width(24.dp)
+                        .size(24.dp)
                         .clickable { onEntryExpand(entry) }
                 )
             } else {

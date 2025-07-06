@@ -3,6 +3,8 @@ package sample.app
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -405,8 +407,11 @@ fun App() {
                 DatabaseSelectionButtonIfAvailable()
 
                 // Search button
-                Button(onClick = { showSearchPopup = true }) {
-                    Text("חיפוש")
+                IconButton(onClick = { showSearchPopup = true }) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search"
+                    )
                 }
             }
         }

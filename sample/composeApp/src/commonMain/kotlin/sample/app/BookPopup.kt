@@ -2,6 +2,8 @@ package sample.app
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,12 +51,15 @@ fun BookPopup(
                         style = MaterialTheme.typography.h6
                     )
                     IconButton(onClick = onDismiss) {
-                        Text("X")
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close"
+                        )
                     }
                 }
-                
+
                 Divider(modifier = Modifier.padding(vertical = 8.dp))
-                
+
                 // Book content
                 Box(modifier = Modifier.weight(1f)) {
                     BookContent(
