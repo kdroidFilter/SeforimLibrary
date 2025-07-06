@@ -65,6 +65,7 @@ fun App() {
     var popupBookLines by remember { mutableStateOf<List<Line>>(emptyList()) }
     var popupBookCommentaries by remember { mutableStateOf<List<CommentaryWithText>>(emptyList()) }
     var popupCommentators by remember { mutableStateOf<List<CommentatorInfo>>(emptyList()) }
+    var popupSelectedLine by remember { mutableStateOf<Line?>(null) }
 
     // State for search popup
     var showSearchPopup by remember { mutableStateOf(false) }
@@ -344,13 +345,32 @@ fun App() {
                                         if (targetBook != null) {
                                             popupBook = targetBook
 
-                                            // Load the first 100 lines of the book
-                                            popupBookLines = repository.getLines(targetBook.id, 0, 100)
+                                            // Get the target line
+                                            val targetLine = repository.getLine(commentary.link.targetLineId)
 
-                                            // Load commentaries for the first few lines
-                                            if (popupBookLines.isNotEmpty()) {
-                                                val lineIds = popupBookLines.map { it.id }
-                                                popupBookCommentaries = repository.getCommentariesForLines(lineIds)
+                                            if (targetLine != null) {
+                                                // Load a section of lines around the target line (25 lines before and after)
+                                                val startIndex = maxOf(0, targetLine.lineIndex - 25)
+                                                val endIndex = targetLine.lineIndex + 25
+                                                popupBookLines = repository.getLines(targetBook.id, startIndex, endIndex)
+
+                                                // Set the selected line in the popup
+                                                popupSelectedLine = targetLine
+
+                                                // Load commentaries for the visible lines
+                                                if (popupBookLines.isNotEmpty()) {
+                                                    val lineIds = popupBookLines.map { it.id }
+                                                    popupBookCommentaries = repository.getCommentariesForLines(lineIds)
+                                                }
+                                            } else {
+                                                // Fallback to loading the first 100 lines if target line not found
+                                                popupBookLines = repository.getLines(targetBook.id, 0, 100)
+
+                                                // Load commentaries for the first few lines
+                                                if (popupBookLines.isNotEmpty()) {
+                                                    val lineIds = popupBookLines.map { it.id }
+                                                    popupBookCommentaries = repository.getCommentariesForLines(lineIds)
+                                                }
                                             }
 
                                             // Load commentators for this book
@@ -375,7 +395,11 @@ fun App() {
                 lines = popupBookLines,
                 commentaries = popupBookCommentaries,
                 commentators = popupCommentators,
-                onDismiss = { showBookPopup = false }
+                selectedLine = popupSelectedLine,
+                onDismiss = { 
+                    showBookPopup = false 
+                    popupSelectedLine = null  // Reset selected line when closing popup
+                }
             )
         }
 

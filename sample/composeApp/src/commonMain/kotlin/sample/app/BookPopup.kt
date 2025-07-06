@@ -21,6 +21,7 @@ import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentatorInfo
  * @param lines The lines of the book to display
  * @param commentaries Commentaries for the book
  * @param commentators Available commentators for the book
+ * @param selectedLine The line to highlight in the book content
  * @param onDismiss Callback when the popup is dismissed
  */
 @Composable
@@ -29,6 +30,7 @@ fun BookPopup(
     lines: List<Line>,
     commentaries: List<CommentaryWithText>,
     commentators: List<CommentatorInfo>,
+    selectedLine: Line? = null,
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -63,7 +65,7 @@ fun BookPopup(
                 Box(modifier = Modifier.weight(1f)) {
                     BookContent(
                         lines = lines,
-                        selectedLine = null
+                        selectedLine = selectedLine
                     )
                 }
             }
