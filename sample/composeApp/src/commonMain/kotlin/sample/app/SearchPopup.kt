@@ -36,6 +36,7 @@ fun SearchPopup(
     var searchQuery by remember { mutableStateOf(TextFieldValue("")) }
     var searchResults by remember { mutableStateOf<List<SearchResult>>(emptyList()) }
     var isSearching by remember { mutableStateOf(false) }
+    var resultLimit by remember { mutableStateOf(20f) }
     val coroutineScope = rememberCoroutineScope()
 
     Dialog(onDismissRequest = onDismiss) {
@@ -78,7 +79,10 @@ fun SearchPopup(
                                 if (keyEvent.key == Key.Enter && searchQuery.text.isNotBlank()) {
                                     coroutineScope.launch {
                                         isSearching = true
-                                        searchResults = repository.search(searchQuery.text)
+                                        searchResults = repository.search(
+                                            query = searchQuery.text,
+                                            limit = resultLimit.toInt()
+                                        )
                                         isSearching = false
                                     }
                                     true
@@ -97,7 +101,10 @@ fun SearchPopup(
                             if (searchQuery.text.isNotBlank()) {
                                 coroutineScope.launch {
                                     isSearching = true
-                                    searchResults = repository.search(searchQuery.text)
+                                    searchResults = repository.search(
+                                        query = searchQuery.text,
+                                        limit = resultLimit.toInt()
+                                    )
                                     isSearching = false
                                 }
                             }
@@ -108,7 +115,38 @@ fun SearchPopup(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Results limit slider
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "מספר תוצאות להצגה:",
+                            style = MaterialTheme.typography.body2
+                        )
+                        Text(
+                            text = resultLimit.toInt().toString(),
+                            style = MaterialTheme.typography.body2
+                        )
+                    }
+
+                    Slider(
+                        value = resultLimit,
+                        onValueChange = { resultLimit = it },
+                        valueRange = 1f..1000f,
+                        steps = 999,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 // Search results
                 Box(modifier = Modifier.weight(1f)) {

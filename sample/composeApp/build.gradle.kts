@@ -70,7 +70,7 @@ compose.desktop {
         mainClass = "MainKt"
 
         nativeDistributions {
-            modules("java.sql")
+            modules("java.sql", "jdk.security.auth")
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "sample"
             packageVersion = "1.0.0"
