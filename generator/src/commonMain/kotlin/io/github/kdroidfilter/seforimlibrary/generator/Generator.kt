@@ -322,62 +322,49 @@ class DatabaseGenerator(
             val plainText = cleanHtml(line)
             val level = detectHeaderLevel(line)
 
-            // Check if this line is a TOC entry
             if (level > 0) {
-                // This is a TOC entry, create it first (without lineId)
-                val parentId = if (level > 1) {
-                    // Find the closest parent
-                    (level - 1 downTo 1).firstNotNullOfOrNull { parentStack[it] }
-                } else null
+                if (plainText.isBlank()) {
+                    // Header is empty: skip creating a TOC entry
+                    logger.d { "⚠️ Skipping empty header at level $level (line $lineIndex)" }
+                    parentStack.remove(level)
+                    continue
+                }
 
+                // Find parent: walk up until we find a valid parent
+                val parentId = (level - 1 downTo 1).firstNotNullOfOrNull { parentStack[it] }
 
-                // Assign explicit IDs
                 val currentTocEntryId = nextTocEntryId++
                 val currentLineId = nextLineId++
 
                 val tocEntry = TocEntry(
-                    id = currentTocEntryId, // Set explicit ID
+                    id = currentTocEntryId,
                     bookId = bookId,
                     parentId = parentId,
                     text = plainText,
                     level = level,
-                    lineId = null, // Will be set after line is inserted
+                    lineId = null
                 )
 
-                logger.d { "Inserting TOC entry with ID: $currentTocEntryId, bookId: $bookId, lineIndex: $lineIndex" }
                 val tocEntryId = repository.insertTocEntry(tocEntry)
-                logger.d { "TOC entry inserted with ID: $tocEntryId" }
-
-                // Update parent stack
                 parentStack[level] = tocEntryId
 
-                // Now insert the line
-                logger.d { "Inserting line with ID: $currentLineId, bookId: $bookId, lineIndex: $lineIndex" }
                 val lineId = repository.insertLine(
                     Line(
-                        id = currentLineId, // Set explicit ID
+                        id = currentLineId,
                         bookId = bookId,
                         lineIndex = lineIndex,
                         content = line,
                         plainText = plainText
                     )
                 )
-                logger.d { "Line inserted with ID: $lineId" }
-
-                // Update the TOC entry with the lineId
-                logger.d { "Updating TOC entry $tocEntryId with lineId: $lineId" }
                 repository.updateTocEntryLineId(tocEntryId, lineId)
-
-                // Update the line with the tocEntryId
-                logger.d { "Updating line $lineId with tocEntryId: $tocEntryId" }
                 repository.updateLineTocEntry(lineId, tocEntryId)
             } else {
-                // This is a regular line, just insert it
+                // Regular line
                 val currentLineId = nextLineId++
-                logger.d { "Inserting regular line with ID: $currentLineId, bookId: $bookId, lineIndex: $lineIndex" }
                 repository.insertLine(
                     Line(
-                        id = currentLineId, // Set explicit ID
+                        id = currentLineId,
                         bookId = bookId,
                         lineIndex = lineIndex,
                         content = line,
@@ -386,11 +373,12 @@ class DatabaseGenerator(
                 )
             }
 
-            // Log progress
             if (lineIndex % 1000 == 0) {
                 logger.i { "Progress: $lineIndex/${lines.size} lines" }
             }
         }
+
+        logger.i { "✅ Finished processing lines and TOC entries for book ID: $bookId" }
     }
 
 
