@@ -16,8 +16,10 @@ kotlin {
         commonMain.dependencies {
             implementation(compose.runtime)
             implementation(compose.foundation)
-            implementation(compose.material)
+            implementation(compose.material3)
             implementation(compose.materialIconsExtended)
+            implementation(compose.components.resources)
+
             implementation(libs.kermit)
             implementation(project(":core"))
             implementation(project(":dao"))

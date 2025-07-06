@@ -1,7 +1,7 @@
 package sample.app
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.*
+import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.*
@@ -36,7 +36,6 @@ fun BookPopup(
             modifier = Modifier
                 .fillMaxWidth(0.9f)
                 .fillMaxHeight(0.9f),
-            elevation = 8.dp,
             shape = MaterialTheme.shapes.medium
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -48,7 +47,7 @@ fun BookPopup(
                 ) {
                     Text(
                         text = book.title,
-                        style = MaterialTheme.typography.h6
+                        style = MaterialTheme.typography.bodySmall
                     )
                     IconButton(onClick = onDismiss) {
                         Icon(

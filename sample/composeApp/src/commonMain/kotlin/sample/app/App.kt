@@ -2,7 +2,6 @@ package sample.app
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.*
@@ -12,7 +11,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.material.lightColors
+import androidx.compose.material3.*
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
@@ -75,25 +74,8 @@ fun App() {
         rootCategories = repository.getRootCategories()
     }
 
-    // Define monochromatic color palette
-    val monochromeColors = lightColors(
-        primary = Color(0xFF333333),
-        primaryVariant = Color(0xFF555555),
-        secondary = Color(0xFF666666),
-        secondaryVariant = Color(0xFF888888),
-        background = Color.White,
-        surface = Color(0xFFF5F5F5),
-        error = Color(0xFF555555),
-        onPrimary = Color.White,
-        onSecondary = Color.White,
-        onBackground = Color(0xFF333333),
-        onSurface = Color(0xFF333333),
-        onError = Color.White
-    )
 
-    MaterialTheme(
-        colors = monochromeColors
-    ) {
+    AppTheme {
 
         // Main content area - 4 vertical columns
         Row(modifier = Modifier.fillMaxSize()) {
@@ -102,7 +84,7 @@ fun App() {
                 modifier = Modifier
                     .weight(0.25f)
                     .fillMaxHeight()
-                    .background(MaterialTheme.colors.surface)
+                    .background(MaterialTheme.colorScheme.surface)
                     .padding(8.dp)
             ) {
                 CategoryBookTree(
@@ -220,7 +202,7 @@ fun App() {
                 modifier = Modifier
                     .weight(0.20f)
                     .fillMaxHeight()
-                    .background(MaterialTheme.colors.surface.copy(alpha = 0.7f))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f))
                     .padding(8.dp)
             ) {
                 if (selectedBook != null) {
@@ -349,7 +331,7 @@ fun App() {
                             modifier = Modifier
                                 .weight(0.5f)
                                 .fillMaxWidth()
-                                .background(MaterialTheme.colors.surface.copy(alpha = 0.5f))
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
                         ) {
                             LineCommentsView(
                                 selectedLine = selectedLine,

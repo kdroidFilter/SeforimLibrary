@@ -6,7 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.*
+import androidx.compose.material3.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -64,9 +64,8 @@ fun SearchPopup(
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight(),
-            elevation = 8.dp,
+                .fillMaxSize()
+                .padding(16.dp),
             shape = MaterialTheme.shapes.medium
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -78,14 +77,18 @@ fun SearchPopup(
                 ) {
                     Text(
                         text = "חיפוש",
-                        style = MaterialTheme.typography.h6
+                        style = MaterialTheme.typography.bodyMedium
                     )
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Default.Close, contentDescription = "Close")
                     }
                 }
 
-                Divider(modifier = Modifier.padding(vertical = 8.dp))
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 8.dp),
+                    thickness = DividerDefaults.Thickness,
+                    color = DividerDefaults.color
+                )
 
                 // Search input and button
                 Row(
@@ -155,11 +158,11 @@ fun SearchPopup(
                     ) {
                         Text(
                             text = "מספר תוצאות להצגה:",
-                            style = MaterialTheme.typography.body2
+                            style = MaterialTheme.typography.bodyLarge
                         )
                         Text(
                             text = resultLimit.toInt().toString(),
-                            style = MaterialTheme.typography.body2
+                            style = MaterialTheme.typography.bodyLarge
                         )
                     }
 
@@ -182,7 +185,7 @@ fun SearchPopup(
                     ) {
                         Text(
                             text = "סנן לפי ספר:",
-                            style = MaterialTheme.typography.body2
+                            style = MaterialTheme.typography.bodyLarge
                         )
 
                         Spacer(modifier = Modifier.height(4.dp))
@@ -216,13 +219,9 @@ fun SearchPopup(
                                                 }
                                             },
                                             modifier = Modifier.weight(1f),
-                                            colors = ButtonDefaults.outlinedButtonColors(
-                                                backgroundColor = if (isSelected) MaterialTheme.colors.primary.copy(alpha = 0.1f) else Color.Transparent,
-                                                contentColor = if (isSelected) MaterialTheme.colors.primary else MaterialTheme.colors.onSurface
-                                            ),
                                             border = BorderStroke(
                                                 width = 1.dp,
-                                                color = if (isSelected) MaterialTheme.colors.primary else MaterialTheme.colors.onSurface.copy(alpha = 0.12f)
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
                                             )
                                         ) {
                                             Text(bookTitle, maxLines = 1)
@@ -294,19 +293,18 @@ fun SearchResultItem(
     result: SearchResult,
     onClick: () -> Unit
 ) {
-    Card(
+    ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .clickable(onClick = onClick),
-        elevation = 2.dp
     ) {
         Column(
             modifier = Modifier.padding(16.dp)
         ) {
             Text(
                 text = result.bookTitle,
-                style = MaterialTheme.typography.subtitle1
+                style = MaterialTheme.typography.titleMedium
             )
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -329,7 +327,7 @@ fun SearchResultItem(
 
             Text(
                 text = "שורה: ${result.lineIndex + 1}",
-                style = MaterialTheme.typography.caption
+                style = MaterialTheme.typography.bodySmall
             )
         }
     }

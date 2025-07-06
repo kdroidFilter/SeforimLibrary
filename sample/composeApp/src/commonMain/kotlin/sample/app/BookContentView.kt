@@ -6,13 +6,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.Icon
-import androidx.compose.material.MaterialTheme
-import androidx.compose.material.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,6 +27,10 @@ import io.github.kdroidfilter.seforimlibrary.core.models.Line
 import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
 import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentaryWithText
 import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentatorInfo
+import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
+import sample.app.getRepository
+import sample.app.LineWithUniqueKey
+import sample.app.withUniqueKeys
 
 @Composable
 fun BookContentView(
@@ -72,9 +76,28 @@ fun BookContent(
         // Create a LazyListState to control scrolling
         val listState = rememberLazyListState()
 
+        // Keep track of the currently loaded lines
+        val book = remember { lines.firstOrNull() }
+        val bookId = remember { book?.bookId ?: 0L }
+
+        // Define the window size and offset for pagination
+        val windowSize = 50 // Number of lines to display at once
+        val loadOffset = 15 // Load more lines when this close to the edge
+
+        // State to track the current window of lines
+        var currentLines by remember { mutableStateOf(lines) }
+        var startIndex by remember { mutableStateOf(lines.firstOrNull()?.lineIndex ?: 0) }
+        var endIndex by remember { mutableStateOf((lines.lastOrNull()?.lineIndex ?: 0) + 1) }
+
+        // Convert lines to LineWithUniqueKey objects
+        var currentLinesWithKeys by remember { mutableStateOf(currentLines.withUniqueKeys()) }
+
+        // Repository to load more lines
+        val repository = getRepository()
+
         // Find the index of the selected line in the list
         val selectedIndex = selectedLine?.let { selected ->
-            lines.indexOfFirst { it.id == selected.id }
+            currentLines.indexOfFirst { it.id == selected.id }
         } ?: 0
 
         // Scroll to the selected line when it changes
@@ -84,14 +107,63 @@ fun BookContent(
             }
         }
 
+        // Load more lines when approaching the edges
+        LaunchedEffect(listState.firstVisibleItemIndex) {
+            // If we're close to the top, load more lines above
+            if (listState.firstVisibleItemIndex < loadOffset && startIndex > 0) {
+                val newStartIndex = maxOf(0, startIndex - windowSize / 2)
+                val newLines = repository.getLines(bookId, newStartIndex, startIndex)
+                if (newLines.isNotEmpty()) {
+                    currentLines = newLines + currentLines
+                    startIndex = newStartIndex
+                    // Update lines with unique keys
+                    currentLinesWithKeys = currentLines.withUniqueKeys()
+                }
+            }
+        }
+
+        LaunchedEffect(listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index) {
+            // If we're close to the bottom, load more lines below
+            val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            if (lastVisibleIndex >= currentLines.size - loadOffset) {
+                val newEndIndex = endIndex + windowSize / 2
+                val newLines = repository.getLines(bookId, endIndex, newEndIndex)
+                if (newLines.isNotEmpty()) {
+                    currentLines = currentLines + newLines
+                    endIndex = newEndIndex
+                    // Update lines with unique keys
+                    currentLinesWithKeys = currentLines.withUniqueKeys()
+                }
+            }
+        }
+
+        // Limit the number of lines in memory to maintain efficiency
+        LaunchedEffect(currentLines.size) {
+            if (currentLines.size > windowSize * 3) {
+                // If we have too many lines, trim from the opposite end of where we're viewing
+                if (listState.firstVisibleItemIndex < currentLines.size / 2) {
+                    // We're closer to the top, trim from the bottom
+                    currentLines = currentLines.take(windowSize * 2)
+                    endIndex = (currentLines.lastOrNull()?.lineIndex ?: 0) + 1
+                } else {
+                    // We're closer to the bottom, trim from the top
+                    currentLines = currentLines.takeLast(windowSize * 2)
+                    startIndex = currentLines.firstOrNull()?.lineIndex ?: 0
+                }
+                // Update lines with unique keys
+                currentLinesWithKeys = currentLines.withUniqueKeys()
+            }
+        }
+
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize().padding(16.dp)
         ) {
             items(
-                items = lines,
-                key = { it.id } // Use line.id as key for stable identity
-            ) { line ->
+                items = currentLinesWithKeys,
+                key = { it.uniqueKey } // Use the unique key for stable identity
+            ) { lineWithKey ->
+                val line = lineWithKey.line
                 val isSelected = selectedLine?.id == line.id
                 val state = rememberRichTextState()
 
@@ -105,7 +177,7 @@ fun BookContent(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onLineSelected(line) }
-                        .background(if (isSelected) MaterialTheme.colors.primary.copy(alpha = 0.1f) else Color.Transparent)
+                        .background(if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f) else Color.Transparent)
                         .padding(vertical = 4.dp),
                 )
             }
@@ -172,7 +244,7 @@ fun TocEntryItem(
                 Icon(
                     imageVector = if (isExpanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = if (isExpanded) "Collapse" else "Expand",
-                    tint = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                     modifier = Modifier
                         .size(24.dp)
                         .clickable { onEntryExpand(entry) }

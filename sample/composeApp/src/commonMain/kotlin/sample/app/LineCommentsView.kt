@@ -6,6 +6,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.*
+import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -126,7 +132,7 @@ fun LineCommentsView(
                                 fontSize = 16.sp,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(MaterialTheme.colors.secondary.copy(alpha = 0.2f))
+                                    .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f))
                                     .padding(8.dp)
                             )
                         }
@@ -143,7 +149,7 @@ fun LineCommentsView(
                                     fontSize = 14.sp
                                 )
                             }
-                            Divider(color = MaterialTheme.colors.onSurface.copy(alpha = 0.2f), thickness = 0.5.dp)
+                            HorizontalDivider(Modifier, 0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
                         }
                     }
                 }
