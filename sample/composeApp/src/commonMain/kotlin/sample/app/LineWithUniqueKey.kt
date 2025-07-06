@@ -1,15 +1,17 @@
 package sample.app
 
 import io.github.kdroidfilter.seforimlibrary.core.models.Line
+import kotlin.random.Random
 
 /**
  * A wrapper class for Line that provides a unique key for use in LazyColumn.
  * This is used to ensure unique keys in LazyColumn even when the same Line object appears multiple times.
  */
 data class LineWithUniqueKey(val line: Line) {
-    // Generate a unique key for this line by combining its ID with the object's hashCode
-    val uniqueKey: String = "${line.id}_${hashCode()}"
-    
+    // Generate a truly unique key for this line by combining its ID with a UUID-like string
+    // This ensures uniqueness even if the same Line object appears multiple times
+    val uniqueKey: String = "${line.id}_${System.nanoTime()}_${Random.nextInt()}"
+
     // Delegate properties to the wrapped Line object
     val id: Long get() = line.id
     val bookId: Long get() = line.bookId

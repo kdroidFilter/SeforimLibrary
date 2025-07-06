@@ -102,8 +102,37 @@ fun BookContent(
 
         // Scroll to the selected line when it changes
         LaunchedEffect(selectedLine) {
-            if (selectedLine != null && selectedIndex >= 0) {
-                listState.animateScrollToItem(selectedIndex)
+            if (selectedLine != null) {
+                // Check if the selected line is in the current window
+                val selectedIndex = currentLines.indexOfFirst { it.id == selectedLine.id }
+
+                if (selectedIndex >= 0) {
+                    // If the line is already in our current window, just scroll to it
+                    listState.animateScrollToItem(selectedIndex)
+                } else {
+                    // If the line is not in our current window, we need to load it
+                    // Load a window of lines centered around the selected line
+                    val lineIndex = selectedLine.lineIndex
+                    val newStartIndex = maxOf(0, lineIndex - windowSize / 2)
+                    val newEndIndex = lineIndex + windowSize / 2
+
+                    // Load the lines from the repository
+                    val newLines = repository.getLines(bookId, newStartIndex, newEndIndex)
+                    if (newLines.isNotEmpty()) {
+                        // Update our current window
+                        currentLines = newLines
+                        startIndex = newStartIndex
+                        endIndex = newEndIndex
+                        // Update lines with unique keys
+                        currentLinesWithKeys = currentLines.withUniqueKeys()
+
+                        // Now find the index of the selected line in the new window and scroll to it
+                        val newSelectedIndex = currentLines.indexOfFirst { it.id == selectedLine.id }
+                        if (newSelectedIndex >= 0) {
+                            listState.scrollToItem(newSelectedIndex)
+                        }
+                    }
+                }
             }
         }
 
