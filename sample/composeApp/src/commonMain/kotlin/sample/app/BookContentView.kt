@@ -77,20 +77,20 @@ fun BookContent(
         val listState = rememberLazyListState()
 
         // Keep track of the currently loaded lines
-        val book = remember { lines.firstOrNull() }
-        val bookId = remember { book?.bookId ?: 0L }
+        val book = remember(lines) { lines.firstOrNull() }
+        val bookId = remember(book) { book?.bookId ?: 0L }
 
         // Define the window size and offset for pagination
         val windowSize = 50 // Number of lines to display at once
         val loadOffset = 15 // Load more lines when this close to the edge
 
         // State to track the current window of lines
-        var currentLines by remember { mutableStateOf(lines) }
-        var startIndex by remember { mutableStateOf(lines.firstOrNull()?.lineIndex ?: 0) }
-        var endIndex by remember { mutableStateOf((lines.lastOrNull()?.lineIndex ?: 0) + 1) }
+        var currentLines by remember(lines) { mutableStateOf(lines) }
+        var startIndex by remember(lines) { mutableStateOf(lines.firstOrNull()?.lineIndex ?: 0) }
+        var endIndex by remember(lines) { mutableStateOf((lines.lastOrNull()?.lineIndex ?: 0) + 1) }
 
         // Convert lines to LineWithUniqueKey objects
-        var currentLinesWithKeys by remember { mutableStateOf(currentLines.withUniqueKeys()) }
+        var currentLinesWithKeys by remember(currentLines) { mutableStateOf(currentLines.withUniqueKeys()) }
 
         // Repository to load more lines
         val repository = getRepository()
@@ -101,7 +101,7 @@ fun BookContent(
         } ?: 0
 
         // Scroll to the selected line when it changes
-        LaunchedEffect(selectedLine) {
+        LaunchedEffect(selectedLine, lines) {
             if (selectedLine != null) {
                 // Check if the selected line is in the current window
                 val selectedIndex = currentLines.indexOfFirst { it.id == selectedLine.id }

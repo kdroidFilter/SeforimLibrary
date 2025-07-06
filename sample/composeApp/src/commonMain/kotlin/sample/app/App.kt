@@ -231,10 +231,10 @@ fun App() {
                                         if (line != null) {
                                             // Make sure the line is in the bookLines list
                                             if (!bookLines.any { it.id == lineId }) {
-                                                // If we need to add the line to the list, we'll load a small section around it
-                                                // to provide context, but we're not using the "50" calculation anymore
-                                                val startIndex = maxOf(0, line.lineIndex - 5)
-                                                val endIndex = line.lineIndex + 5
+                                                // If we need to add the line to the list, we'll load a larger section around it
+                                                // to match the window size in BookContentView.kt (25 lines before and 25 lines after)
+                                                val startIndex = maxOf(0, line.lineIndex - 25)
+                                                val endIndex = line.lineIndex + 25
                                                 bookLines = repository.getLines(selectedBook!!.id, startIndex, endIndex)
                                             }
 
