@@ -1,7 +1,9 @@
 package sample.app
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.*
+import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -19,6 +21,7 @@ import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentatorInfo
  * @param lines The lines of the book to display
  * @param commentaries Commentaries for the book
  * @param commentators Available commentators for the book
+ * @param selectedLine The line to highlight in the book content
  * @param onDismiss Callback when the popup is dismissed
  */
 @Composable
@@ -27,6 +30,7 @@ fun BookPopup(
     lines: List<Line>,
     commentaries: List<CommentaryWithText>,
     commentators: List<CommentatorInfo>,
+    selectedLine: Line? = null,
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -34,7 +38,6 @@ fun BookPopup(
             modifier = Modifier
                 .fillMaxWidth(0.9f)
                 .fillMaxHeight(0.9f),
-            elevation = 8.dp,
             shape = MaterialTheme.shapes.medium
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -46,20 +49,23 @@ fun BookPopup(
                 ) {
                     Text(
                         text = book.title,
-                        style = MaterialTheme.typography.h6
+                        style = MaterialTheme.typography.bodySmall
                     )
                     IconButton(onClick = onDismiss) {
-                        Text("X")
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close"
+                        )
                     }
                 }
-                
+
                 Divider(modifier = Modifier.padding(vertical = 8.dp))
-                
+
                 // Book content
                 Box(modifier = Modifier.weight(1f)) {
                     BookContent(
                         lines = lines,
-                        selectedLine = null
+                        selectedLine = selectedLine
                     )
                 }
             }

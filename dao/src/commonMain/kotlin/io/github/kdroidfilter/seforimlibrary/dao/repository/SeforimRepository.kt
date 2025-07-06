@@ -1118,6 +1118,245 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     /**
+     * Updates the book_has_links table to indicate whether a book has source links, target links, or both.
+     * 
+     * @param bookId The ID of the book to update
+     * @param hasSourceLinks Whether the book has source links (true) or not (false)
+     * @param hasTargetLinks Whether the book has target links (true) or not (false)
+     */
+    suspend fun updateBookHasLinks(bookId: Long, hasSourceLinks: Boolean, hasTargetLinks: Boolean) = withContext(Dispatchers.IO) {
+        logger.d { "Updating book_has_links for book $bookId: hasSourceLinks=$hasSourceLinks, hasTargetLinks=$hasTargetLinks" }
+        val hasSourceLinksInt = if (hasSourceLinks) 1L else 0L
+        val hasTargetLinksInt = if (hasTargetLinks) 1L else 0L
+
+        // Use upsert to insert or update the book's link status
+        database.bookHasLinksQueriesQueries.upsert(bookId, hasSourceLinksInt, hasTargetLinksInt)
+
+        logger.d { "Updated book_has_links for book $bookId: hasSourceLinks=$hasSourceLinks, hasTargetLinks=$hasTargetLinks" }
+    }
+
+    /**
+     * Updates only the source links status for a book.
+     * 
+     * @param bookId The ID of the book to update
+     * @param hasSourceLinks Whether the book has source links (true) or not (false)
+     */
+    suspend fun updateBookSourceLinks(bookId: Long, hasSourceLinks: Boolean) = withContext(Dispatchers.IO) {
+        logger.d { "Updating source links for book $bookId: hasSourceLinks=$hasSourceLinks" }
+        val hasSourceLinksInt = if (hasSourceLinks) 1L else 0L
+
+        // Update only the source links status
+        database.bookHasLinksQueriesQueries.updateSourceLinks(hasSourceLinksInt, bookId)
+
+        logger.d { "Updated source links for book $bookId: hasSourceLinks=$hasSourceLinks" }
+    }
+
+    /**
+     * Updates only the target links status for a book.
+     * 
+     * @param bookId The ID of the book to update
+     * @param hasTargetLinks Whether the book has target links (true) or not (false)
+     */
+    suspend fun updateBookTargetLinks(bookId: Long, hasTargetLinks: Boolean) = withContext(Dispatchers.IO) {
+        logger.d { "Updating target links for book $bookId: hasTargetLinks=$hasTargetLinks" }
+        val hasTargetLinksInt = if (hasTargetLinks) 1L else 0L
+
+        // Update only the target links status
+        database.bookHasLinksQueriesQueries.updateTargetLinks(hasTargetLinksInt, bookId)
+
+        logger.d { "Updated target links for book $bookId: hasTargetLinks=$hasTargetLinks" }
+    }
+
+    /**
+     * Checks if a book has any links (source or target).
+     * 
+     * @param bookId The ID of the book to check
+     * @return True if the book has any links, false otherwise
+     */
+    suspend fun bookHasAnyLinks(bookId: Long): Boolean = withContext(Dispatchers.IO) {
+        logger.d { "Checking if book $bookId has any links" }
+
+        // Check if the book has any links as source or target
+        val hasSourceLinks = bookHasSourceLinks(bookId)
+        val hasTargetLinks = bookHasTargetLinks(bookId)
+        val result = hasSourceLinks || hasTargetLinks
+
+        logger.d { "Book $bookId has any links: $result" }
+        result
+    }
+
+    /**
+     * Checks if a book has source links.
+     * 
+     * @param bookId The ID of the book to check
+     * @return True if the book has source links, false otherwise
+     */
+    suspend fun bookHasSourceLinks(bookId: Long): Boolean = withContext(Dispatchers.IO) {
+        logger.d { "Checking if book $bookId has source links" }
+        val count = countLinksBySourceBook(bookId)
+        val result = count > 0
+        logger.d { "Book $bookId has source links: $result" }
+        result
+    }
+
+    /**
+     * Checks if a book has target links.
+     * 
+     * @param bookId The ID of the book to check
+     * @return True if the book has target links, false otherwise
+     */
+    suspend fun bookHasTargetLinks(bookId: Long): Boolean = withContext(Dispatchers.IO) {
+        logger.d { "Checking if book $bookId has target links" }
+        val count = countLinksByTargetBook(bookId)
+        val result = count > 0
+        logger.d { "Book $bookId has target links: $result" }
+        result
+    }
+
+    /**
+     * Gets all books that have any links (source or target).
+     * 
+     * @return A list of books that have any links
+     */
+    suspend fun getBooksWithAnyLinks(): List<Book> = withContext(Dispatchers.IO) {
+        logger.d { "Getting all books with any links" }
+        val books = database.bookHasLinksQueriesQueries.selectBooksWithAnyLinks().executeAsList()
+        logger.d { "Found ${books.size} books with any links" }
+
+        // Convert the database books to model books
+        books.map { bookData ->
+            val authors = getBookAuthors(bookData.id)
+            val topics = getBookTopics(bookData.id)
+            val pubPlaces = getBookPubPlaces(bookData.id)
+            val pubDates = getBookPubDates(bookData.id)
+            bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+        }
+    }
+
+    /**
+     * Gets all books that have source links.
+     * 
+     * @return A list of books that have source links
+     */
+    suspend fun getBooksWithSourceLinks(): List<Book> = withContext(Dispatchers.IO) {
+        logger.d { "Getting all books with source links" }
+        val books = database.bookHasLinksQueriesQueries.selectBooksWithSourceLinks().executeAsList()
+        logger.d { "Found ${books.size} books with source links" }
+
+        // Convert the database books to model books
+        books.map { bookData ->
+            val authors = getBookAuthors(bookData.id)
+            val topics = getBookTopics(bookData.id)
+            val pubPlaces = getBookPubPlaces(bookData.id)
+            val pubDates = getBookPubDates(bookData.id)
+            bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+        }
+    }
+
+    /**
+     * Gets all books that have target links.
+     * 
+     * @return A list of books that have target links
+     */
+    suspend fun getBooksWithTargetLinks(): List<Book> = withContext(Dispatchers.IO) {
+        logger.d { "Getting all books with target links" }
+        val books = database.bookHasLinksQueriesQueries.selectBooksWithTargetLinks().executeAsList()
+        logger.d { "Found ${books.size} books with target links" }
+
+        // Convert the database books to model books
+        books.map { bookData ->
+            val authors = getBookAuthors(bookData.id)
+            val topics = getBookTopics(bookData.id)
+            val pubPlaces = getBookPubPlaces(bookData.id)
+            val pubDates = getBookPubDates(bookData.id)
+            bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+        }
+    }
+
+    /**
+     * Counts the number of books that have any links (source or target).
+     * 
+     * @return The number of books that have any links
+     */
+    suspend fun countBooksWithAnyLinks(): Long = withContext(Dispatchers.IO) {
+        logger.d { "Counting books with any links" }
+        val count = database.bookHasLinksQueriesQueries.countBooksWithAnyLinks().executeAsOne()
+        logger.d { "Found $count books with any links" }
+        count
+    }
+
+    /**
+     * Counts the number of books that have source links.
+     * 
+     * @return The number of books that have source links
+     */
+    suspend fun countBooksWithSourceLinks(): Long = withContext(Dispatchers.IO) {
+        logger.d { "Counting books with source links" }
+        val count = database.bookHasLinksQueriesQueries.countBooksWithSourceLinks().executeAsOne()
+        logger.d { "Found $count books with source links" }
+        count
+    }
+
+    /**
+     * Counts the number of books that have target links.
+     * 
+     * @return The number of books that have target links
+     */
+    suspend fun countBooksWithTargetLinks(): Long = withContext(Dispatchers.IO) {
+        logger.d { "Counting books with target links" }
+        val count = database.bookHasLinksQueriesQueries.countBooksWithTargetLinks().executeAsOne()
+        logger.d { "Found $count books with target links" }
+        count
+    }
+
+
+    /**
+     * Gets all books from the database.
+     * 
+     * @return A list of all books
+     */
+    suspend fun getAllBooks(): List<Book> = withContext(Dispatchers.IO) {
+        logger.d { "Getting all books" }
+        val books = database.bookQueriesQueries.selectAll().executeAsList()
+        logger.d { "Found ${books.size} books" }
+
+        // Convert the database books to model books
+        books.map { bookData ->
+            val authors = getBookAuthors(bookData.id)
+            val topics = getBookTopics(bookData.id)
+            val pubPlaces = getBookPubPlaces(bookData.id)
+            val pubDates = getBookPubDates(bookData.id)
+            bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+        }
+    }
+
+    /**
+     * Counts the number of links where the given book is the source.
+     * 
+     * @param bookId The ID of the book to count links for
+     * @return The number of links where the book is the source
+     */
+    suspend fun countLinksBySourceBook(bookId: Long): Long = withContext(Dispatchers.IO) {
+        logger.d { "Counting links where book $bookId is the source" }
+        val count = database.linkQueriesQueries.countLinksBySourceBook(bookId).executeAsOne()
+        logger.d { "Found $count links where book $bookId is the source" }
+        count
+    }
+
+    /**
+     * Counts the number of links where the given book is the target.
+     * 
+     * @param bookId The ID of the book to count links for
+     * @return The number of links where the book is the target
+     */
+    suspend fun countLinksByTargetBook(bookId: Long): Long = withContext(Dispatchers.IO) {
+        logger.d { "Counting links where book $bookId is the target" }
+        val count = database.linkQueriesQueries.countLinksByTargetBook(bookId).executeAsOne()
+        logger.d { "Found $count links where book $bookId is the target" }
+        count
+    }
+
+    /**
      * Closes the database connection.
      * Should be called when the repository is no longer needed.
      */

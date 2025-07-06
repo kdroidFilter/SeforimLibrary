@@ -1,3 +1,6 @@
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -15,7 +18,9 @@ fun main() {
             onCloseRequest = ::exitApplication,
         ) {
             window.minimumSize = Dimension(350, 600)
-            App()
+            CompositionLocalProvider(LocalDensity provides Density(density = 1f, fontScale = 1.0f)) {
+                App()
+            }
         }
     }
 }

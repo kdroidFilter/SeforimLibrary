@@ -4,8 +4,15 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -112,6 +119,11 @@ fun CategoryItem(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
+    // Use LaunchedEffect to ensure proper recomposition when category changes
+    LaunchedEffect(category.id) {
+        // No action needed, just trigger recomposition
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -119,18 +131,20 @@ fun CategoryItem(
             .padding(start = (level * 16).dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Simple text indicator instead of icon
-        Text(
-            text = if (isExpanded) "▼" else "◀",
-            color = Color.Gray,
-            modifier = Modifier.width(24.dp)
+        // Icon for expand/collapse
+        Icon(
+            imageVector = if (isExpanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = if (isExpanded) "Collapse" else "Expand",
+            tint = Color.Gray,
+            modifier = Modifier.size(24.dp)
         )
 
-        // Simple text indicator for folder
-        Text(
-            text = "📁",
-            color = if (isSelected) Color.Blue else Color.Gray,
-            modifier = Modifier.width(24.dp)
+        // Icon for folder
+        Icon(
+            imageVector = Icons.Default.Folder,
+            contentDescription = "Folder",
+            tint = if (isSelected) Color.Blue else Color.Gray,
+            modifier = Modifier.size(24.dp)
         )
 
         Spacer(modifier = Modifier.width(8.dp))
@@ -150,6 +164,11 @@ fun BookItem(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
+    // Use LaunchedEffect to ensure proper recomposition when book changes
+    LaunchedEffect(book.id) {
+        // No action needed, just trigger recomposition
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -159,11 +178,12 @@ fun BookItem(
     ) {
         Spacer(modifier = Modifier.width(24.dp))
 
-        // Simple text indicator for book
-        Text(
-            text = "📕",
-            color = if (isSelected) Color.Blue else Color.Gray,
-            modifier = Modifier.width(24.dp)
+        // Icon for book
+        Icon(
+            imageVector = Icons.Default.Book,
+            contentDescription = "Book",
+            tint = if (isSelected) Color.Blue else Color.Gray,
+            modifier = Modifier.size(24.dp)
         )
 
         Spacer(modifier = Modifier.width(8.dp))

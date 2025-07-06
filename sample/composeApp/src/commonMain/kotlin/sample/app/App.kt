@@ -2,7 +2,8 @@ package sample.app
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -10,7 +11,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.material.lightColors
+import androidx.compose.material3.*
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
@@ -29,6 +30,9 @@ expect fun getDatabasePath(): String
 
 @Composable
 expect fun getRepository(): SeforimRepository
+
+@Composable
+expect fun DatabaseSelectionButtonIfAvailable()
 
 @Composable
 fun App() {
@@ -61,6 +65,7 @@ fun App() {
     var popupBookLines by remember { mutableStateOf<List<Line>>(emptyList()) }
     var popupBookCommentaries by remember { mutableStateOf<List<CommentaryWithText>>(emptyList()) }
     var popupCommentators by remember { mutableStateOf<List<CommentatorInfo>>(emptyList()) }
+    var popupSelectedLine by remember { mutableStateOf<Line?>(null) }
 
     // State for search popup
     var showSearchPopup by remember { mutableStateOf(false) }
@@ -70,25 +75,8 @@ fun App() {
         rootCategories = repository.getRootCategories()
     }
 
-    // Define monochromatic color palette
-    val monochromeColors = lightColors(
-        primary = Color(0xFF333333),
-        primaryVariant = Color(0xFF555555),
-        secondary = Color(0xFF666666),
-        secondaryVariant = Color(0xFF888888),
-        background = Color.White,
-        surface = Color(0xFFF5F5F5),
-        error = Color(0xFF555555),
-        onPrimary = Color.White,
-        onSecondary = Color.White,
-        onBackground = Color(0xFF333333),
-        onSurface = Color(0xFF333333),
-        onError = Color.White
-    )
 
-    MaterialTheme(
-        colors = monochromeColors
-    ) {
+    AppTheme {
 
         // Main content area - 4 vertical columns
         Row(modifier = Modifier.fillMaxSize()) {
@@ -97,7 +85,7 @@ fun App() {
                 modifier = Modifier
                     .weight(0.25f)
                     .fillMaxHeight()
-                    .background(MaterialTheme.colors.surface)
+                    .background(MaterialTheme.colorScheme.surface)
                     .padding(8.dp)
             ) {
                 CategoryBookTree(
@@ -215,7 +203,7 @@ fun App() {
                 modifier = Modifier
                     .weight(0.20f)
                     .fillMaxHeight()
-                    .background(MaterialTheme.colors.surface.copy(alpha = 0.7f))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f))
                     .padding(8.dp)
             ) {
                 if (selectedBook != null) {
@@ -244,10 +232,10 @@ fun App() {
                                         if (line != null) {
                                             // Make sure the line is in the bookLines list
                                             if (!bookLines.any { it.id == lineId }) {
-                                                // If we need to add the line to the list, we'll load a small section around it
-                                                // to provide context, but we're not using the "50" calculation anymore
-                                                val startIndex = maxOf(0, line.lineIndex - 5)
-                                                val endIndex = line.lineIndex + 5
+                                                // If we need to add the line to the list, we'll load a larger section around it
+                                                // to match the window size in BookContentView.kt (25 lines before and 25 lines after)
+                                                val startIndex = maxOf(0, line.lineIndex - 25)
+                                                val endIndex = line.lineIndex + 25
                                                 bookLines = repository.getLines(selectedBook!!.id, startIndex, endIndex)
                                             }
 
@@ -313,9 +301,15 @@ fun App() {
                     .padding(8.dp)
             ) {
                 if (selectedBook != null) {
+                    // Check if there are comments for the selected line
+                    val hasComments = selectedLine?.let { line ->
+                        bookCommentaries.any { it.link.sourceLineId == line.id }
+                    } ?: false
+
+                    // Adjust weight based on whether there are comments
                     Box(
                         modifier = Modifier
-                            .weight(0.5f)
+                            .weight(if (hasComments) 0.5f else 1f)
                             .fillMaxWidth()
                     ) {
                         BookContentView(
@@ -332,48 +326,63 @@ fun App() {
                         )
                     }
 
-                    Box(
-                        modifier = Modifier
-                            .weight(0.5f)
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colors.surface.copy(alpha = 0.5f))
-                    ) {
-                        LineCommentsView(
-                            selectedLine = selectedLine,
-                            commentaries = bookCommentaries,
-                            onCommentClick = { commentary ->
-                                // Load the target book and its content
-                                coroutineScope.launch {
-                                    // Get the book
-                                    val targetBook = repository.getBook(commentary.link.targetBookId)
-                                    if (targetBook != null) {
-                                        popupBook = targetBook
+                    // Only show comments view if there are comments for the selected line
+                    if (hasComments) {
+                        Box(
+                            modifier = Modifier
+                                .weight(0.5f)
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+                        ) {
+                            LineCommentsView(
+                                selectedLine = selectedLine,
+                                commentaries = bookCommentaries,
+                                onCommentClick = { commentary ->
+                                    // Load the target book and its content
+                                    coroutineScope.launch {
+                                        // Get the book
+                                        val targetBook = repository.getBook(commentary.link.targetBookId)
+                                        if (targetBook != null) {
+                                            popupBook = targetBook
 
-                                        // Load the first 100 lines of the book
-                                        popupBookLines = repository.getLines(targetBook.id, 0, 100)
+                                            // Get the target line
+                                            val targetLine = repository.getLine(commentary.link.targetLineId)
 
-                                        // Load commentaries for the first few lines
-                                        if (popupBookLines.isNotEmpty()) {
-                                            val lineIds = popupBookLines.map { it.id }
-                                            popupBookCommentaries = repository.getCommentariesForLines(lineIds)
+                                            if (targetLine != null) {
+                                                // Load a section of lines around the target line (25 lines before and after)
+                                                val startIndex = maxOf(0, targetLine.lineIndex - 25)
+                                                val endIndex = targetLine.lineIndex + 25
+                                                popupBookLines = repository.getLines(targetBook.id, startIndex, endIndex)
+
+                                                // Set the selected line in the popup
+                                                popupSelectedLine = targetLine
+
+                                                // Load commentaries for the visible lines
+                                                if (popupBookLines.isNotEmpty()) {
+                                                    val lineIds = popupBookLines.map { it.id }
+                                                    popupBookCommentaries = repository.getCommentariesForLines(lineIds)
+                                                }
+                                            } else {
+                                                // Fallback to loading the first 100 lines if target line not found
+                                                popupBookLines = repository.getLines(targetBook.id, 0, 100)
+
+                                                // Load commentaries for the first few lines
+                                                if (popupBookLines.isNotEmpty()) {
+                                                    val lineIds = popupBookLines.map { it.id }
+                                                    popupBookCommentaries = repository.getCommentariesForLines(lineIds)
+                                                }
+                                            }
+
+                                            // Load commentators for this book
+                                            popupCommentators = repository.getAvailableCommentators(targetBook.id)
+
+                                            // Show the popup
+                                            showBookPopup = true
                                         }
-
-                                        // Load commentators for this book
-                                        popupCommentators = repository.getAvailableCommentators(targetBook.id)
-
-                                        // Show the popup
-                                        showBookPopup = true
                                     }
                                 }
-                            }
-                        )
-                    }
-                } else {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("בחר ספר כדי לצפות בתוכן שלו")
+                            )
+                        }
                     }
                 }
             }
@@ -386,19 +395,32 @@ fun App() {
                 lines = popupBookLines,
                 commentaries = popupBookCommentaries,
                 commentators = popupCommentators,
-                onDismiss = { showBookPopup = false }
+                selectedLine = popupSelectedLine,
+                onDismiss = { 
+                    showBookPopup = false 
+                    popupSelectedLine = null  // Reset selected line when closing popup
+                }
             )
         }
 
-        // Floating action button for search
+        // Floating action buttons for search and database selection
         Box(modifier = Modifier.fillMaxSize()) {
-            Button(
-                onClick = { showSearchPopup = true },
+            Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(16.dp)
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("חיפוש")
+                // Database selection button (only shown on desktop)
+                DatabaseSelectionButtonIfAvailable()
+
+                // Search button
+                IconButton(onClick = { showSearchPopup = true }) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search"
+                    )
+                }
             }
         }
 

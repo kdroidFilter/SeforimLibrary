@@ -449,6 +449,9 @@ class DatabaseGenerator(
         logger.d { "Added ${linksAfter - linksBefore} links to the database" }
 
         logger.i { "Total of $totalLinks links processed" }
+
+        // Update the book_has_links table
+        updateBookHasLinksTable()
     }
 
     /**
@@ -600,6 +603,62 @@ class DatabaseGenerator(
         logger.d { "Rebuilding FTS5 index for line_search table" }
         repository.rebuildFts5Index()
         logger.i { "FTS5 index rebuilt successfully" }
+    }
+
+    /**
+     * Updates the book_has_links table to indicate which books have source links, target links, or both.
+     * This should be called after all links have been processed.
+     */
+    private suspend fun updateBookHasLinksTable() {
+        logger.i { "Updating book_has_links table with separate source and target link flags..." }
+
+        // Get all books
+        val books = repository.getAllBooks()
+        logger.d { "Found ${books.size} books to check for links" }
+
+        var booksWithSourceLinks = 0
+        var booksWithTargetLinks = 0
+        var booksWithAnyLinks = 0
+        var processedBooks = 0
+
+        // For each book, check if it has source links and/or target links
+        for (book in books) {
+            // Check if the book has any links as source
+            val hasSourceLinks = repository.countLinksBySourceBook(book.id) > 0
+
+            // Check if the book has any links as target
+            val hasTargetLinks = repository.countLinksByTargetBook(book.id) > 0
+
+            // Update the book_has_links table with separate flags for source and target links
+            repository.updateBookHasLinks(book.id, hasSourceLinks, hasTargetLinks)
+
+            // Update counters
+            if (hasSourceLinks) {
+                booksWithSourceLinks++
+            }
+            if (hasTargetLinks) {
+                booksWithTargetLinks++
+            }
+            if (hasSourceLinks || hasTargetLinks) {
+                booksWithAnyLinks++
+            }
+
+            processedBooks++
+
+            // Log progress every 100 books
+            if (processedBooks % 100 == 0) {
+                logger.d { "Processed $processedBooks/${books.size} books: " +
+                        "$booksWithSourceLinks with source links, " +
+                        "$booksWithTargetLinks with target links, " +
+                        "$booksWithAnyLinks with any links" }
+            }
+        }
+
+        logger.i { "Book_has_links table updated. Found:" }
+        logger.i { "- $booksWithSourceLinks books with source links" }
+        logger.i { "- $booksWithTargetLinks books with target links" }
+        logger.i { "- $booksWithAnyLinks books with any links (source or target)" }
+        logger.i { "- ${books.size} total books" }
     }
 
 

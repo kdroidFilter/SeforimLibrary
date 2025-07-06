@@ -1,13 +1,21 @@
 package sample.app
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.*
+import androidx.compose.material3.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
@@ -16,6 +24,7 @@ import com.mohamedrejeb.richeditor.model.rememberRichTextState
 import com.mohamedrejeb.richeditor.ui.material.RichText
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import io.github.kdroidfilter.seforimlibrary.core.models.SearchResult
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import kotlinx.coroutines.launch
@@ -36,14 +45,27 @@ fun SearchPopup(
     var searchQuery by remember { mutableStateOf(TextFieldValue("")) }
     var searchResults by remember { mutableStateOf<List<SearchResult>>(emptyList()) }
     var isSearching by remember { mutableStateOf(false) }
+    var resultLimit by remember { mutableStateOf(20f) }
+    var selectedBooks by remember { mutableStateOf(setOf<Long>()) }
     val coroutineScope = rememberCoroutineScope()
 
-    Dialog(onDismissRequest = onDismiss) {
+    // Extract unique books from search results
+    val uniqueBooks = remember(searchResults) {
+        searchResults.map { it.bookId to it.bookTitle }.toSet().toList()
+    }
+
+    // Function to chunk the list into groups for grid layout
+    fun <T> List<T>.chunked(size: Int): List<List<T>> {
+        return this.withIndex()
+            .groupBy { it.index / size }
+            .map { it.value.map { indexedValue -> indexedValue.value } }
+    }
+
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             modifier = Modifier
-                .fillMaxWidth(0.9f)
-                .fillMaxHeight(0.9f),
-            elevation = 8.dp,
+                .fillMaxSize()
+                .padding(16.dp),
             shape = MaterialTheme.shapes.medium
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -55,14 +77,18 @@ fun SearchPopup(
                 ) {
                     Text(
                         text = "חיפוש",
-                        style = MaterialTheme.typography.h6
+                        style = MaterialTheme.typography.bodyMedium
                     )
                     IconButton(onClick = onDismiss) {
-                        Text("X")
+                        Icon(Icons.Default.Close, contentDescription = "Close")
                     }
                 }
 
-                Divider(modifier = Modifier.padding(vertical = 8.dp))
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 8.dp),
+                    thickness = DividerDefaults.Thickness,
+                    color = DividerDefaults.color
+                )
 
                 // Search input and button
                 Row(
@@ -78,7 +104,12 @@ fun SearchPopup(
                                 if (keyEvent.key == Key.Enter && searchQuery.text.isNotBlank()) {
                                     coroutineScope.launch {
                                         isSearching = true
-                                        searchResults = repository.search(searchQuery.text)
+                                        // Reset selected books for new search
+                                        selectedBooks = emptySet()
+                                        searchResults = repository.search(
+                                            query = searchQuery.text,
+                                            limit = resultLimit.toInt()
+                                        )
                                         isSearching = false
                                     }
                                     true
@@ -92,23 +123,122 @@ fun SearchPopup(
 
                     Spacer(modifier = Modifier.width(8.dp))
 
-                    Button(
+                    IconButton(
                         onClick = {
                             if (searchQuery.text.isNotBlank()) {
                                 coroutineScope.launch {
                                     isSearching = true
-                                    searchResults = repository.search(searchQuery.text)
+                                    // Reset selected books for new search
+                                    selectedBooks = emptySet()
+                                    searchResults = repository.search(
+                                        query = searchQuery.text,
+                                        limit = resultLimit.toInt()
+                                    )
                                     isSearching = false
                                 }
                             }
                         },
                         enabled = !isSearching && searchQuery.text.isNotBlank()
                     ) {
-                        Text("חפש")
+                        Icon(Icons.Default.Search, contentDescription = "Search")
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Results limit slider
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "מספר תוצאות להצגה:",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                        Text(
+                            text = resultLimit.toInt().toString(),
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+
+                    Slider(
+                        value = resultLimit,
+                        onValueChange = { resultLimit = it },
+                        valueRange = 1f..1000f,
+                        steps = 999,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Book filter chips
+                if (uniqueBooks.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.Start
+                    ) {
+                        Text(
+                            text = "סנן לפי ספר:",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        // Grid layout for book filter chips
+                        val scrollState = rememberScrollState()
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                                .verticalScroll(scrollState)
+                        ) {
+                            // Chunk the books into rows of 4 (or adjust as needed)
+                            val chunkedBooks = uniqueBooks.chunked(4)
+
+                            chunkedBooks.forEach { rowBooks ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    rowBooks.forEach { (bookId, bookTitle) ->
+                                        val isSelected = bookId in selectedBooks
+                                        OutlinedButton(
+                                            onClick = {
+                                                selectedBooks = if (isSelected) {
+                                                    selectedBooks - bookId
+                                                } else {
+                                                    selectedBooks + bookId
+                                                }
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                            border = BorderStroke(
+                                                width = 1.dp,
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                                            )
+                                        ) {
+                                            Text(bookTitle, maxLines = 1)
+                                        }
+                                    }
+
+                                    // Add empty spacers if the row is not full
+                                    repeat(4 - rowBooks.size) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
 
                 // Search results
                 Box(modifier = Modifier.weight(1f)) {
@@ -122,12 +252,26 @@ fun SearchPopup(
                             modifier = Modifier.align(Alignment.Center)
                         )
                     } else {
-                        LazyColumn {
-                            items(searchResults) { result ->
-                                SearchResultItem(
-                                    result = result,
-                                    onClick = { onResultClick(result) }
-                                )
+                        // Filter results based on selected books
+                        val filteredResults = if (selectedBooks.isEmpty()) {
+                            searchResults
+                        } else {
+                            searchResults.filter { it.bookId in selectedBooks }
+                        }
+
+                        if (filteredResults.isEmpty() && searchResults.isNotEmpty()) {
+                            Text(
+                                text = "אין תוצאות עבור הספרים שנבחרו",
+                                modifier = Modifier.align(Alignment.Center)
+                            )
+                        } else {
+                            LazyColumn {
+                                items(filteredResults) { result ->
+                                    SearchResultItem(
+                                        result = result,
+                                        onClick = { onResultClick(result) }
+                                    )
+                                }
                             }
                         }
                     }
@@ -149,19 +293,18 @@ fun SearchResultItem(
     result: SearchResult,
     onClick: () -> Unit
 ) {
-    Card(
+    ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .clickable(onClick = onClick),
-        elevation = 2.dp
     ) {
         Column(
             modifier = Modifier.padding(16.dp)
         ) {
             Text(
                 text = result.bookTitle,
-                style = MaterialTheme.typography.subtitle1
+                style = MaterialTheme.typography.titleMedium
             )
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -184,7 +327,7 @@ fun SearchResultItem(
 
             Text(
                 text = "שורה: ${result.lineIndex + 1}",
-                style = MaterialTheme.typography.caption
+                style = MaterialTheme.typography.bodySmall
             )
         }
     }

@@ -6,8 +6,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.MaterialTheme
-import androidx.compose.material.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -22,6 +27,10 @@ import io.github.kdroidfilter.seforimlibrary.core.models.Line
 import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
 import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentaryWithText
 import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentatorInfo
+import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
+import sample.app.getRepository
+import sample.app.LineWithUniqueKey
+import sample.app.withUniqueKeys
 
 @Composable
 fun BookContentView(
@@ -67,15 +76,111 @@ fun BookContent(
         // Create a LazyListState to control scrolling
         val listState = rememberLazyListState()
 
+        // Keep track of the currently loaded lines
+        val book = remember(lines) { lines.firstOrNull() }
+        val bookId = remember(book) { book?.bookId ?: 0L }
+
+        // Define the window size and offset for pagination
+        val windowSize = 50 // Number of lines to display at once
+        val loadOffset = 15 // Load more lines when this close to the edge
+
+        // State to track the current window of lines
+        var currentLines by remember(lines) { mutableStateOf(lines) }
+        var startIndex by remember(lines) { mutableStateOf(lines.firstOrNull()?.lineIndex ?: 0) }
+        var endIndex by remember(lines) { mutableStateOf((lines.lastOrNull()?.lineIndex ?: 0) + 1) }
+
+        // Convert lines to LineWithUniqueKey objects
+        var currentLinesWithKeys by remember(currentLines) { mutableStateOf(currentLines.withUniqueKeys()) }
+
+        // Repository to load more lines
+        val repository = getRepository()
+
         // Find the index of the selected line in the list
         val selectedIndex = selectedLine?.let { selected ->
-            lines.indexOfFirst { it.id == selected.id }
+            currentLines.indexOfFirst { it.id == selected.id }
         } ?: 0
 
         // Scroll to the selected line when it changes
-        LaunchedEffect(selectedLine) {
-            if (selectedLine != null && selectedIndex >= 0) {
-                listState.animateScrollToItem(selectedIndex)
+        LaunchedEffect(selectedLine, lines) {
+            if (selectedLine != null) {
+                // Check if the selected line is in the current window
+                val selectedIndex = currentLines.indexOfFirst { it.id == selectedLine.id }
+
+                if (selectedIndex >= 0) {
+                    // If the line is already in our current window, just scroll to it
+                    listState.animateScrollToItem(selectedIndex)
+                } else {
+                    // If the line is not in our current window, we need to load it
+                    // Load a window of lines centered around the selected line
+                    val lineIndex = selectedLine.lineIndex
+                    val newStartIndex = maxOf(0, lineIndex - windowSize / 2)
+                    val newEndIndex = lineIndex + windowSize / 2
+
+                    // Load the lines from the repository
+                    val newLines = repository.getLines(bookId, newStartIndex, newEndIndex)
+                    if (newLines.isNotEmpty()) {
+                        // Update our current window
+                        currentLines = newLines
+                        startIndex = newStartIndex
+                        endIndex = newEndIndex
+                        // Update lines with unique keys
+                        currentLinesWithKeys = currentLines.withUniqueKeys()
+
+                        // Now find the index of the selected line in the new window and scroll to it
+                        val newSelectedIndex = currentLines.indexOfFirst { it.id == selectedLine.id }
+                        if (newSelectedIndex >= 0) {
+                            listState.scrollToItem(newSelectedIndex)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Load more lines when approaching the edges
+        LaunchedEffect(listState.firstVisibleItemIndex) {
+            // If we're close to the top, load more lines above
+            if (listState.firstVisibleItemIndex < loadOffset && startIndex > 0) {
+                val newStartIndex = maxOf(0, startIndex - windowSize / 2)
+                val newLines = repository.getLines(bookId, newStartIndex, startIndex)
+                if (newLines.isNotEmpty()) {
+                    currentLines = newLines + currentLines
+                    startIndex = newStartIndex
+                    // Update lines with unique keys
+                    currentLinesWithKeys = currentLines.withUniqueKeys()
+                }
+            }
+        }
+
+        LaunchedEffect(listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index) {
+            // If we're close to the bottom, load more lines below
+            val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            if (lastVisibleIndex >= currentLines.size - loadOffset) {
+                val newEndIndex = endIndex + windowSize / 2
+                val newLines = repository.getLines(bookId, endIndex, newEndIndex)
+                if (newLines.isNotEmpty()) {
+                    currentLines = currentLines + newLines
+                    endIndex = newEndIndex
+                    // Update lines with unique keys
+                    currentLinesWithKeys = currentLines.withUniqueKeys()
+                }
+            }
+        }
+
+        // Limit the number of lines in memory to maintain efficiency
+        LaunchedEffect(currentLines.size) {
+            if (currentLines.size > windowSize * 3) {
+                // If we have too many lines, trim from the opposite end of where we're viewing
+                if (listState.firstVisibleItemIndex < currentLines.size / 2) {
+                    // We're closer to the top, trim from the bottom
+                    currentLines = currentLines.take(windowSize * 2)
+                    endIndex = (currentLines.lastOrNull()?.lineIndex ?: 0) + 1
+                } else {
+                    // We're closer to the bottom, trim from the top
+                    currentLines = currentLines.takeLast(windowSize * 2)
+                    startIndex = currentLines.firstOrNull()?.lineIndex ?: 0
+                }
+                // Update lines with unique keys
+                currentLinesWithKeys = currentLines.withUniqueKeys()
             }
         }
 
@@ -84,9 +189,10 @@ fun BookContent(
             modifier = Modifier.fillMaxSize().padding(16.dp)
         ) {
             items(
-                items = lines,
-                key = { it.id } // Use line.id as key for stable identity
-            ) { line ->
+                items = currentLinesWithKeys,
+                key = { it.uniqueKey } // Use the unique key for stable identity
+            ) { lineWithKey ->
+                val line = lineWithKey.line
                 val isSelected = selectedLine?.id == line.id
                 val state = rememberRichTextState()
 
@@ -100,7 +206,7 @@ fun BookContent(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onLineSelected(line) }
-                        .background(if (isSelected) MaterialTheme.colors.primary.copy(alpha = 0.1f) else Color.Transparent)
+                        .background(if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f) else Color.Transparent)
                         .padding(vertical = 4.dp),
                 )
             }
@@ -164,11 +270,12 @@ fun TocEntryItem(
         ) {
             // Expand/collapse icon if entry has children
             if (childEntries.isNotEmpty()) {
-                Text(
-                    text = if (isExpanded) "▼" else "◀",
-                    color = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = if (isExpanded) "Collapse" else "Expand",
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                     modifier = Modifier
-                        .width(24.dp)
+                        .size(24.dp)
                         .clickable { onEntryExpand(entry) }
                 )
             } else {
