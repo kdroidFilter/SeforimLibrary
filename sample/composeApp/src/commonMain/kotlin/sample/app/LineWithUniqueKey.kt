@@ -11,13 +11,7 @@ data class LineWithUniqueKey(val line: Line) {
     // Generate a truly unique key for this line by combining its ID with a UUID-like string
     // This ensures uniqueness even if the same Line object appears multiple times
     val uniqueKey: String = "${line.id}_${System.nanoTime()}_${Random.nextInt()}"
-
-    // Delegate properties to the wrapped Line object
-    val id: Long get() = line.id
-    val bookId: Long get() = line.bookId
-    val lineIndex: Int get() = line.lineIndex
     val content: String get() = line.content
-    val plainText: String get() = line.plainText
 }
 
 /**

@@ -4,26 +4,23 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.material3.*
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
 import io.github.kdroidfilter.seforimlibrary.core.models.Line
-import io.github.kdroidfilter.seforimlibrary.core.models.Link
 import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
 import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentaryWithText
 import io.github.kdroidfilter.seforimlibrary.dao.repository.CommentatorInfo
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
-import javax.print.attribute.standard.Severity
-import sample.app.BookPopup
 
 @Composable
 expect fun getDatabasePath(): String
@@ -34,40 +31,47 @@ expect fun getRepository(): SeforimRepository
 @Composable
 expect fun DatabaseSelectionButtonIfAvailable()
 
+data class BookState(
+    val book: Book? = null,
+    val lines: List<Line> = emptyList(),
+    val commentaries: List<CommentaryWithText> = emptyList(),
+    val toc: List<TocEntry> = emptyList(),
+    val selectedLine: Line? = null,
+    val isLoading: Boolean = false,
+    val isTocLoading: Boolean = false
+)
+
+data class PopupState(
+    val show: Boolean = false,
+    val book: Book? = null,
+    val lines: List<Line> = emptyList(),
+    val commentaries: List<CommentaryWithText> = emptyList(),
+    val commentators: List<CommentatorInfo> = emptyList(),
+    val selectedLine: Line? = null
+)
+
 @Composable
 fun App() {
     Logger.setMinSeverity(co.touchlab.kermit.Severity.Error)
     val repository = getRepository()
-    val coroutineScope = rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
 
-    // State for the UI
+    // Category tree state
     var rootCategories by remember { mutableStateOf<List<Category>>(emptyList()) }
     var selectedCategory by remember { mutableStateOf<Category?>(null) }
     var expandedCategories by remember { mutableStateOf(setOf<Long>()) }
     var categoryChildren by remember { mutableStateOf<Map<Long, List<Category>>>(emptyMap()) }
+    var booksInCategory by remember { mutableStateOf<Set<Book>>(emptySet()) }
 
-    var booksInCategory by remember { mutableStateOf<List<Book>>(emptyList()) }
-    var selectedBook by remember { mutableStateOf<Book?>(null) }
+    // Book state
+    var bookState by remember { mutableStateOf(BookState()) }
 
-    var bookLines by remember { mutableStateOf<List<Line>>(emptyList()) }
-    var bookCommentaries by remember { mutableStateOf<List<CommentaryWithText>>(emptyList()) }
-    var commentators by remember { mutableStateOf<List<CommentatorInfo>>(emptyList()) }
-    var bookToc by remember { mutableStateOf<List<TocEntry>>(emptyList()) }
+    // TOC state
     var expandedTocEntries by remember { mutableStateOf(setOf<Long>()) }
     var tocChildren by remember { mutableStateOf<Map<Long, List<TocEntry>>>(emptyMap()) }
 
-    // State for selected line and its comments
-    var selectedLine by remember { mutableStateOf<Line?>(null) }
-
-    // State for popup book display
-    var showBookPopup by remember { mutableStateOf(false) }
-    var popupBook by remember { mutableStateOf<Book?>(null) }
-    var popupBookLines by remember { mutableStateOf<List<Line>>(emptyList()) }
-    var popupBookCommentaries by remember { mutableStateOf<List<CommentaryWithText>>(emptyList()) }
-    var popupCommentators by remember { mutableStateOf<List<CommentatorInfo>>(emptyList()) }
-    var popupSelectedLine by remember { mutableStateOf<Line?>(null) }
-
-    // State for search popup
+    // Popup states
+    var bookPopup by remember { mutableStateOf(PopupState()) }
     var showSearchPopup by remember { mutableStateOf(false) }
 
     // Load root categories on startup
@@ -75,12 +79,108 @@ fun App() {
         rootCategories = repository.getRootCategories()
     }
 
+    // Helper functions
+    fun getAllDescendantIds(entryId: Long, childrenMap: Map<Long, List<TocEntry>>): Set<Long> {
+        val result = mutableSetOf<Long>()
+        childrenMap[entryId]?.forEach { child ->
+            result.add(child.id)
+            result.addAll(getAllDescendantIds(child.id, childrenMap))
+        }
+        return result
+    }
+
+    fun loadBook(book: Book) {
+        bookState = bookState.copy(
+            book = book,
+            selectedLine = null,
+            isLoading = true,
+            isTocLoading = true
+        )
+
+        scope.launch {
+            try {
+                // Load book data in parallel
+                val linesDeferred = async { repository.getLines(book.id, 0, 30) }
+                val tocDeferred = async {
+                    repository.getBookRootToc(book.id).ifEmpty {
+                        repository.getBookToc(book.id)
+                    }
+                }
+
+                val lines = linesDeferred.await()
+                val toc = tocDeferred.await()
+
+                // Load commentaries for first 5 lines
+                val commentaries = if (lines.isNotEmpty()) {
+                    repository.getCommentariesForLines(lines.take(5).map { it.id })
+                } else emptyList()
+
+                bookState = bookState.copy(
+                    lines = lines,
+                    commentaries = commentaries,
+                    toc = toc,
+                    isLoading = false,
+                    isTocLoading = false
+                )
+
+                // Auto-expand first TOC entry if exists
+                if (toc.isNotEmpty()) {
+                    val firstEntry = toc.first()
+                    expandedTocEntries = setOf(firstEntry.id)
+                    val children = repository.getTocChildren(firstEntry.id)
+                    tocChildren = mapOf(firstEntry.id to children)
+                }
+            } catch (e: Exception) {
+                bookState = bookState.copy(isLoading = false, isTocLoading = false)
+                Logger.e { "Error loading book: ${e.message}" }
+            }
+        }
+    }
+
+    fun selectLine(line: Line) {
+        bookState = bookState.copy(selectedLine = line)
+        scope.launch {
+            bookState = bookState.copy(
+                commentaries = repository.getCommentariesForLines(listOf(line.id))
+            )
+        }
+    }
+
+    fun loadPopupBook(commentary: CommentaryWithText) {
+        scope.launch {
+            val targetBook = repository.getBook(commentary.link.targetBookId)
+            if (targetBook != null) {
+                val targetLine = repository.getLine(commentary.link.targetLineId)
+
+                val (lines, selectedLine) = if (targetLine != null) {
+                    val startIndex = maxOf(0, targetLine.lineIndex - 25)
+                    val endIndex = targetLine.lineIndex + 25
+                    repository.getLines(targetBook.id, startIndex, endIndex) to targetLine
+                } else {
+                    repository.getLines(targetBook.id, 0, 100) to null
+                }
+
+                val commentaries = if (lines.isNotEmpty()) {
+                    repository.getCommentariesForLines(lines.map { it.id })
+                } else emptyList()
+
+                val commentators = repository.getAvailableCommentators(targetBook.id)
+
+                bookPopup = PopupState(
+                    show = true,
+                    book = targetBook,
+                    lines = lines,
+                    commentaries = commentaries,
+                    commentators = commentators,
+                    selectedLine = selectedLine
+                )
+            }
+        }
+    }
 
     AppTheme {
-
-        // Main content area - 4 vertical columns
         Row(modifier = Modifier.fillMaxSize()) {
-            // First column - Book tree
+            // Column 1: Book tree
             Box(
                 modifier = Modifier
                     .weight(0.25f)
@@ -94,111 +194,44 @@ fun App() {
                     categoryChildren = categoryChildren,
                     booksInCategory = booksInCategory,
                     selectedCategory = selectedCategory,
-                    selectedBook = selectedBook,
-                    onCategoryClick = { category: Category ->
+                    selectedBook = bookState.book,
+                    onCategoryClick = { category ->
                         selectedCategory = category
 
-                        // Toggle expanded state
-                        expandedCategories = if (expandedCategories.contains(category.id)) {
-                            expandedCategories - category.id
-                        } else {
-                            expandedCategories + category.id
-                        }
-
-                        // Load children if expanded
                         if (expandedCategories.contains(category.id)) {
-                            coroutineScope.launch {
-                                // Recursive function to load all category children without depth limitation
-                                suspend fun loadCategoryChildren(categoryId: Long) {
-                                    val children = repository.getCategoryChildren(categoryId)
+                            expandedCategories -= category.id
+                        } else {
+                            expandedCategories += category.id
+
+                            scope.launch {
+                                try {
+                                    val childrenDeferred = async {
+                                        if (!categoryChildren.containsKey(category.id)) {
+                                            repository.getCategoryChildren(category.id)
+                                        } else emptyList()
+                                    }
+                                    val booksDeferred = async { repository.getBooksByCategory(category.id) }
+
+                                    val children = childrenDeferred.await()
+                                    val books = booksDeferred.await()
+
                                     if (children.isNotEmpty()) {
-                                        // Update the children map with the new children
-                                        categoryChildren = categoryChildren + Pair(categoryId, children)
-
-                                        // Recursively load children of children
-                                        for (child in children) {
-                                            // Only load if not already loaded
-                                            if (!categoryChildren.containsKey(child.id)) {
-                                                loadCategoryChildren(child.id)
-                                            }
-                                        }
+                                        categoryChildren += category.id to children
                                     }
-                                }
-
-                                // Load all levels of categories
-                                loadCategoryChildren(category.id)
-
-                                // Load books for this category and all its children
-                                suspend fun loadBooksForCategory(categoryId: Long) {
-                                    // Load books for this category
-                                    val books = repository.getBooksByCategory(categoryId)
                                     if (books.isNotEmpty()) {
-                                        booksInCategory = booksInCategory + books
+                                        booksInCategory += books
                                     }
-
-                                    // Recursively load books for child categories
-                                    val children = categoryChildren[categoryId] ?: emptyList()
-                                    for (child in children) {
-                                        loadBooksForCategory(child.id)
-                                    }
+                                } catch (e: Exception) {
+                                    Logger.e { "Error loading category: ${e.message}" }
                                 }
-
-                                // Start loading books from the selected category
-                                booksInCategory = emptyList() // Clear previous books
-                                loadBooksForCategory(category.id)
                             }
                         }
                     },
-                    onBookClick = { book: Book ->
-                        selectedBook = book
-                        selectedLine = null // Reset selected line when changing books
-
-                        // Load book content and commentaries
-                        coroutineScope.launch {
-                            // Load first 100 lines of the book
-                            bookLines = repository.getLines(book.id, 0, 100)
-
-                            // Load commentators for this book
-                            commentators = repository.getAvailableCommentators(book.id)
-
-                            // Load commentaries for the first few lines
-                            if (bookLines.isNotEmpty()) {
-                                val lineIds = bookLines.map { it.id }
-                                bookCommentaries = repository.getCommentariesForLines(lineIds)
-                            }
-
-                            // Load TOC data for the book
-                            bookToc = repository.getBookRootToc(book.id)
-
-                            // Pre-load children for all root TOC entries
-                            val rootEntryIds = bookToc.map { it.id }.toSet()
-                            expandedTocEntries = rootEntryIds
-
-                            // Load all TOC levels recursively without depth limitation
-                            val childrenMap = mutableMapOf<Long, List<TocEntry>>()
-
-                            // Recursive function to load all TOC children without depth limitation
-                            suspend fun loadTocChildren(entries: List<TocEntry>) {
-                                for (entry in entries) {
-                                    val children = repository.getTocChildren(entry.id)
-                                    if (children.isNotEmpty()) {
-                                        childrenMap[entry.id] = children
-                                        // Recursively load children of children
-                                        loadTocChildren(children)
-                                    }
-                                }
-                            }
-
-                            // Load all levels of TOC entries
-                            loadTocChildren(bookToc)
-
-                            tocChildren = childrenMap
-                        }
-                    }
+                    onBookClick = ::loadBook
                 )
             }
 
-            // Second column - TOC
+            // Column 2: TOC
             Box(
                 modifier = Modifier
                     .weight(0.20f)
@@ -206,127 +239,126 @@ fun App() {
                     .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f))
                     .padding(8.dp)
             ) {
-                if (selectedBook != null) {
+                if (bookState.book != null) {
                     Column {
-                        // TOC header
                         Text(
-                            text = "תוכן עניינים",
+                            text = "תוכן עניינים", // Table of Contents
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp,
                             modifier = Modifier.padding(bottom = 8.dp)
                         )
 
-                        // TOC content
-                        TocView(
-                            tocEntries = bookToc,
-                            expandedEntries = expandedTocEntries,
-                            childrenMap = tocChildren,
-                            onEntryClick = { tocEntry ->
-                                // Navigate to the line associated with this TOC entry
-                                coroutineScope.launch {
-                                    // If the TOC entry has a lineId, navigate directly to that line
+                        if (bookState.isTocLoading) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text("טוען תוכן עניינים...", fontSize = 12.sp) // Loading table of contents...
+                                }
+                            }
+                        } else {
+                            TocView(
+                                tocEntries = bookState.toc,
+                                expandedEntries = expandedTocEntries,
+                                childrenMap = tocChildren,
+                                onEntryClick = { tocEntry ->
                                     tocEntry.lineId?.let { lineId ->
-                                        // Get the line directly by its ID
-                                        val line = repository.getLine(lineId)
-
-                                        if (line != null) {
-                                            // Make sure the line is in the bookLines list
-                                            if (!bookLines.any { it.id == lineId }) {
-                                                // If we need to add the line to the list, we'll load a larger section around it
-                                                // to match the window size in BookContentView.kt (25 lines before and 25 lines after)
-                                                val startIndex = maxOf(0, line.lineIndex - 25)
-                                                val endIndex = line.lineIndex + 25
-                                                bookLines = repository.getLines(selectedBook!!.id, startIndex, endIndex)
+                                        scope.launch {
+                                            val line = repository.getLine(lineId)
+                                            if (line != null) {
+                                                if (!bookState.lines.any { it.id == lineId }) {
+                                                    val startIndex = maxOf(0, line.lineIndex - 25)
+                                                    val endIndex = line.lineIndex + 25
+                                                    bookState = bookState.copy(
+                                                        lines = repository.getLines(bookState.book!!.id, startIndex, endIndex)
+                                                    )
+                                                }
+                                                selectLine(line)
                                             }
-
-                                            // Set the selected line directly
-                                            selectedLine = line
-
-                                            // Load commentaries for this line
-                                            bookCommentaries = repository.getCommentariesForLines(listOf(lineId))
                                         }
                                     }
-                                }
-                            },
-                            onEntryExpand = { tocEntry ->
-                                // Toggle expanded state
-                                expandedTocEntries = if (expandedTocEntries.contains(tocEntry.id)) {
-                                    expandedTocEntries - tocEntry.id
-                                } else {
-                                    expandedTocEntries + tocEntry.id
-                                }
+                                },
+                                onEntryExpand = { tocEntry ->
+                                    val isExpanded = expandedTocEntries.contains(tocEntry.id)
 
-                                // Load children if expanded and not already loaded
-                                if (expandedTocEntries.contains(tocEntry.id) && !tocChildren.containsKey(tocEntry.id)) {
-                                    coroutineScope.launch {
-                                        // Recursive function to load all TOC children without depth limitation
-                                        suspend fun loadTocChildrenOnExpand(entry: TocEntry) {
-                                            val children = repository.getTocChildren(entry.id)
-                                            if (children.isNotEmpty()) {
-                                                // Update the children map with the new children
-                                                tocChildren = tocChildren + Pair(entry.id, children)
+                                    if (isExpanded) {
+                                        val descendants = getAllDescendantIds(tocEntry.id, tocChildren)
+                                        expandedTocEntries = expandedTocEntries - tocEntry.id - descendants
+                                    } else {
+                                        expandedTocEntries += tocEntry.id
 
-                                                // Recursively load children of children
-                                                for (child in children) {
-                                                    // Only load if not already loaded
-                                                    if (!tocChildren.containsKey(child.id)) {
-                                                        loadTocChildrenOnExpand(child)
+                                        if (!tocChildren.containsKey(tocEntry.id)) {
+                                            scope.launch {
+                                                val children = repository.getTocChildren(tocEntry.id)
+                                                tocChildren += tocEntry.id to children
+
+                                                // Recursively check for grandchildren
+                                                suspend fun loadChildrenRecursively(entries: List<TocEntry>) {
+                                                    entries.forEach { entry ->
+                                                        if (!tocChildren.containsKey(entry.id)) {
+                                                            val entryChildren = repository.getTocChildren(entry.id)
+                                                            tocChildren += entry.id to entryChildren
+                                                            if (entryChildren.isNotEmpty()) {
+                                                                loadChildrenRecursively(entryChildren)
+                                                            }
+                                                        }
                                                     }
+                                                }
+
+                                                if (children.isNotEmpty()) {
+                                                    loadChildrenRecursively(children)
                                                 }
                                             }
                                         }
-
-                                        // Load all levels when expanding
-                                        loadTocChildrenOnExpand(tocEntry)
                                     }
                                 }
-                            }
-                        )
+                            )
+                        }
                     }
                 } else {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("בחר ספר כדי לצפות בתוכן העניינים שלו")
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("בחר ספר כדי לצפות בתוכן העניינים שלו") // Select a book to view its table of contents
                     }
                 }
             }
 
-            // Third column - Book content and Line comments combined
+            // Column 3: Book content and comments
             Column(
                 modifier = Modifier
                     .weight(0.65f)
                     .fillMaxHeight()
                     .padding(8.dp)
             ) {
-                if (selectedBook != null) {
-                    // Check if there are comments for the selected line
-                    val hasComments = selectedLine?.let { line ->
-                        bookCommentaries.any { it.link.sourceLineId == line.id }
+                if (bookState.book != null) {
+                    val hasComments = bookState.selectedLine?.let { line ->
+                        bookState.commentaries.any { it.link.sourceLineId == line.id }
                     } ?: false
 
-                    // Adjust weight based on whether there are comments
+                    // Book content
                     Box(
                         modifier = Modifier
                             .weight(if (hasComments) 0.5f else 1f)
                             .fillMaxWidth()
                     ) {
-                        BookContentView(
-                            book = selectedBook!!,
-                            lines = bookLines,
-                            selectedLine = selectedLine,
-                            onLineSelected = { line ->
-                                selectedLine = line
-                                // Load commentaries for this line
-                                coroutineScope.launch {
-                                    bookCommentaries = repository.getCommentariesForLines(listOf(line.id))
+                        if (bookState.isLoading) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    CircularProgressIndicator()
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text("טוען תוכן הספר...") // Loading book content...
                                 }
                             }
-                        )
+                        } else {
+                            BookContentView(
+                                book = bookState.book!!,
+                                lines = bookState.lines,
+                                selectedLine = bookState.selectedLine,
+                                onLineSelected = ::selectLine
+                            )
+                        }
                     }
 
-                    // Only show comments view if there are comments for the selected line
+                    // Comments view (only if has comments)
                     if (hasComments) {
                         Box(
                             modifier = Modifier
@@ -335,52 +367,9 @@ fun App() {
                                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
                         ) {
                             LineCommentsView(
-                                selectedLine = selectedLine,
-                                commentaries = bookCommentaries,
-                                onCommentClick = { commentary ->
-                                    // Load the target book and its content
-                                    coroutineScope.launch {
-                                        // Get the book
-                                        val targetBook = repository.getBook(commentary.link.targetBookId)
-                                        if (targetBook != null) {
-                                            popupBook = targetBook
-
-                                            // Get the target line
-                                            val targetLine = repository.getLine(commentary.link.targetLineId)
-
-                                            if (targetLine != null) {
-                                                // Load a section of lines around the target line (25 lines before and after)
-                                                val startIndex = maxOf(0, targetLine.lineIndex - 25)
-                                                val endIndex = targetLine.lineIndex + 25
-                                                popupBookLines = repository.getLines(targetBook.id, startIndex, endIndex)
-
-                                                // Set the selected line in the popup
-                                                popupSelectedLine = targetLine
-
-                                                // Load commentaries for the visible lines
-                                                if (popupBookLines.isNotEmpty()) {
-                                                    val lineIds = popupBookLines.map { it.id }
-                                                    popupBookCommentaries = repository.getCommentariesForLines(lineIds)
-                                                }
-                                            } else {
-                                                // Fallback to loading the first 100 lines if target line not found
-                                                popupBookLines = repository.getLines(targetBook.id, 0, 100)
-
-                                                // Load commentaries for the first few lines
-                                                if (popupBookLines.isNotEmpty()) {
-                                                    val lineIds = popupBookLines.map { it.id }
-                                                    popupBookCommentaries = repository.getCommentariesForLines(lineIds)
-                                                }
-                                            }
-
-                                            // Load commentators for this book
-                                            popupCommentators = repository.getAvailableCommentators(targetBook.id)
-
-                                            // Show the popup
-                                            showBookPopup = true
-                                        }
-                                    }
-                                }
+                                selectedLine = bookState.selectedLine,
+                                commentaries = bookState.commentaries,
+                                onCommentClick = ::loadPopupBook
                             )
                         }
                     }
@@ -388,22 +377,19 @@ fun App() {
             }
         }
 
-        // Show book popup if needed
-        if (showBookPopup && popupBook != null) {
+        // Book popup
+        if (bookPopup.show && bookPopup.book != null) {
             BookPopup(
-                book = popupBook!!,
-                lines = popupBookLines,
-                commentaries = popupBookCommentaries,
-                commentators = popupCommentators,
-                selectedLine = popupSelectedLine,
-                onDismiss = { 
-                    showBookPopup = false 
-                    popupSelectedLine = null  // Reset selected line when closing popup
-                }
+                book = bookPopup.book!!,
+                lines = bookPopup.lines,
+                commentaries = bookPopup.commentaries,
+                commentators = bookPopup.commentators,
+                selectedLine = bookPopup.selectedLine,
+                onDismiss = { bookPopup = PopupState() }
             )
         }
 
-        // Floating action buttons for search and database selection
+        // FAB for search and database
         Box(modifier = Modifier.fillMaxSize()) {
             Row(
                 modifier = Modifier
@@ -411,54 +397,36 @@ fun App() {
                     .padding(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Database selection button (only shown on desktop)
                 DatabaseSelectionButtonIfAvailable()
-
-                // Search button
                 IconButton(onClick = { showSearchPopup = true }) {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = "Search"
-                    )
+                    Icon(Icons.Default.Search, contentDescription = "Search")
                 }
             }
         }
 
-        // Show search popup if needed
+        // Search popup
         if (showSearchPopup) {
             SearchPopup(
                 repository = repository,
                 onDismiss = { showSearchPopup = false },
                 onResultClick = { searchResult ->
-                    // When a search result is clicked, load the book and navigate to the line
-                    coroutineScope.launch {
-                        // Get the book
+                    scope.launch {
                         val book = repository.getBook(searchResult.bookId)
                         if (book != null) {
-                            // Set as selected book
-                            selectedBook = book
                             selectedCategory = repository.getCategory(book.categoryId)
+                            loadBook(book)
 
-                            // Get the line
                             val line = repository.getLine(searchResult.lineId)
                             if (line != null) {
-                                // Load a section of lines around the selected line
                                 val startIndex = maxOf(0, line.lineIndex - 5)
                                 val endIndex = line.lineIndex + 5
-                                bookLines = repository.getLines(book.id, startIndex, endIndex)
-
-                                // Set the selected line
-                                selectedLine = line
-
-                                // Load commentaries for this line
-                                bookCommentaries = repository.getCommentariesForLines(listOf(line.id))
-
-                                // Load TOC data for the book
-                                bookToc = repository.getBookRootToc(book.id)
-
-                                // Close the search popup
-                                showSearchPopup = false
+                                bookState = bookState.copy(
+                                    lines = repository.getLines(book.id, startIndex, endIndex)
+                                )
+                                selectLine(line)
                             }
+
+                            showSearchPopup = false
                         }
                     }
                 }
