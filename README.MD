@@ -33,28 +33,6 @@ The library is structured as a set of modules that can be imported via Maven:
 - Kotlin 1.9.0 or higher
 - SQLite 3.35.0 or higher (for FTS5 support)
 
-## Installation
-
-Add the following to your `build.gradle.kts` file:
-
-```kotlin
-repositories {
-    mavenCentral()
-    // Add your repository if needed
-}
-
-dependencies {
-    // Core models
-    implementation("io.github.kdroidfilter:seforimlibrary-core:1.0.0")
-
-    // Database access
-    implementation("io.github.kdroidfilter:seforimlibrary-dao:1.0.0")
-
-    // Optional: Database generator
-    implementation("io.github.kdroidfilter:seforimlibrary-generator:1.0.0")
-}
-```
-
 ## Usage
 
 ### Initializing the Database
