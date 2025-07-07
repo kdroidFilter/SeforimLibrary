@@ -8,6 +8,9 @@ plugins {
     alias(libs.plugins.sqlDelight)
 }
 
+group = "io.github.kdroidfilter.seforimlibrary"
+
+
 kotlin {
     jvmToolchain(17)
 

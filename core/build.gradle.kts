@@ -7,6 +7,8 @@ plugins {
     alias(libs.plugins.kotlinx.serialization)
 }
 
+group = "io.github.kdroidfilter.seforimlibrary"
+
 kotlin {
     jvmToolchain(17)
 
