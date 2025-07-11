@@ -10,7 +10,7 @@ import java.awt.Dimension
 import java.util.Locale
 
 fun main() {
-    Locale.setDefault(Locale("he", "IL"))
+    Locale.setDefault(Locale.Builder().setLanguage("he").setRegion("IL").build())
     application {
         Window(
             title = "sample",
