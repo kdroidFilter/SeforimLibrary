@@ -787,7 +787,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 parentId = entry.parentId,
                 textId = textId,
                 level = entry.level.toLong(),
-                lineId = entry.lineId
+                lineId = entry.lineId,
+                isLastChild = if (entry.isLastChild) 1 else 0
             )
             logger.d{"Repository inserted TOC entry with explicit ID: ${entry.id}, bookId: ${entry.bookId}, lineId: ${entry.lineId}"}
             return@withContext entry.id
@@ -798,7 +799,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 parentId = entry.parentId,
                 textId = textId,
                 level = entry.level.toLong(),
-                lineId = entry.lineId
+                lineId = entry.lineId,
+                isLastChild = if (entry.isLastChild) 1 else 0
             )
             val tocId = database.tocQueriesQueries.lastInsertRowId().executeAsOne()
             logger.d{"Repository inserted TOC entry with auto-generated ID: $tocId, bookId: ${entry.bookId}, lineId: ${entry.lineId}"}
@@ -828,6 +830,12 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         logger.d{"Repository updating TOC entry $tocEntryId with lineId: $lineId"}
         database.tocQueriesQueries.updateLineId(lineId, tocEntryId)
         logger.d{"Repository updated TOC entry $tocEntryId with lineId: $lineId"}
+    }
+    
+    suspend fun updateTocEntryIsLastChild(tocEntryId: Long, isLastChild: Boolean) = withContext(Dispatchers.IO) {
+        logger.d{"Repository updating TOC entry $tocEntryId with isLastChild: $isLastChild"}
+        database.tocQueriesQueries.updateIsLastChild(if (isLastChild) 1 else 0, tocEntryId)
+        logger.d{"Repository updated TOC entry $tocEntryId with isLastChild: $isLastChild"}
     }
 
     // --- Connection Types ---

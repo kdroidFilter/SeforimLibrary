@@ -31,15 +31,18 @@ JOIN tocText tt ON t.textId = tt.id
 WHERE t.lineId = ?;
 
 insert:
-INSERT INTO tocEntry (bookId, parentId, textId, level, lineId)
-VALUES (?, ?, ?, ?, ?);
+INSERT INTO tocEntry (bookId, parentId, textId, level, lineId, isLastChild)
+VALUES (?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO tocEntry (id, bookId, parentId, textId, level, lineId)
-VALUES (?, ?, ?, ?, ?, ?);
+INSERT INTO tocEntry (id, bookId, parentId, textId, level, lineId, isLastChild)
+VALUES (?, ?, ?, ?, ?, ?, ?);
 
 updateLineId:
 UPDATE tocEntry SET lineId = ? WHERE id = ?;
+
+updateIsLastChild:
+UPDATE tocEntry SET isLastChild = ? WHERE id = ?;
 
 delete:
 DELETE FROM tocEntry WHERE id = ?;

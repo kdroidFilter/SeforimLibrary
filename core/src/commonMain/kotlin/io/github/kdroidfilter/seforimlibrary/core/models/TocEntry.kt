@@ -12,6 +12,7 @@ import kotlinx.serialization.Serializable
  * @property text The text of the TOC entry (for compatibility with existing code)
  * @property level The level of the TOC entry in the hierarchy
  * @property lineId The identifier of the associated line, or null if not linked to a specific line
+ * @property isLastChild Indicates if this TOC entry is the last child of its parent
  */
 @Serializable
 data class TocEntry(
@@ -21,5 +22,6 @@ data class TocEntry(
     val textId: Long? = null,
     val text: String = "",
     val level: Int,
-    val lineId: Long? = null
+    val lineId: Long? = null,
+    val isLastChild: Boolean = false
 )

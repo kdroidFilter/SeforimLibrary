@@ -317,6 +317,9 @@ class DatabaseGenerator(
 
         // Map to track TOC entry parent relationships by level
         val parentStack = mutableMapOf<Int, Long>()
+        
+        // Map to track TOC entries by their parent ID
+        val entriesByParent = mutableMapOf<Long?, MutableList<Long>>()
 
         for ((lineIndex, line) in lines.withIndex()) {
             val plainText = cleanHtml(line)
@@ -342,11 +345,15 @@ class DatabaseGenerator(
                     parentId = parentId,
                     text = plainText,
                     level = level,
-                    lineId = null
+                    lineId = null,
+                    isLastChild = false // Will be updated later if this is the last child
                 )
 
                 val tocEntryId = repository.insertTocEntry(tocEntry)
                 parentStack[level] = tocEntryId
+                
+                // Add this entry to the map of entries by parent
+                entriesByParent.getOrPut(parentId) { mutableListOf() }.add(tocEntryId)
 
                 val lineId = repository.insertLine(
                     Line(
@@ -375,6 +382,16 @@ class DatabaseGenerator(
 
             if (lineIndex % 1000 == 0) {
                 logger.i { "Progress: $lineIndex/${lines.size} lines" }
+            }
+        }
+        
+        // Mark the last child of each parent as isLastChild=true
+        logger.d { "Marking last children for book ID: $bookId" }
+        for ((parentId, children) in entriesByParent) {
+            if (children.isNotEmpty()) {
+                val lastChildId = children.last()
+                logger.d { "Marking TOC entry $lastChildId as last child of parent $parentId" }
+                repository.updateTocEntryIsLastChild(lastChildId, true)
             }
         }
 
