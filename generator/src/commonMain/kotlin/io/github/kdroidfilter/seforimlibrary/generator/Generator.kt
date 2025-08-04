@@ -315,30 +315,45 @@ class DatabaseGenerator(
     private suspend fun processLinesWithTocEntries(bookId: Long, lines: List<String>) {
         logger.d { "Processing lines and TOC entries together for book ID: $bookId" }
 
-        // Map to track TOC entry parent relationships by level
+        // Structure pour stocker toutes les entrées TOC créées
+        data class TocEntryData(
+            val id: Long,
+            val parentId: Long?,
+            val level: Int,
+            val text: String,
+            val lineIndex: Int
+        )
+
+        val allTocEntries = mutableListOf<TocEntryData>()
         val parentStack = mutableMapOf<Int, Long>()
-        
-        // Map to track TOC entries by their parent ID
         val entriesByParent = mutableMapOf<Long?, MutableList<Long>>()
 
+        // PREMIÈRE PASSE : Créer toutes les entrées et lignes
         for ((lineIndex, line) in lines.withIndex()) {
             val plainText = cleanHtml(line)
             val level = detectHeaderLevel(line)
 
             if (level > 0) {
                 if (plainText.isBlank()) {
-                    // Header is empty: skip creating a TOC entry
                     logger.d { "⚠️ Skipping empty header at level $level (line $lineIndex)" }
                     parentStack.remove(level)
                     continue
                 }
 
-                // Find parent: walk up until we find a valid parent
                 val parentId = (level - 1 downTo 1).firstNotNullOfOrNull { parentStack[it] }
-
                 val currentTocEntryId = nextTocEntryId++
                 val currentLineId = nextLineId++
 
+                // Stocker l'info de cette entrée pour la deuxième passe
+                allTocEntries.add(TocEntryData(
+                    id = currentTocEntryId,
+                    parentId = parentId,
+                    level = level,
+                    text = plainText,
+                    lineIndex = lineIndex
+                ))
+
+                // Créer l'entrée TOC avec hasChildren = false par défaut
                 val tocEntry = TocEntry(
                     id = currentTocEntryId,
                     bookId = bookId,
@@ -346,13 +361,12 @@ class DatabaseGenerator(
                     text = plainText,
                     level = level,
                     lineId = null,
-                    isLastChild = false // Will be updated later if this is the last child
+                    isLastChild = false,
+                    hasChildren = false  // Par défaut, sera mis à jour dans la deuxième passe
                 )
 
                 val tocEntryId = repository.insertTocEntry(tocEntry)
                 parentStack[level] = tocEntryId
-                
-                // Add this entry to the map of entries by parent
                 entriesByParent.getOrPut(parentId) { mutableListOf() }.add(tocEntryId)
 
                 val lineId = repository.insertLine(
@@ -384,9 +398,22 @@ class DatabaseGenerator(
                 logger.i { "Progress: $lineIndex/${lines.size} lines" }
             }
         }
-        
-        // Mark the last child of each parent as isLastChild=true
-        logger.d { "Marking last children for book ID: $bookId" }
+
+        // DEUXIÈME PASSE : Mettre à jour isLastChild et hasChildren
+        logger.d { "Updating isLastChild and hasChildren for book ID: $bookId" }
+
+        // Créer un set des IDs qui ont des enfants
+        val parentIds = allTocEntries.mapNotNull { it.parentId }.toSet()
+
+        // Mettre à jour hasChildren pour les entrées qui ont des enfants
+        for (entry in allTocEntries) {
+            if (entry.id in parentIds) {
+                logger.d { "Updating TOC entry ${entry.id} as having children" }
+                repository.updateTocEntryHasChildren(entry.id, true)
+            }
+        }
+
+        // Mettre à jour isLastChild
         for ((parentId, children) in entriesByParent) {
             if (children.isNotEmpty()) {
                 val lastChildId = children.last()
@@ -396,8 +423,9 @@ class DatabaseGenerator(
         }
 
         logger.i { "✅ Finished processing lines and TOC entries for book ID: $bookId" }
+        logger.i { "   Total TOC entries: ${allTocEntries.size}" }
+        logger.i { "   Entries with children: ${parentIds.size}" }
     }
-
 
     private fun cleanHtml(html: String): String {
         return HebrewTextUtils.removeNikud(

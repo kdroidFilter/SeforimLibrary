@@ -23,5 +23,6 @@ data class TocEntry(
     val text: String = "",
     val level: Int,
     val lineId: Long? = null,
-    val isLastChild: Boolean = false
+    val isLastChild: Boolean = false,
+    val hasChildren: Boolean = false
 )

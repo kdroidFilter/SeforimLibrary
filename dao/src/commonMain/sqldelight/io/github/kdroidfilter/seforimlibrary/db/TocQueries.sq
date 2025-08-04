@@ -1,4 +1,4 @@
--- Queries for table of contents
+-- TocQueries.sq
 
 selectByBookId:
 SELECT t.*, tt.text
@@ -31,18 +31,21 @@ JOIN tocText tt ON t.textId = tt.id
 WHERE t.lineId = ?;
 
 insert:
-INSERT INTO tocEntry (bookId, parentId, textId, level, lineId, isLastChild)
-VALUES (?, ?, ?, ?, ?, ?);
+INSERT INTO tocEntry (bookId, parentId, textId, level, lineId, isLastChild, hasChildren)
+VALUES (?, ?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO tocEntry (id, bookId, parentId, textId, level, lineId, isLastChild)
-VALUES (?, ?, ?, ?, ?, ?, ?);
+INSERT INTO tocEntry (id, bookId, parentId, textId, level, lineId, isLastChild, hasChildren)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 updateLineId:
 UPDATE tocEntry SET lineId = ? WHERE id = ?;
 
 updateIsLastChild:
 UPDATE tocEntry SET isLastChild = ? WHERE id = ?;
+
+updateHasChildren:
+UPDATE tocEntry SET hasChildren = ? WHERE id = ?;
 
 delete:
 DELETE FROM tocEntry WHERE id = ?;

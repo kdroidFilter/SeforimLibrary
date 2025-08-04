@@ -773,7 +773,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     suspend fun insertTocEntry(entry: TocEntry): Long = withContext(Dispatchers.IO) {
-        logger.d{"Repository inserting TOC entry with bookId: ${entry.bookId}, lineId: ${entry.lineId}"}
+        logger.d{"Repository inserting TOC entry with bookId: ${entry.bookId}, lineId: ${entry.lineId}, hasChildren: ${entry.hasChildren}"}
 
         // Get or create the tocText entry
         val textId = entry.textId ?: getOrCreateTocText(entry.text)
@@ -788,9 +788,10 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 textId = textId,
                 level = entry.level.toLong(),
                 lineId = entry.lineId,
-                isLastChild = if (entry.isLastChild) 1 else 0
+                isLastChild = if (entry.isLastChild) 1 else 0,
+                hasChildren = if (entry.hasChildren) 1 else 0  // NOUVEAU
             )
-            logger.d{"Repository inserted TOC entry with explicit ID: ${entry.id}, bookId: ${entry.bookId}, lineId: ${entry.lineId}"}
+            logger.d{"Repository inserted TOC entry with explicit ID: ${entry.id}, bookId: ${entry.bookId}, lineId: ${entry.lineId}, hasChildren: ${entry.hasChildren}"}
             return@withContext entry.id
         } else {
             // Fall back to auto-generated ID if entry.id is 0
@@ -800,18 +801,18 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 textId = textId,
                 level = entry.level.toLong(),
                 lineId = entry.lineId,
-                isLastChild = if (entry.isLastChild) 1 else 0
+                isLastChild = if (entry.isLastChild) 1 else 0,
+                hasChildren = if (entry.hasChildren) 1 else 0  // NOUVEAU
             )
             val tocId = database.tocQueriesQueries.lastInsertRowId().executeAsOne()
-            logger.d{"Repository inserted TOC entry with auto-generated ID: $tocId, bookId: ${entry.bookId}, lineId: ${entry.lineId}"}
+            logger.d{"Repository inserted TOC entry with auto-generated ID: $tocId, bookId: ${entry.bookId}, lineId: ${entry.lineId}, hasChildren: ${entry.hasChildren}"}
 
             // Check if insertion failed
             if (tocId == 0L) {
-
                 // Try to find a matching TOC entry by bookId and text
                 val existingEntries = database.tocQueriesQueries.selectByBookId(entry.bookId).executeAsList()
-                val matchingEntry = existingEntries.find { 
-                    it.text == entry.text && it.level == entry.level.toLong() 
+                val matchingEntry = existingEntries.find {
+                    it.text == entry.text && it.level == entry.level.toLong()
                 }
 
                 if (matchingEntry != null) {
@@ -826,6 +827,12 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
     }
 
+    // Nouvelle méthode pour mettre à jour hasChildren
+    suspend fun updateTocEntryHasChildren(tocEntryId: Long, hasChildren: Boolean) = withContext(Dispatchers.IO) {
+        logger.d{"Repository updating TOC entry $tocEntryId with hasChildren: $hasChildren"}
+        database.tocQueriesQueries.updateHasChildren(if (hasChildren) 1 else 0, tocEntryId)
+        logger.d{"Repository updated TOC entry $tocEntryId with hasChildren: $hasChildren"}
+    }
     suspend fun updateTocEntryLineId(tocEntryId: Long, lineId: Long) = withContext(Dispatchers.IO) {
         logger.d{"Repository updating TOC entry $tocEntryId with lineId: $lineId"}
         database.tocQueriesQueries.updateLineId(lineId, tocEntryId)
