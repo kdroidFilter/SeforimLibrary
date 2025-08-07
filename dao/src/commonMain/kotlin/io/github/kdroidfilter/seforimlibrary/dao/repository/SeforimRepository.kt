@@ -645,6 +645,34 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 lineIndex_ = endIndex.toLong()
             ).executeAsList().map { it.toModel() }
         }
+        
+    /**
+     * Gets the previous line for a given book and line index.
+     * 
+     * @param bookId The ID of the book
+     * @param currentLineIndex The index of the current line
+     * @return The previous line, or null if there is no previous line
+     */
+    suspend fun getPreviousLine(bookId: Long, currentLineIndex: Int): Line? = withContext(Dispatchers.IO) {
+        if (currentLineIndex <= 0) return@withContext null
+        
+        val previousIndex = currentLineIndex - 1
+        database.lineQueriesQueries.selectByBookIdAndIndex(bookId, previousIndex.toLong())
+            .executeAsOneOrNull()?.toModel()
+    }
+    
+    /**
+     * Gets the next line for a given book and line index.
+     * 
+     * @param bookId The ID of the book
+     * @param currentLineIndex The index of the current line
+     * @return The next line, or null if there is no next line
+     */
+    suspend fun getNextLine(bookId: Long, currentLineIndex: Int): Line? = withContext(Dispatchers.IO) {
+        val nextIndex = currentLineIndex + 1
+        database.lineQueriesQueries.selectByBookIdAndIndex(bookId, nextIndex.toLong())
+            .executeAsOneOrNull()?.toModel()
+    }
 
     suspend fun insertLine(line: Line): Long = withContext(Dispatchers.IO) {
         logger.d{"Repository inserting line with bookId: ${line.bookId}"}
