@@ -972,6 +972,53 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 }
         }
 
+    // New paginated methods for per-commentator pagination use cases
+    suspend fun getCommentariesForLineRange(
+        lineIds: List<Long>,
+        activeCommentatorIds: Set<Long> = emptySet(),
+        offset: Int,
+        limit: Int
+    ): List<CommentaryWithText> = withContext(Dispatchers.IO) {
+        database.linkQueriesQueries.selectLinksBySourceLineIds(lineIds)
+            .executeAsList()
+            .filter { activeCommentatorIds.isEmpty() || it.targetBookId in activeCommentatorIds }
+            .drop(offset)
+            .take(limit)
+            .map {
+                CommentaryWithText(
+                    link = Link(
+                        id = it.id,
+                        sourceBookId = it.sourceBookId,
+                        targetBookId = it.targetBookId,
+                        sourceLineId = it.sourceLineId,
+                        targetLineId = it.targetLineId,
+                        connectionType = ConnectionType.fromString(it.connectionType)
+                    ),
+                    targetBookTitle = it.targetBookTitle,
+                    targetText = it.targetText
+                )
+            }
+    }
+
+    suspend fun getAvailableCommentators(
+        bookId: Long,
+        offset: Int,
+        limit: Int
+    ): List<CommentatorInfo> = withContext(Dispatchers.IO) {
+        database.linkQueriesQueries.selectCommentatorsByBook(bookId)
+            .executeAsList()
+            .drop(offset)
+            .take(limit)
+            .map {
+                CommentatorInfo(
+                    bookId = it.targetBookId,
+                    title = it.targetBookTitle,
+                    author = it.author,
+                    linkCount = it.linkCount.toInt()
+                )
+            }
+    }
+
     suspend fun insertLink(link: Link): Long = withContext(Dispatchers.IO) {
         logger.d{"Repository inserting link from book ${link.sourceBookId} to book ${link.targetBookId}"}
         logger.d{"Link details - sourceLineId: ${link.sourceLineId}, targetLineId: ${link.targetLineId}, connectionType: ${link.connectionType.name}"}
