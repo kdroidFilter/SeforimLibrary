@@ -10,7 +10,7 @@ countAllLinks:
 SELECT COUNT(*) FROM link;
 
 selectLinksBySourceLineIds:
-SELECT l.*, ct.name AS connectionType, b.title AS targetBookTitle, tl.plainText AS targetText
+SELECT l.*, ct.name AS connectionType, b.title AS targetBookTitle, tl.content AS targetText
 FROM link l
 JOIN connection_type ct ON l.connectionTypeId = ct.id
 JOIN book b ON l.targetBookId = b.id
