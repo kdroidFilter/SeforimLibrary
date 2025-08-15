@@ -743,6 +743,12 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     // --- TocText methods ---
 
+    // Returns all distinct tocText values using generated SQLDelight query
+    suspend fun getAllTocTexts(): List<String> = withContext(Dispatchers.IO) {
+        logger.d { "Getting all tocText values (using generated query)" }
+        database.tocTextQueriesQueries.selectAll().executeAsList().map { it.text }
+    }
+    
     // Get or create a tocText entry and return its ID
     private suspend fun getOrCreateTocText(text: String): Long = withContext(Dispatchers.IO) {
         // Truncate text for logging if it's too long
