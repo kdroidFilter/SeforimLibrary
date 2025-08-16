@@ -1263,6 +1263,30 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         logger.d { "Updated target links for book $bookId: hasTargetLinks=$hasTargetLinks" }
     }
 
+    // --- Connection type specific helpers ---
+
+    suspend fun countLinksBySourceBookAndType(bookId: Long, typeName: String): Long = withContext(Dispatchers.IO) {
+        database.linkQueriesQueries.countLinksBySourceBookAndType(bookId, typeName).executeAsOne()
+    }
+
+    suspend fun countLinksByTargetBookAndType(bookId: Long, typeName: String): Long = withContext(Dispatchers.IO) {
+        database.linkQueriesQueries.countLinksByTargetBookAndType(bookId, typeName).executeAsOne()
+    }
+
+    suspend fun updateBookConnectionFlags(
+        bookId: Long,
+        hasTargum: Boolean,
+        hasReference: Boolean,
+        hasCommentary: Boolean,
+        hasOther: Boolean
+    ) = withContext(Dispatchers.IO) {
+        val t = if (hasTargum) 1L else 0L
+        val r = if (hasReference) 1L else 0L
+        val c = if (hasCommentary) 1L else 0L
+        val o = if (hasOther) 1L else 0L
+        database.bookQueriesQueries.updateConnectionFlags(t, r, c, o, bookId)
+    }
+
     /**
      * Checks if a book has any links (source or target).
      * 
@@ -1306,6 +1330,50 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val count = countLinksByTargetBook(bookId)
         val result = count > 0
         logger.d { "Book $bookId has target links: $result" }
+        result
+    }
+
+    /**
+     * Checks if a book has OTHER type comments.
+     */
+    suspend fun bookHasOtherComments(bookId: Long): Boolean = withContext(Dispatchers.IO) {
+        logger.d { "Checking if book $bookId has OTHER comments" }
+        val book = database.bookQueriesQueries.selectById(bookId).executeAsOneOrNull()
+        val result = book?.hasOtherConnection == 1L
+        logger.d { "Book $bookId has OTHER comments: $result" }
+        result
+    }
+
+    /**
+     * Checks if a book has COMMENTARY type comments.
+     */
+    suspend fun bookHasCommentaryComments(bookId: Long): Boolean = withContext(Dispatchers.IO) {
+        logger.d { "Checking if book $bookId has COMMENTARY comments" }
+        val book = database.bookQueriesQueries.selectById(bookId).executeAsOneOrNull()
+        val result = book?.hasCommentaryConnection == 1L
+        logger.d { "Book $bookId has COMMENTARY comments: $result" }
+        result
+    }
+
+    /**
+     * Checks if a book has REFERENCE type comments.
+     */
+    suspend fun bookHasReferenceComments(bookId: Long): Boolean = withContext(Dispatchers.IO) {
+        logger.d { "Checking if book $bookId has REFERENCE comments" }
+        val book = database.bookQueriesQueries.selectById(bookId).executeAsOneOrNull()
+        val result = book?.hasReferenceConnection == 1L
+        logger.d { "Book $bookId has REFERENCE comments: $result" }
+        result
+    }
+
+    /**
+     * Checks if a book has TARGUM type comments.
+     */
+    suspend fun bookHasTargumComments(bookId: Long): Boolean = withContext(Dispatchers.IO) {
+        logger.d { "Checking if book $bookId has TARGUM comments" }
+        val book = database.bookQueriesQueries.selectById(bookId).executeAsOneOrNull()
+        val result = book?.hasTargumConnection == 1L
+        logger.d { "Book $bookId has TARGUM comments: $result" }
         result
     }
 

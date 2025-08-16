@@ -82,7 +82,12 @@ fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json, authors: L
         pubDates = pubDates,
         heShortDesc = heShortDesc,
         order = orderIndex.toFloat(),
-        totalLines = totalLines.toInt()
+        totalLines = totalLines.toInt(),
+        hasTargumConnection = hasTargumConnection == 1L,
+        hasReferenceConnection = hasReferenceConnection == 1L,
+        hasCommentaryConnection = hasCommentaryConnection == 1L,
+        hasOtherConnection = hasOtherConnection == 1L
+
     )
 }
 

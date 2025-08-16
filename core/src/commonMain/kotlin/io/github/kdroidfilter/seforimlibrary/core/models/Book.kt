@@ -27,5 +27,9 @@ data class Book(
     val pubDates: List<PubDate> = emptyList(),
     val heShortDesc: String? = null,
     val order: Float = 999f,
-    val totalLines: Int = 0
+    val totalLines: Int = 0,
+    val hasTargumConnection: Boolean = false,
+    val hasReferenceConnection: Boolean = false,
+    val hasCommentaryConnection: Boolean = false,
+    val hasOtherConnection: Boolean = false,
 )

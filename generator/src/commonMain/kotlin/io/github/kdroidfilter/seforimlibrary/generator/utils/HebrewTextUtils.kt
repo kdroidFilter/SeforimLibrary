@@ -1,4 +1,4 @@
-package io.github.kdroidfilter.seforimlibrary.generator
+package io.github.kdroidfilter.seforimlibrary.generator.utils
 
 /**
  * Utility class for processing Hebrew text by removing diacritical marks (nikud/niqqud).
@@ -205,4 +205,3 @@ object HebrewTextUtils {
         return text.replace(MAQAF_CHAR, replacement)
     }
 }
-

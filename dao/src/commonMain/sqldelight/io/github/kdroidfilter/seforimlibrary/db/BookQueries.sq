@@ -46,5 +46,14 @@ SELECT MAX(id) FROM book;
 updateCategoryId:
 UPDATE book SET categoryId = ? WHERE id = ?;
 
+-- Update connection flags on book
+updateConnectionFlags:
+UPDATE book SET 
+    hasTargumConnection = ?,
+    hasReferenceConnection = ?,
+    hasCommentaryConnection = ?,
+    hasOtherConnection = ?
+WHERE id = ?;
+
 lastInsertRowId:
 SELECT last_insert_rowid();

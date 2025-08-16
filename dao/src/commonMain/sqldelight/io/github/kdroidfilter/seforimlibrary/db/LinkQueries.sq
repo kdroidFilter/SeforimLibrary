@@ -56,3 +56,17 @@ SELECT COUNT(*) FROM link WHERE sourceBookId = ?;
 -- Count links by target book
 countLinksByTargetBook:
 SELECT COUNT(*) FROM link WHERE targetBookId = ?;
+
+-- Count links by source book and connection type
+countLinksBySourceBookAndType:
+SELECT COUNT(*)
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+WHERE l.sourceBookId = ? AND ct.name = ?;
+
+-- Count links by target book and connection type
+countLinksByTargetBookAndType:
+SELECT COUNT(*)
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+WHERE l.targetBookId = ? AND ct.name = ?;

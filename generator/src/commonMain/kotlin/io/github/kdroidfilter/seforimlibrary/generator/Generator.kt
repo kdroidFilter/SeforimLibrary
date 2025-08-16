@@ -4,6 +4,7 @@ package io.github.kdroidfilter.seforimlibrary.generator
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
+import io.github.kdroidfilter.seforimlibrary.generator.utils.HebrewTextUtils
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerialName
@@ -664,6 +665,23 @@ class DatabaseGenerator(
 
             // Update the book_has_links table with separate flags for source and target links
             repository.updateBookHasLinks(book.id, hasSourceLinks, hasTargetLinks)
+
+            // Additionally: compute per-connection-type flags across source and target, then update book row
+            val targumCount = repository.countLinksBySourceBookAndType(book.id, "TARGUM") +
+                    repository.countLinksByTargetBookAndType(book.id, "TARGUM")
+            val referenceCount = repository.countLinksBySourceBookAndType(book.id, "REFERENCE") +
+                    repository.countLinksByTargetBookAndType(book.id, "REFERENCE")
+            val commentaryCount = repository.countLinksBySourceBookAndType(book.id, "COMMENTARY") +
+                    repository.countLinksByTargetBookAndType(book.id, "COMMENTARY")
+            val otherCount = repository.countLinksBySourceBookAndType(book.id, "OTHER") +
+                    repository.countLinksByTargetBookAndType(book.id, "OTHER")
+
+            val hasTargum = targumCount > 0
+            val hasReference = referenceCount > 0
+            val hasCommentary = commentaryCount > 0
+            val hasOther = otherCount > 0
+
+            repository.updateBookConnectionFlags(book.id, hasTargum, hasReference, hasCommentary, hasOther)
 
             // Update counters
             if (hasSourceLinks) {
