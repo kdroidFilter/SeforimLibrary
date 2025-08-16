@@ -21,25 +21,36 @@ fun main() = runBlocking {
 
     val logger = Logger.withTag("Main")
 
-    val dbFile = File("otzaria.db")
+    // Resolve paths from environment variables and fail if missing
+    val sourceDirEnv = System.getenv("OTZARIA_SOURCE_DIR")
+    val dbPathEnv = System.getenv("OTZARIA_DB_PATH")
+
+    if (sourceDirEnv.isNullOrBlank() || dbPathEnv.isNullOrBlank()) {
+        logger.e { "Missing required environment variables. Please set both OTZARIA_SOURCE_DIR and OTZARIA_DB_PATH." }
+        logger.e { "Examples:" }
+        logger.e { "  export OTZARIA_SOURCE_DIR=/path/to/otzaria_latest" }
+        logger.e { "  export OTZARIA_DB_PATH=/path/to/otzaria.db" }
+        exitProcess(1)
+    }
+
+    val sourcePath = Path(sourceDirEnv)
+    val dbPath = dbPathEnv
+
+    val dbFile = File(dbPath)
     val dbExists = dbFile.exists()
-    logger.d{"Database file exists: $dbExists"}
+    logger.d{"Database file exists: $dbExists at $dbPath"}
 
     // If the database file exists, rename it to make sure we're creating a new one
     if (dbExists) {
-        val backupFile = File("otzaria.db.bak")
+        val backupFile = File("$dbPath.bak")
         if (backupFile.exists()) {
             backupFile.delete()
         }
         dbFile.renameTo(backupFile)
-        logger.d{"Renamed existing database to otzaria.db.bak"}
+        logger.d{"Renamed existing database to ${backupFile.path}"}
     }
 
-    val driver = JdbcSqliteDriver(url = "jdbc:sqlite:otzaria.db")
-
-    val sourcePath = Path("/Users/elie/Downloads/otzaria_latest")
-//    val sourcePath = Path("/Users/elie/Documents/otzaria_latest")
-    val dbPath = Paths.get("otzaria.db").toFile().path
+    val driver = JdbcSqliteDriver(url = "jdbc:sqlite:$dbPath")
 
     if (!sourcePath.toFile().exists()) {
         logger.e{"The source directory does not exist: $sourcePath"}
