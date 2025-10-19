@@ -7,11 +7,11 @@ SELECT
     ls.bookTitle,
     ls.id,
     ls.lineIndex,
-    snippet(line_search, 4, '<b>', '</b>', '...', 10) snippet, -- colonne 4 = plainText
+    snippet(line_search, 4, '<b>', '</b>', '...', 30) snippet, -- colonne 4 = plainText
     bm25(line_search) rank -- Utilisation de bm25 pour un meilleur ranking
 FROM line_search ls
 WHERE ls.plainText MATCH ?
-ORDER BY rank
+ORDER BY rank, ls.id
 LIMIT ? OFFSET ?;
 
 -- Recherche dans un livre spécifique
@@ -21,11 +21,11 @@ SELECT
     ls.bookTitle,
     ls.id,
     ls.lineIndex,
-    snippet(line_search, 4, '<b>', '</b>', '...', 10) snippet,
+    snippet(line_search, 4, '<b>', '</b>', '...', 30) snippet,
     bm25(line_search) rank
 FROM line_search ls
 WHERE ls.plainText MATCH ? AND ls.bookId = ?
-ORDER BY rank
+ORDER BY rank, ls.id
 LIMIT ? OFFSET ?;
 
 -- Recherche par auteur
@@ -35,13 +35,13 @@ SELECT
     ls.bookTitle,
     ls.id,
     ls.lineIndex,
-    snippet(line_search, 4, '<b>', '</b>', '...', 10) snippet,
+    snippet(line_search, 4, '<b>', '</b>', '...', 30) snippet,
     bm25(line_search) rank
 FROM line_search ls
 JOIN book_author ba ON ls.bookId = ba.bookId
 JOIN author a ON ba.authorId = a.id
 WHERE ls.plainText MATCH ? AND a.name = ?
-ORDER BY rank
+ORDER BY rank, ls.id
 LIMIT ? OFFSET ?;
 
 -- Recherche avec filtre sur le titre du livre
@@ -51,12 +51,12 @@ SELECT
     ls.bookTitle,
     ls.id,
     ls.lineIndex,
-    snippet(line_search, 4, '<b>', '</b>', '...', 10) snippet,
+    snippet(line_search, 4, '<b>', '</b>', '...', 30) snippet,
     bm25(line_search) rank
 FROM line_search ls
 WHERE ls.plainText MATCH ?
 AND ls.bookTitle MATCH ?
-ORDER BY rank
+ORDER BY rank, ls.id
 LIMIT ? OFFSET ?;
 
 -- Recherche avec phrase exacte
@@ -66,11 +66,11 @@ SELECT
     ls.bookTitle,
     ls.id,
     ls.lineIndex,
-    snippet(line_search, 4, '<b>', '</b>', '...', 10) snippet,
+    snippet(line_search, 4, '<b>', '</b>', '...', 30) snippet,
     bm25(line_search) rank
 FROM line_search ls
 WHERE ls.plainText MATCH '"' || ? || '"'
-ORDER BY rank
+ORDER BY rank, ls.id
 LIMIT ? OFFSET ?;
 
 -- Recherche avec opérateurs booléens
