@@ -328,6 +328,7 @@ class DatabaseGenerator(
         val allTocEntries = mutableListOf<TocEntryData>()
         val parentStack = mutableMapOf<Int, Long>()
         val entriesByParent = mutableMapOf<Long?, MutableList<Long>>()
+        var currentOwningTocEntryId: Long? = null
 
         // PREMIÈRE PASSE : Créer toutes les entrées et lignes
         for ((lineIndex, line) in lines.withIndex()) {
@@ -369,6 +370,7 @@ class DatabaseGenerator(
                 val tocEntryId = repository.insertTocEntry(tocEntry)
                 parentStack[level] = tocEntryId
                 entriesByParent.getOrPut(parentId) { mutableListOf() }.add(tocEntryId)
+                currentOwningTocEntryId = tocEntryId
 
                 val lineId = repository.insertLine(
                     Line(
@@ -381,10 +383,12 @@ class DatabaseGenerator(
                 )
                 repository.updateTocEntryLineId(tocEntryId, lineId)
                 repository.updateLineTocEntry(lineId, tocEntryId)
+                // Map this heading line to its own TOC entry as owner
+                repository.upsertLineToc(lineId, tocEntryId)
             } else {
                 // Regular line
                 val currentLineId = nextLineId++
-                repository.insertLine(
+                val insertedLineId = repository.insertLine(
                     Line(
                         id = currentLineId,
                         bookId = bookId,
@@ -393,6 +397,10 @@ class DatabaseGenerator(
                         plainText = plainText
                     )
                 )
+                // Map regular line to the latest seen TOC entry (section owner) if any
+                currentOwningTocEntryId?.let { ownerId ->
+                    repository.upsertLineToc(insertedLineId, ownerId)
+                }
             }
 
             if (lineIndex % 1000 == 0) {

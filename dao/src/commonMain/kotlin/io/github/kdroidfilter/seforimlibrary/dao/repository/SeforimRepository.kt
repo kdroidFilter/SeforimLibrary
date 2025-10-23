@@ -44,6 +44,72 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
     }
 
+    // --- Line ⇄ TOC mapping ---
+
+    /**
+     * Maps a line to the TOC entry it belongs to. Upserts on conflict.
+     */
+    suspend fun upsertLineToc(lineId: Long, tocEntryId: Long) = withContext(Dispatchers.IO) {
+        database.lineTocQueriesQueries.upsert(lineId, tocEntryId)
+    }
+
+    /**
+     * Gets the tocEntryId associated with a line via the mapping table.
+     */
+    suspend fun getTocEntryIdForLine(lineId: Long): Long? = withContext(Dispatchers.IO) {
+        database.lineTocQueriesQueries.selectTocEntryIdByLineId(lineId).executeAsOneOrNull()
+    }
+
+    /**
+     * Gets the TocEntry model associated with a line via the mapping table.
+     */
+    suspend fun getTocEntryForLine(lineId: Long): TocEntry? = withContext(Dispatchers.IO) {
+        val tocId = database.lineTocQueriesQueries.selectTocEntryIdByLineId(lineId).executeAsOneOrNull()
+            ?: return@withContext null
+        database.tocQueriesQueries.selectTocById(tocId).executeAsOneOrNull()?.toModel()
+    }
+
+    /**
+     * Returns mappings (lineId -> tocEntryId) for a book ordered by line index.
+     */
+    suspend fun getLineTocMappingsForBook(bookId: Long): List<LineTocMapping> = withContext(Dispatchers.IO) {
+        database.lineTocQueriesQueries.selectByBookId(bookId).executeAsList().map {
+            // The generated type exposes columns as properties with same names
+            LineTocMapping(lineId = it.lineId, tocEntryId = it.tocEntryId)
+        }
+    }
+
+    /**
+     * Builds all mappings for a given book by assigning to each line
+     * the latest TOC entry whose start line index is <= line's index.
+     * This is useful for backfilling existing databases.
+     */
+    suspend fun rebuildLineTocForBook(bookId: Long) = withContext(Dispatchers.IO) {
+        // Clear existing mappings for the book
+        database.lineTocQueriesQueries.deleteByBookId(bookId)
+
+        // Insert computed mappings in a single statement using a correlated subquery
+        // Note: Uses lineIndex ordering via join on tocEntry.lineId → line.lineIndex
+        driver.execute(null, """
+            INSERT INTO line_toc(lineId, tocEntryId)
+            SELECT l.id AS lineId,
+                   (
+                       SELECT t.id
+                       FROM tocEntry t
+                       JOIN line sl ON sl.id = t.lineId
+                       WHERE t.bookId = l.bookId
+                         AND t.lineId IS NOT NULL
+                         AND sl.lineIndex <= l.lineIndex
+                       ORDER BY sl.lineIndex DESC
+                       LIMIT 1
+                   ) AS tocEntryId
+            FROM line l
+            WHERE l.bookId = ?
+        """.trimIndent(), 1) {
+            bindLong(0, bookId)
+        }
+    }
+
     // --- Categories ---
 
     /**

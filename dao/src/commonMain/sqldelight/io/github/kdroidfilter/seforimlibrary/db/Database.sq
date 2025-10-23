@@ -216,3 +216,15 @@ CREATE TABLE IF NOT EXISTS book_has_links (
 
 CREATE INDEX IF NOT EXISTS idx_book_has_source_links ON book_has_links(hasSourceLinks);
 CREATE INDEX IF NOT EXISTS idx_book_has_target_links ON book_has_links(hasTargetLinks);
+
+-- Mapping table: line -> owning TOC entry
+-- This denormalizes the relationship so every line can directly resolve
+-- the TOC entry it belongs to (the latest heading before or at the line).
+CREATE TABLE IF NOT EXISTS line_toc (
+    lineId INTEGER PRIMARY KEY,
+    tocEntryId INTEGER NOT NULL,
+    FOREIGN KEY (lineId) REFERENCES line(id) ON DELETE CASCADE,
+    FOREIGN KEY (tocEntryId) REFERENCES tocEntry(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_linetoc_toc ON line_toc(tocEntryId);
