@@ -53,6 +53,44 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         database.lineTocQueriesQueries.upsert(lineId, tocEntryId)
     }
 
+    // --- Performance helpers (transactions/PRAGMAs) ---
+
+    private var txCounter = 0
+
+    suspend fun <T> runInTransaction(block: suspend () -> T): T {
+        val name = "tx_${++txCounter}"
+        // Use SAVEPOINT to be safe even if nested or if outer code handles transactions
+        withContext(Dispatchers.IO) { driver.execute(null, "SAVEPOINT $name", 0) }
+        try {
+            val result = block()
+            withContext(Dispatchers.IO) { driver.execute(null, "RELEASE SAVEPOINT $name", 0) }
+            return result
+        } catch (t: Throwable) {
+            try {
+                withContext(Dispatchers.IO) { driver.execute(null, "ROLLBACK TO SAVEPOINT $name", 0) }
+            } catch (_: Throwable) {
+            } finally {
+                // Always release to clear the savepoint even if rollback failed
+                try { withContext(Dispatchers.IO) { driver.execute(null, "RELEASE SAVEPOINT $name", 0) } } catch (_: Throwable) {}
+            }
+            throw t
+        }
+    }
+
+    suspend fun setSynchronous(mode: String) = withContext(Dispatchers.IO) {
+        driver.execute(null, "PRAGMA synchronous=$mode", 0)
+    }
+
+    suspend fun setSynchronousOff() = setSynchronous("OFF")
+    suspend fun setSynchronousNormal() = setSynchronous("NORMAL")
+
+    suspend fun bulkUpsertLineToc(pairs: List<Pair<Long, Long>>) = withContext(Dispatchers.IO) {
+        if (pairs.isEmpty()) return@withContext
+        for ((lineId, tocEntryId) in pairs) {
+            database.lineTocQueriesQueries.upsert(lineId, tocEntryId)
+        }
+    }
+
     /**
      * Gets the tocEntryId associated with a line via the mapping table.
      */
@@ -67,6 +105,20 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val tocId = database.lineTocQueriesQueries.selectTocEntryIdByLineId(lineId).executeAsOneOrNull()
             ?: return@withContext null
         database.tocQueriesQueries.selectTocById(tocId).executeAsOneOrNull()?.toModel()
+    }
+
+    /**
+     * Returns the TOC entry whose heading line is the given line id, or null if not a TOC heading.
+     */
+    suspend fun getHeadingTocEntryByLineId(lineId: Long): TocEntry? = withContext(Dispatchers.IO) {
+        database.tocQueriesQueries.selectByLineId(lineId).executeAsOneOrNull()?.toModel()
+    }
+
+    /**
+     * Returns all line ids that belong to the given TOC entry (section), ordered by lineIndex.
+     */
+    suspend fun getLineIdsForTocEntry(tocEntryId: Long): List<Long> = withContext(Dispatchers.IO) {
+        database.lineTocQueriesQueries.selectLineIdsByTocEntryId(tocEntryId).executeAsList()
     }
 
     /**

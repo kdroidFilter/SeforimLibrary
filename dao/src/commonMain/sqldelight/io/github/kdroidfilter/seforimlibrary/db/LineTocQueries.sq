@@ -13,6 +13,13 @@ JOIN line l ON l.id = lt.lineId
 WHERE l.bookId = ?
 ORDER BY l.lineIndex;
 
+selectLineIdsByTocEntryId:
+SELECT l.id
+FROM line l
+JOIN line_toc lt ON lt.lineId = l.id
+WHERE lt.tocEntryId = ?
+ORDER BY l.lineIndex;
+
 insert:
 INSERT INTO line_toc (lineId, tocEntryId)
 VALUES (?, ?);
@@ -29,4 +36,3 @@ deleteByBookId:
 DELETE FROM line_toc WHERE lineId IN (
     SELECT l.id FROM line l WHERE l.bookId = ?
 );
-

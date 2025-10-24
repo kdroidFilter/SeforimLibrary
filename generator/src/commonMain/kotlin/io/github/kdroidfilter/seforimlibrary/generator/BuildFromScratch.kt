@@ -16,28 +16,32 @@ import co.touchlab.kermit.Severity
  */
 fun main() = runBlocking {
     // Configure Kermit to show all logs for live monitoring
-    Logger.setMinSeverity(Severity.Debug)
+    Logger.setMinSeverity(Severity.Warn)
 
     val logger = Logger.withTag("Main")
 
     // Resolve required environment variables for generation mode
-    val dbPathEnv = System.getenv("SEFORIM_DB")
-    if (dbPathEnv.isNullOrBlank()) {
-        logger.e { "Missing required environment variable SEFORIM_DB" }
-        logger.e { "Example: export SEFORIM_DB=/path/to/seforim.db" }
-        exitProcess(1)
-    }
-    val dbPath = dbPathEnv
+//    val dbPathEnv = System.getenv("SEFORIM_DB")
+//    if (dbPathEnv.isNullOrBlank()) {
+//        logger.e { "Missing required environment variable SEFORIM_DB" }
+//        logger.e { "Example: export SEFORIM_DB=/path/to/seforim.db" }
+//        exitProcess(1)
+//    }
+//    val dbPath = dbPathEnv
+
+    val dbPath = "/Users/eliegambache/Documents/seforim.db"
 
     val sourceDirEnv = System.getenv("OTZARIA_SOURCE_DIR")
 
-    if (sourceDirEnv.isNullOrBlank()) {
-        logger.e { "Missing required environment variable OTZARIA_SOURCE_DIR for generation mode" }
-        logger.e { "Example: export OTZARIA_SOURCE_DIR=/path/to/otzaria_latest" }
-        exitProcess(1)
-    }
+//    if (sourceDirEnv.isNullOrBlank()) {
+//        logger.e { "Missing required environment variable OTZARIA_SOURCE_DIR for generation mode" }
+//        logger.e { "Example: export OTZARIA_SOURCE_DIR=/path/to/otzaria_latest" }
+//        exitProcess(1)
+//    }
 
-    val sourcePath = Path(sourceDirEnv)
+//    val sourcePath = Path(sourceDirEnv)
+
+    val sourcePath = Path("/Volumes/Data/Downloads/otzaria_latest")
 
     val dbFile = File(dbPath)
     val dbExists = dbFile.exists()

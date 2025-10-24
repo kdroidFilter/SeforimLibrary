@@ -206,6 +206,25 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectChildren.toModel(): TocEntry 
 }
 
 /**
+ * Converts a database SelectByLineId result to a domain TocEntry model.
+ * This is used when retrieving a TOC entry by its heading line id.
+ */
+fun io.github.kdroidfilter.seforimlibrary.db.SelectByLineId.toModel(): TocEntry {
+    logger.d{"Converting database TocEntry (from SelectByLineId) with id: $id, bookId: $bookId, lineId: $lineId"}
+    return TocEntry(
+        id = id,
+        bookId = bookId,
+        parentId = parentId,
+        textId = textId,
+        text = text,
+        level = level.toInt(),
+        lineId = lineId,
+        isLastChild = isLastChild == 1L,
+        hasChildren = hasChildren == 1L
+    )
+}
+
+/**
  * Converts a database Connection_type entity to a domain ConnectionType enum.
  *
  * @return The domain ConnectionType enum
