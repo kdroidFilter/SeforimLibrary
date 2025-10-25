@@ -1309,6 +1309,33 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     /**
+     * Executes a raw FTS5 query string that may contain operators like NEAR, AND/OR, etc.
+     * The query is passed as-is to the FTS5 MATCH clause. Callers are responsible for
+     * constructing a valid FTS5 query string.
+     *
+     * This is useful for proximity searches such as: term1 NEAR/5 term2
+     */
+    suspend fun searchWithOperators(
+        ftsQuery: String,
+        limit: Int = 50,
+        offset: Int = 0
+    ): List<SearchResult> = withContext(Dispatchers.IO) {
+        database.searchQueriesQueries
+            .searchWithOperators(ftsQuery, limit.toLong(), offset.toLong())
+            .executeAsList()
+            .map { row ->
+                io.github.kdroidfilter.seforimlibrary.core.models.SearchResult(
+                    bookId = row.bookId ?: 0,
+                    bookTitle = row.bookTitle ?: "",
+                    lineId = row.id ?: 0,
+                    lineIndex = row.lineIndex?.toInt() ?: 0,
+                    snippet = row.snippet ?: "",
+                    rank = row.rank
+                )
+            }
+    }
+
+    /**
      * Executes a raw SQL query.
      * This is useful for operations that are not covered by the generated queries,
      * such as enabling or disabling foreign key constraints.
