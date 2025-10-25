@@ -44,6 +44,124 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
     }
 
+    // --- Line ⇄ TOC mapping ---
+
+    /**
+     * Maps a line to the TOC entry it belongs to. Upserts on conflict.
+     */
+    suspend fun upsertLineToc(lineId: Long, tocEntryId: Long) = withContext(Dispatchers.IO) {
+        database.lineTocQueriesQueries.upsert(lineId, tocEntryId)
+    }
+
+    // --- Performance helpers (transactions/PRAGMAs) ---
+
+    private var txCounter = 0
+
+    suspend fun <T> runInTransaction(block: suspend () -> T): T {
+        val name = "tx_${++txCounter}"
+        // Use SAVEPOINT to be safe even if nested or if outer code handles transactions
+        withContext(Dispatchers.IO) { driver.execute(null, "SAVEPOINT $name", 0) }
+        try {
+            val result = block()
+            withContext(Dispatchers.IO) { driver.execute(null, "RELEASE SAVEPOINT $name", 0) }
+            return result
+        } catch (t: Throwable) {
+            try {
+                withContext(Dispatchers.IO) { driver.execute(null, "ROLLBACK TO SAVEPOINT $name", 0) }
+            } catch (_: Throwable) {
+            } finally {
+                // Always release to clear the savepoint even if rollback failed
+                try { withContext(Dispatchers.IO) { driver.execute(null, "RELEASE SAVEPOINT $name", 0) } } catch (_: Throwable) {}
+            }
+            throw t
+        }
+    }
+
+    suspend fun setSynchronous(mode: String) = withContext(Dispatchers.IO) {
+        driver.execute(null, "PRAGMA synchronous=$mode", 0)
+    }
+
+    suspend fun setSynchronousOff() = setSynchronous("OFF")
+    suspend fun setSynchronousNormal() = setSynchronous("NORMAL")
+
+    suspend fun bulkUpsertLineToc(pairs: List<Pair<Long, Long>>) = withContext(Dispatchers.IO) {
+        if (pairs.isEmpty()) return@withContext
+        for ((lineId, tocEntryId) in pairs) {
+            database.lineTocQueriesQueries.upsert(lineId, tocEntryId)
+        }
+    }
+
+    /**
+     * Gets the tocEntryId associated with a line via the mapping table.
+     */
+    suspend fun getTocEntryIdForLine(lineId: Long): Long? = withContext(Dispatchers.IO) {
+        database.lineTocQueriesQueries.selectTocEntryIdByLineId(lineId).executeAsOneOrNull()
+    }
+
+    /**
+     * Gets the TocEntry model associated with a line via the mapping table.
+     */
+    suspend fun getTocEntryForLine(lineId: Long): TocEntry? = withContext(Dispatchers.IO) {
+        val tocId = database.lineTocQueriesQueries.selectTocEntryIdByLineId(lineId).executeAsOneOrNull()
+            ?: return@withContext null
+        database.tocQueriesQueries.selectTocById(tocId).executeAsOneOrNull()?.toModel()
+    }
+
+    /**
+     * Returns the TOC entry whose heading line is the given line id, or null if not a TOC heading.
+     */
+    suspend fun getHeadingTocEntryByLineId(lineId: Long): TocEntry? = withContext(Dispatchers.IO) {
+        database.tocQueriesQueries.selectByLineId(lineId).executeAsOneOrNull()?.toModel()
+    }
+
+    /**
+     * Returns all line ids that belong to the given TOC entry (section), ordered by lineIndex.
+     */
+    suspend fun getLineIdsForTocEntry(tocEntryId: Long): List<Long> = withContext(Dispatchers.IO) {
+        database.lineTocQueriesQueries.selectLineIdsByTocEntryId(tocEntryId).executeAsList()
+    }
+
+    /**
+     * Returns mappings (lineId -> tocEntryId) for a book ordered by line index.
+     */
+    suspend fun getLineTocMappingsForBook(bookId: Long): List<LineTocMapping> = withContext(Dispatchers.IO) {
+        database.lineTocQueriesQueries.selectByBookId(bookId).executeAsList().map {
+            // The generated type exposes columns as properties with same names
+            LineTocMapping(lineId = it.lineId, tocEntryId = it.tocEntryId)
+        }
+    }
+
+    /**
+     * Builds all mappings for a given book by assigning to each line
+     * the latest TOC entry whose start line index is <= line's index.
+     * This is useful for backfilling existing databases.
+     */
+    suspend fun rebuildLineTocForBook(bookId: Long) = withContext(Dispatchers.IO) {
+        // Clear existing mappings for the book
+        database.lineTocQueriesQueries.deleteByBookId(bookId)
+
+        // Insert computed mappings in a single statement using a correlated subquery
+        // Note: Uses lineIndex ordering via join on tocEntry.lineId → line.lineIndex
+        driver.execute(null, """
+            INSERT INTO line_toc(lineId, tocEntryId)
+            SELECT l.id AS lineId,
+                   (
+                       SELECT t.id
+                       FROM tocEntry t
+                       JOIN line sl ON sl.id = t.lineId
+                       WHERE t.bookId = l.bookId
+                         AND t.lineId IS NOT NULL
+                         AND sl.lineIndex <= l.lineIndex
+                       ORDER BY sl.lineIndex DESC
+                       LIMIT 1
+                   ) AS tocEntryId
+            FROM line l
+            WHERE l.bookId = ?
+        """.trimIndent(), 1) {
+            bindLong(0, bookId)
+        }
+    }
+
     // --- Categories ---
 
     /**

@@ -58,6 +58,10 @@ class DatabaseGenerator(
             logger.i { "Disabling foreign keys for better performance..." }
             disableForeignKeys()
 
+            // Lower durability for faster bulk writes (restored afterward)
+            logger.i { "Setting PRAGMA synchronous=OFF for bulk generation" }
+            repository.setSynchronousOff()
+
             // Load metadata
             val metadata = loadMetadata()
             logger.i { "Metadata loaded: ${metadata.size} entries" }
@@ -78,6 +82,10 @@ class DatabaseGenerator(
             logger.i { "Re-enabling foreign keys..." }
             enableForeignKeys()
 
+            // Restore synchronous mode
+            logger.i { "Restoring PRAGMA synchronous=NORMAL" }
+            repository.setSynchronousNormal()
+
             // Rebuild FTS5 index
             logger.i { "Rebuilding FTS5 index..." }
             rebuildFts5Index()
@@ -90,6 +98,9 @@ class DatabaseGenerator(
             } catch (innerEx: Exception) {
                 logger.w(innerEx) { "Error re-enabling foreign keys after failure" }
             }
+            try {
+                repository.setSynchronousNormal()
+            } catch (_: Exception) {}
 
             logger.e(e) { "Error during generation" }
             throw e
@@ -328,6 +339,8 @@ class DatabaseGenerator(
         val allTocEntries = mutableListOf<TocEntryData>()
         val parentStack = mutableMapOf<Int, Long>()
         val entriesByParent = mutableMapOf<Long?, MutableList<Long>>()
+        var currentOwningTocEntryId: Long? = null
+        val lineTocBuffer = ArrayList<Pair<Long, Long>>(minOf(lines.size, 200_000))
 
         // PREMIÈRE PASSE : Créer toutes les entrées et lignes
         for ((lineIndex, line) in lines.withIndex()) {
@@ -369,6 +382,7 @@ class DatabaseGenerator(
                 val tocEntryId = repository.insertTocEntry(tocEntry)
                 parentStack[level] = tocEntryId
                 entriesByParent.getOrPut(parentId) { mutableListOf() }.add(tocEntryId)
+                currentOwningTocEntryId = tocEntryId
 
                 val lineId = repository.insertLine(
                     Line(
@@ -381,10 +395,16 @@ class DatabaseGenerator(
                 )
                 repository.updateTocEntryLineId(tocEntryId, lineId)
                 repository.updateLineTocEntry(lineId, tocEntryId)
+                // Buffer this mapping instead of writing immediately
+                lineTocBuffer.add(lineId to tocEntryId)
+                if (lineTocBuffer.size >= 200_000) {
+                    repository.bulkUpsertLineToc(lineTocBuffer)
+                    lineTocBuffer.clear()
+                }
             } else {
                 // Regular line
                 val currentLineId = nextLineId++
-                repository.insertLine(
+                val insertedLineId = repository.insertLine(
                     Line(
                         id = currentLineId,
                         bookId = bookId,
@@ -393,12 +413,23 @@ class DatabaseGenerator(
                         plainText = plainText
                     )
                 )
+                // Buffer mapping for regular line if there is a current owner
+                currentOwningTocEntryId?.let { ownerId ->
+                    lineTocBuffer.add(insertedLineId to ownerId)
+                    if (lineTocBuffer.size >= 200_000) {
+                        repository.bulkUpsertLineToc(lineTocBuffer)
+                        lineTocBuffer.clear()
+                    }
+                }
             }
 
             if (lineIndex % 1000 == 0) {
                 logger.i { "Progress: $lineIndex/${lines.size} lines" }
             }
         }
+
+        // Flush buffered line→toc mappings in bulk
+        repository.bulkUpsertLineToc(lineTocBuffer)
 
         // DEUXIÈME PASSE : Mettre à jour isLastChild et hasChildren
         logger.d { "Updating isLastChild and hasChildren for book ID: $bookId" }
