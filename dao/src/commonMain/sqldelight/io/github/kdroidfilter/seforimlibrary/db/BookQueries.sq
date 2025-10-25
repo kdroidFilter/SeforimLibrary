@@ -12,6 +12,9 @@ SELECT * FROM book WHERE categoryId = ? ORDER BY orderIndex, title;
 selectByTitle:
 SELECT * FROM book WHERE title = ? LIMIT 1;
 
+selectByTitleLike:
+SELECT * FROM book WHERE title LIKE ? LIMIT 1;
+
 
 selectByAuthor:
 SELECT b.* FROM book b

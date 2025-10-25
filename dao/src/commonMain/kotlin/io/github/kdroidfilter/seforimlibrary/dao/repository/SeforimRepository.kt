@@ -175,6 +175,21 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     /**
+     * Retrieves a category by its exact title.
+     */
+    suspend fun getCategoryByTitle(title: String): Category? = withContext(Dispatchers.IO) {
+        database.categoryQueriesQueries.selectByTitle(title).executeAsOneOrNull()?.toModel()
+    }
+
+    /**
+     * Retrieves best-matching category by name, trying exact, normalized, then LIKE.
+     */
+    suspend fun findCategoryByTitlePreferExact(title: String): Category? = withContext(Dispatchers.IO) {
+        database.categoryQueriesQueries.selectByTitle(title).executeAsOneOrNull()?.toModel()
+            ?: database.categoryQueriesQueries.selectByTitleLike("%$title%").executeAsOneOrNull()?.toModel()
+    }
+
+    /**
      * Retrieves all root categories (categories without a parent).
      *
      * @return A list of root categories
@@ -317,6 +332,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
     }
 
+    
+
 
 
     suspend fun searchBooksByAuthor(authorName: String): List<Book> = withContext(Dispatchers.IO) {
@@ -436,6 +453,21 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val pubPlaces = getBookPubPlaces(bookData.id)
         val pubDates = getBookPubDates(bookData.id)
         return@withContext bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+    }
+
+    /**
+     * Retrieves a book by approximate title (exact, normalized, or LIKE).
+     */
+    suspend fun findBookByTitlePreferExact(title: String): Book? = withContext(Dispatchers.IO) {
+        val row = database.bookQueriesQueries.selectByTitle(title).executeAsOneOrNull()
+            ?: database.bookQueriesQueries.selectByTitleLike("%$title%").executeAsOneOrNull()
+        row?.let { bookData ->
+            val authors = getBookAuthors(bookData.id)
+            val topics = getBookTopics(bookData.id)
+            val pubPlaces = getBookPubPlaces(bookData.id)
+            val pubDates = getBookPubDates(bookData.id)
+            bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+        }
     }
 
     // Get a topic by name, returns null if not found
@@ -1266,6 +1298,20 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         offset: Int = 0
     ): List<SearchResult> = withContext(Dispatchers.IO) {
         val ftsQuery = prepareFtsQuery(query)
+        database.searchQueriesQueries.searchInBook(
+            ftsQuery, bookId, limit.toLong(), offset.toLong()
+        ).executeAsList().map { it.toSearchResult() }
+    }
+
+    /**
+     * Same as searchInBook but accepts a raw FTS query (e.g., NEAR operators).
+     */
+    suspend fun searchInBookWithOperators(
+        bookId: Long,
+        ftsQuery: String,
+        limit: Int = 200,
+        offset: Int = 0
+    ): List<SearchResult> = withContext(Dispatchers.IO) {
         database.searchQueriesQueries.searchInBook(
             ftsQuery, bookId, limit.toLong(), offset.toLong()
         ).executeAsList().map { it.toSearchResult() }
