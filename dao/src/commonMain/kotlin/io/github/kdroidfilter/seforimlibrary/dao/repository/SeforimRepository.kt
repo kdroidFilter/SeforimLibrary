@@ -208,6 +208,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         database.categoryQueriesQueries.selectByParentId(parentId).executeAsList().map { it.toModel() }
     }
 
+    /**
+     * Finds categories whose title matches the LIKE pattern. Use %term% for contains.
+     */
+    suspend fun findCategoriesByTitleLike(pattern: String, limit: Int = 20): List<Category> = withContext(Dispatchers.IO) {
+        database.categoryQueriesQueries.selectManyByTitleLike(pattern, limit.toLong()).executeAsList().map { it.toModel() }
+    }
+
 
 
     /**
@@ -324,6 +331,20 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     suspend fun getBooksByCategory(categoryId: Long): List<Book> = withContext(Dispatchers.IO) {
         val books = database.bookQueriesQueries.selectByCategoryId(categoryId).executeAsList()
         return@withContext books.map { bookData ->
+            val authors = getBookAuthors(bookData.id)
+            val topics = getBookTopics(bookData.id)
+            val pubPlaces = getBookPubPlaces(bookData.id)
+            val pubDates = getBookPubDates(bookData.id)
+            bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+        }
+    }
+
+    /**
+     * Finds books whose title matches the LIKE pattern. Use %term% for contains.
+     */
+    suspend fun findBooksByTitleLike(pattern: String, limit: Int = 20): List<Book> = withContext(Dispatchers.IO) {
+        val rows = database.bookQueriesQueries.selectManyByTitleLike(pattern, limit.toLong()).executeAsList()
+        rows.map { bookData ->
             val authors = getBookAuthors(bookData.id)
             val topics = getBookTopics(bookData.id)
             val pubPlaces = getBookPubPlaces(bookData.id)

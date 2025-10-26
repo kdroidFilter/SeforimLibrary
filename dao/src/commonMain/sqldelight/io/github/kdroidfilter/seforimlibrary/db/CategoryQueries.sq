@@ -18,6 +18,9 @@ SELECT * FROM category WHERE title = ? LIMIT 1;
 selectByTitleLike:
 SELECT * FROM category WHERE title LIKE ? ORDER BY level ASC, title LIMIT 1;
 
+selectManyByTitleLike:
+SELECT * FROM category WHERE title LIKE ? ORDER BY level ASC, title LIMIT ?;
+
 insert:
 INSERT INTO category (parentId, title, level)
 VALUES (?, ?, ?);
