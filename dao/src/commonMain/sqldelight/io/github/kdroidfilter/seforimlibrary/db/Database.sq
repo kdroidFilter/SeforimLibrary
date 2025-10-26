@@ -9,6 +9,18 @@ CREATE TABLE IF NOT EXISTS category (
 
 CREATE INDEX IF NOT EXISTS idx_category_parent ON category(parentId);
 
+-- Closure table for efficient descendant/ancestor lookups
+CREATE TABLE IF NOT EXISTS category_closure (
+    ancestorId INTEGER NOT NULL,
+    descendantId INTEGER NOT NULL,
+    PRIMARY KEY (ancestorId, descendantId),
+    FOREIGN KEY (ancestorId) REFERENCES category(id) ON DELETE CASCADE,
+    FOREIGN KEY (descendantId) REFERENCES category(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_category_closure_ancestor ON category_closure(ancestorId);
+CREATE INDEX IF NOT EXISTS idx_category_closure_descendant ON category_closure(descendantId);
+
 -- Authors table
 CREATE TABLE IF NOT EXISTS author (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -191,6 +203,7 @@ SELECT
     l.bookId,
     l.lineIndex,
     b.title AS bookTitle,
+    b.categoryId AS categoryId,
     l.plainText
 FROM line l
 JOIN book b ON l.bookId = b.id;
@@ -201,6 +214,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS line_search USING fts5(
     id INTEGER UNINDEXED,
     lineIndex INTEGER UNINDEXED,
     bookTitle TEXT UNINDEXED,
+    categoryId INTEGER UNINDEXED,
     plainText TEXT,
     content='line_with_book_title',
     content_rowid='id'

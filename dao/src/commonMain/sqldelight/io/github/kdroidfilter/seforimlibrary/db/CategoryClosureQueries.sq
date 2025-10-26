@@ -1,0 +1,14 @@
+-- Queries for the category_closure table
+
+clear:
+DELETE FROM category_closure;
+
+insert:
+INSERT OR IGNORE INTO category_closure(ancestorId, descendantId) VALUES(?, ?);
+
+selectDescendants:
+SELECT descendantId FROM category_closure WHERE ancestorId = ?;
+
+selectAncestors:
+SELECT ancestorId FROM category_closure WHERE descendantId = ?;
+

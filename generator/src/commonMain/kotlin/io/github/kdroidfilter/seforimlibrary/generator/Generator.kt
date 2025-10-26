@@ -86,6 +86,10 @@ class DatabaseGenerator(
             logger.i { "Restoring PRAGMA synchronous=NORMAL" }
             repository.setSynchronousNormal()
 
+            // Build category closure table for fast descendant queries
+            logger.i { "Building category_closure (ancestor-descendant) table..." }
+            repository.rebuildCategoryClosure()
+
             // Rebuild FTS5 index
             logger.i { "Rebuilding FTS5 index..." }
             rebuildFts5Index()

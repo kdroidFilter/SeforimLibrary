@@ -305,6 +305,31 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
     }
 
+    /**
+     * Rebuilds the category_closure table from the current category tree.
+     * Inserts self-pairs and ancestor-descendant pairs for fast descendant filtering.
+     */
+    suspend fun rebuildCategoryClosure() = withContext(Dispatchers.IO) {
+        // Clear existing closure data
+        database.categoryClosureQueriesQueries.clear()
+        // Load all categories (id, parentId)
+        val rows = database.categoryQueriesQueries.selectAll().executeAsList()
+        val parentMap = rows.associate { it.id to it.parentId }
+        // For each category, walk up to root and insert pairs
+        for (desc in rows) {
+            var anc: Long? = desc.id
+            // Self
+            database.categoryClosureQueriesQueries.insert(desc.id, desc.id)
+            anc = parentMap[desc.id]
+            val safety = 128
+            var guard = 0
+            while (anc != null && guard++ < safety) {
+                database.categoryClosureQueriesQueries.insert(anc, desc.id)
+                anc = parentMap[anc]
+            }
+        }
+    }
+
     // --- Books ---
 
     /**
@@ -1401,6 +1426,32 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 )
             }
     }
+
+    /**
+     * Searches within a category (including descendants) using a raw FTS query with operators.
+     */
+    suspend fun searchInCategoryWithOperators(
+        categoryId: Long,
+        ftsQuery: String,
+        limit: Int = 50,
+        offset: Int = 0
+    ): List<SearchResult> = withContext(Dispatchers.IO) {
+        database.searchQueriesQueries
+            .searchInCategoryWithOperators(ftsQuery, categoryId, limit.toLong(), offset.toLong())
+            .executeAsList()
+            .map { row ->
+                io.github.kdroidfilter.seforimlibrary.core.models.SearchResult(
+                    bookId = row.bookId ?: 0,
+                    bookTitle = row.bookTitle ?: "",
+                    lineId = row.id ?: 0,
+                    lineIndex = row.lineIndex?.toInt() ?: 0,
+                    snippet = row.snippet ?: "",
+                    rank = row.rank
+                )
+            }
+    }
+
+    // Note: For category filtering with descendants, the app currently aggregates per-book results.
 
     /**
      * Executes a raw SQL query.

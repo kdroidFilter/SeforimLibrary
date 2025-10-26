@@ -61,3 +61,23 @@ tasks.register<JavaExec>("runBuildFromScratch") {
     jvmArgs = listOf("-Xmx4g", "-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200")
 }
 
+// Utility: rebuild category_closure + FTS5 for an existing DB
+// Usage:
+//   ./gradlew :generator:rebuildClosureAndFts -PseforimDb=/path/to/seforim.db
+// or set env var SEFORIM_DB and run the task without -P.
+tasks.register<JavaExec>("rebuildClosureAndFts") {
+    group = "application"
+    description = "Rebuild category_closure and FTS5 index for an existing DB. Use -PseforimDb=/path or SEFORIM_DB env."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.RebuildClosureAndFtsKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    // Propagate DB path to the launched JVM
+    if (project.hasProperty("seforimDb")) {
+        systemProperty("SEFORIM_DB", project.property("seforimDb") as String)
+    }
+
+    // Give the process a reasonable heap
+    jvmArgs = listOf("-Xmx1g", "-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200")
+}
