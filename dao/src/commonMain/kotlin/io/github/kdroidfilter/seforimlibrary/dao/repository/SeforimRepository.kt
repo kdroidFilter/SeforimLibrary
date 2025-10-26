@@ -58,21 +58,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     private var txCounter = 0
 
     suspend fun <T> runInTransaction(block: suspend () -> T): T {
-        val name = "tx_${++txCounter}"
-        // Use SAVEPOINT to be safe even if nested or if outer code handles transactions
-        withContext(Dispatchers.IO) { driver.execute(null, "SAVEPOINT $name", 0) }
-        try {
+        // Use explicit transaction boundaries to avoid savepoint issues with some SQLite configurations
+        withContext(Dispatchers.IO) { driver.execute(null, "BEGIN IMMEDIATE", 0) }
+        return try {
             val result = block()
-            withContext(Dispatchers.IO) { driver.execute(null, "RELEASE SAVEPOINT $name", 0) }
-            return result
+            withContext(Dispatchers.IO) { driver.execute(null, "COMMIT", 0) }
+            result
         } catch (t: Throwable) {
-            try {
-                withContext(Dispatchers.IO) { driver.execute(null, "ROLLBACK TO SAVEPOINT $name", 0) }
-            } catch (_: Throwable) {
-            } finally {
-                // Always release to clear the savepoint even if rollback failed
-                try { withContext(Dispatchers.IO) { driver.execute(null, "RELEASE SAVEPOINT $name", 0) } } catch (_: Throwable) {}
-            }
+            try { withContext(Dispatchers.IO) { driver.execute(null, "ROLLBACK", 0) } } catch (_: Throwable) {}
             throw t
         }
     }
@@ -868,6 +861,10 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val nextIndex = currentLineIndex + 1
         database.lineQueriesQueries.selectByBookIdAndIndex(bookId, nextIndex.toLong())
             .executeAsOneOrNull()?.toModel()
+    }
+
+    suspend fun updateLinePlainText(lineId: Long, plain: String) = withContext(Dispatchers.IO) {
+        database.lineExtraQueriesQueries.updatePlainText(plain, lineId)
     }
 
     suspend fun insertLine(line: Line): Long = withContext(Dispatchers.IO) {

@@ -464,11 +464,11 @@ class DatabaseGenerator(
     }
 
     private fun cleanHtml(html: String): String {
-        return HebrewTextUtils.removeNikud(
-            Jsoup.clean(html, Safelist.none())
-                .trim()
-                .replace("\\s+".toRegex(), " ")
-        )
+        val cleaned = Jsoup.clean(html, Safelist.none())
+            .trim()
+            .replace("\\s+".toRegex(), " ")
+        val withoutMaqaf = HebrewTextUtils.replaceMaqaf(cleaned, " ")
+        return HebrewTextUtils.removeAllDiacritics(withoutMaqaf)
     }
 
 

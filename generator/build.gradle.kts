@@ -81,3 +81,21 @@ tasks.register<JavaExec>("rebuildClosureAndFts") {
     // Give the process a reasonable heap
     jvmArgs = listOf("-Xmx1g", "-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200")
 }
+
+// Utility: sanitize plainText (remove nikud + teamim, replace maqaf), then rebuild FTS
+// Usage:
+//   ./gradlew :generator:sanitizePlainText -PseforimDb=/path/to/seforim.db
+tasks.register<JavaExec>("sanitizePlainText") {
+    group = "application"
+    description = "Sanitize line.plainText in an existing DB (remove diacritics), then rebuild FTS. Use -PseforimDb=/path or SEFORIM_DB env."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.SanitizePlainTextKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    if (project.hasProperty("seforimDb")) {
+        systemProperty("SEFORIM_DB", project.property("seforimDb") as String)
+    }
+
+    jvmArgs = listOf("-Xmx2g", "-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200")
+}
