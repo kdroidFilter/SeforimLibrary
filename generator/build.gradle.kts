@@ -57,6 +57,20 @@ tasks.register<JavaExec>("runBuildFromScratch") {
     // and include the project's jar itself
     classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
 
+    // Allow passing args: db, source, optional acronym DB
+    if (project.hasProperty("seforimDb")) {
+        args(project.property("seforimDb") as String)
+    }
+    if (project.hasProperty("sourceDir")) {
+        if (!project.hasProperty("seforimDb")) args("")
+        args(project.property("sourceDir") as String)
+    }
+    if (project.hasProperty("acronymDb")) {
+        if (!project.hasProperty("seforimDb")) args("")
+        if (!project.hasProperty("sourceDir")) args("")
+        args(project.property("acronymDb") as String)
+    }
+
     // Give the process a reasonable heap and GC for heavy indexing
     jvmArgs = listOf("-Xmx4g", "-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200")
 }
@@ -98,4 +112,29 @@ tasks.register<JavaExec>("sanitizePlainText") {
     }
 
     jvmArgs = listOf("-Xmx2g", "-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200")
+}
+
+// Utility: migrate acronyms from external Acronymizer DB into the main DB table book_acronym
+// Usage:
+//   ./gradlew :generator:migrateAcronyms -PseforimDb=/path/to/seforim.db -PacronymDb=/path/to/acronymizer.db
+tasks.register<JavaExec>("migrateAcronyms") {
+    group = "application"
+    description = "Populate book_acronym from Acronymizer DB. Use -PseforimDb and -PacronymDb or env vars SEFORIM_DB/ACRONYM_DB."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.AcronymMigrationKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    if (project.hasProperty("seforimDb")) {
+        args(project.property("seforimDb") as String)
+    }
+    if (project.hasProperty("acronymDb")) {
+        if (!project.hasProperty("seforimDb")) {
+            // placeholder to satisfy arg order
+            args("")
+        }
+        args(project.property("acronymDb") as String)
+    }
+
+    jvmArgs = listOf("-Xmx1g")
 }

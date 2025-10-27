@@ -5,6 +5,8 @@ package io.github.kdroidfilter.seforimlibrary.dao.repository
 import app.cash.sqldelight.db.SqlDriver
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.*
+import app.cash.sqldelight.db.SqlCursor
+import app.cash.sqldelight.db.QueryResult
 import io.github.kdroidfilter.seforimlibrary.dao.extensions.toModel
 import io.github.kdroidfilter.seforimlibrary.dao.extensions.toSearchResult
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
@@ -1778,6 +1780,126 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val count = database.linkQueriesQueries.countLinksByTargetBook(bookId).executeAsOne()
         logger.d { "Found $count links where book $bookId is the target" }
         count
+    }
+
+    // --- Acronyms ---
+
+    /**
+     * Inserts a single acronym term for a book (ignores duplicates).
+     */
+    suspend fun insertBookAcronym(bookId: Long, term: String) = withContext(Dispatchers.IO) {
+        database.acronymQueriesQueries.insert(bookId, term)
+    }
+
+    /**
+     * Bulk inserts acronym terms for a given bookId. Ignores duplicates.
+     */
+    suspend fun bulkInsertBookAcronyms(bookId: Long, terms: Collection<String>) = withContext(Dispatchers.IO) {
+        if (terms.isEmpty()) return@withContext
+        for (t in terms) database.acronymQueriesQueries.insert(bookId, t)
+    }
+
+    /**
+     * Returns all acronym terms for a given book.
+     */
+    suspend fun getAcronymsForBook(bookId: Long): List<String> = withContext(Dispatchers.IO) {
+        database.acronymQueriesQueries.selectTermsByBookId(bookId).executeAsList()
+    }
+
+    /**
+     * Finds all book IDs whose acronym list contains exactly the given term.
+     */
+    suspend fun findBookIdsByAcronym(term: String): List<Long> = withContext(Dispatchers.IO) {
+        database.acronymQueriesQueries.selectBookIdsByTerm(term).executeAsList()
+    }
+
+    /**
+     * Finds books by acronym LIKE pattern. Use %term% or term% for prefix.
+     */
+    suspend fun findBooksByAcronymLike(pattern: String, limit: Int = 20): List<Book> = withContext(Dispatchers.IO) {
+        val ids = database.acronymQueriesQueries.selectBookIdsByTermLike(pattern, limit.toLong()).executeAsList()
+        ids.distinct().mapNotNull { id -> getBook(id) }
+    }
+
+    /**
+     * Finds books by exact acronym term.
+     */
+    suspend fun findBooksByAcronymExact(term: String, limit: Int = 20): List<Book> = withContext(Dispatchers.IO) {
+        val ids = database.acronymQueriesQueries.selectBookIdsByTerm(term).executeAsList()
+        ids.take(limit).mapNotNull { id -> getBook(id) }
+    }
+
+    /**
+     * Returns the hierarchical depth for a category using the closure table.
+     * Depth = number of ancestors (including self) - 1. Falls back to stored level if closure empty.
+     */
+    suspend fun getCategoryDepth(categoryId: Long): Int = withContext(Dispatchers.IO) {
+        val count = database.categoryClosureQueriesQueries.countAncestorsByDescendant(categoryId).executeAsOne()
+        if (count > 0) (count - 1).toInt() else {
+            // Fallback to category.level if closure not built
+            database.categoryQueriesQueries.selectById(categoryId).executeAsOneOrNull()?.level?.toInt() ?: 0
+        }
+    }
+
+    // --- Book title FTS (titles + acronyms as terms) managed via raw SQL ---
+
+    private fun ensureBookTitleFts() {
+        driver.execute(
+            null,
+            """
+                CREATE VIRTUAL TABLE IF NOT EXISTS book_title_search USING fts5(
+                    bookId UNINDEXED,
+                    term,
+                    displayTitle UNINDEXED,
+                    categoryId UNINDEXED
+                )
+            """.trimIndent(),
+            0
+        )
+    }
+
+    suspend fun clearBookTitleFts() = withContext(Dispatchers.IO) {
+        ensureBookTitleFts()
+        driver.execute(null, "DELETE FROM book_title_search", 0)
+    }
+
+    suspend fun insertBookTitleFtsTerm(bookId: Long, term: String, displayTitle: String, categoryId: Long) = withContext(Dispatchers.IO) {
+        ensureBookTitleFts()
+        driver.execute(null, "INSERT INTO book_title_search(bookId, term, displayTitle, categoryId) VALUES (?, ?, ?, ?)", 4) {
+            bindLong(0, bookId)
+            bindString(1, term)
+            bindString(2, displayTitle)
+            bindLong(3, categoryId)
+        }
+    }
+
+    suspend fun searchBooksByTitleFts(matchQuery: String, limit: Int = 20): List<Book> = withContext(Dispatchers.IO) {
+        ensureBookTitleFts()
+        val ids: List<Long> = driver.executeQuery(null,
+            "SELECT bookId FROM book_title_search WHERE book_title_search MATCH ? ORDER BY bm25(book_title_search) LIMIT ?",
+            { cursor: SqlCursor ->
+                val out = ArrayList<Long>()
+                while (true) {
+                    val hasNext = cursor.next().value
+                    if (!hasNext) break
+                    out.add(cursor.getLong(0)!!)
+                }
+                QueryResult.Value(out)
+            },
+            2
+        ) {
+            bindString(0, matchQuery)
+            bindLong(1, limit.toLong())
+        }.value
+
+        ids.distinct().mapNotNull { id -> getBook(id) }
+    }
+
+    /**
+     * Deletes all acronym rows for a book.
+     */
+    suspend fun deleteAcronymsForBook(bookId: Long) = withContext(Dispatchers.IO) {
+        database.acronymQueriesQueries.deleteByBookId(bookId)
     }
 
     /**

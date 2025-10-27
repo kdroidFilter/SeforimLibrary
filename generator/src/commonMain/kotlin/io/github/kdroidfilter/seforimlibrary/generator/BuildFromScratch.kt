@@ -14,34 +14,36 @@ import co.touchlab.kermit.Severity
  * This function initializes the database, sets up the repository,
  * and runs the generation process.
  */
-fun main() = runBlocking {
+fun main(args: Array<String>) = runBlocking {
     // Configure Kermit to show all logs for live monitoring
     Logger.setMinSeverity(Severity.Warn)
 
     val logger = Logger.withTag("Main")
 
-    // Resolve required environment variables for generation mode
-//    val dbPathEnv = System.getenv("SEFORIM_DB")
-//    if (dbPathEnv.isNullOrBlank()) {
-//        logger.e { "Missing required environment variable SEFORIM_DB" }
-//        logger.e { "Example: export SEFORIM_DB=/path/to/seforim.db" }
-//        exitProcess(1)
-//    }
-//    val dbPath = dbPathEnv
+    // Resolve required inputs: seforim DB, source dir, and optional acronymizer DB
+    val dbPath = when {
+        args.size >= 1 -> args[0]
+        !System.getenv("SEFORIM_DB").isNullOrBlank() -> System.getenv("SEFORIM_DB")
+        else -> {
+            logger.e { "Missing required SEFORIM_DB (env or arg[0])" }
+            exitProcess(1)
+        }
+    }
 
-    val dbPath = "/Users/eliegambache/Documents/seforim.db"
+    val sourcePath = when {
+        args.size >= 2 -> Path(args[1])
+        !System.getenv("OTZARIA_SOURCE_DIR").isNullOrBlank() -> Path(System.getenv("OTZARIA_SOURCE_DIR"))
+        else -> {
+            logger.e { "Missing required OTZARIA_SOURCE_DIR (env or arg[1])" }
+            exitProcess(1)
+        }
+    }
 
-    val sourceDirEnv = System.getenv("OTZARIA_SOURCE_DIR")
-
-//    if (sourceDirEnv.isNullOrBlank()) {
-//        logger.e { "Missing required environment variable OTZARIA_SOURCE_DIR for generation mode" }
-//        logger.e { "Example: export OTZARIA_SOURCE_DIR=/path/to/otzaria_latest" }
-//        exitProcess(1)
-//    }
-
-//    val sourcePath = Path(sourceDirEnv)
-
-    val sourcePath = Path("/Volumes/Data/Downloads/otzaria_latest")
+    val acronymDbPath: String? = when {
+        args.size >= 3 -> args[2]
+        !System.getenv("ACRONYM_DB").isNullOrBlank() -> System.getenv("ACRONYM_DB")
+        else -> null
+    }
 
     val dbFile = File(dbPath)
     val dbExists = dbFile.exists()
@@ -67,11 +69,12 @@ fun main() = runBlocking {
     logger.i { "=== Otzaria Database Generator ===" }
     logger.i { "Source: $sourcePath" }
     logger.i { "Database: $dbPath" }
+    if (acronymDbPath != null) logger.i { "Acronymizer DB: $acronymDbPath" } else logger.i { "Acronymizer DB: (none)" }
 
     val repository = SeforimRepository(dbPath, driver)
 
     try {
-        val generator = DatabaseGenerator(sourcePath, repository)
+        val generator = DatabaseGenerator(sourcePath, repository, acronymDbPath)
         generator.generate()
 
         logger.i { "Generation completed successfully!" }

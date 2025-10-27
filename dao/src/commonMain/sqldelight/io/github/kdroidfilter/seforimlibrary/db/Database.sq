@@ -242,3 +242,15 @@ CREATE TABLE IF NOT EXISTS line_toc (
 );
 
 CREATE INDEX IF NOT EXISTS idx_linetoc_toc ON line_toc(tocEntryId);
+
+-- Book acronyms table: stores alternate names/abbreviations per book
+-- One row per (bookId, term) pair for efficient lookup
+CREATE TABLE IF NOT EXISTS book_acronym (
+    bookId INTEGER NOT NULL,
+    term TEXT NOT NULL,
+    PRIMARY KEY (bookId, term),
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE
+);
+
+-- Index to quickly find books by acronym term
+CREATE INDEX IF NOT EXISTS idx_book_acronym_term ON book_acronym(term);

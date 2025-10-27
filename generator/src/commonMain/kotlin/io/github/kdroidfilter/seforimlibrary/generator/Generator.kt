@@ -30,7 +30,8 @@ import kotlin.io.path.readText
  */
 class DatabaseGenerator(
     private val sourceDirectory: Path,
-    private val repository: SeforimRepository
+    private val repository: SeforimRepository,
+    private val acronymDbPath: String? = null
 ) {
 
     private val logger = Logger.withTag("DatabaseGenerator")
@@ -43,6 +44,9 @@ class DatabaseGenerator(
     private var nextBookId = 1L // Counter for book IDs
     private var nextLineId = 1L // Counter for line IDs
     private var nextTocEntryId = 1L // Counter for TOC entry IDs
+
+    // Optional connection to the Acronymizer DB (opened lazily)
+    private var acronymDb: java.sql.Connection? = null
 
 
     /**
@@ -292,6 +296,36 @@ class DatabaseGenerator(
         }
 
         logger.d { "Book '${book.title}' inserted with ID: $insertedBookId and categoryId: $categoryId" }
+
+        // Insert acronyms for this book if an Acronymizer DB is available
+        try {
+            val terms = fetchAcronymsForTitle(title)
+            if (terms.isNotEmpty()) {
+                repository.bulkInsertBookAcronyms(insertedBookId, terms)
+                logger.i { "Inserted ${terms.size} acronyms for '${title}'" }
+            }
+        } catch (e: Exception) {
+            logger.w(e) { "Failed to insert acronyms for '$title'" }
+        }
+
+        // Populate book_title_search FTS with title and acronym terms
+        try {
+            // Always insert the exact title term
+            repository.insertBookTitleFtsTerm(insertedBookId, title, title, categoryId)
+            // Also insert a sanitized variant if different
+            val titleSan = sanitizeAcronymTerm(title)
+            if (titleSan.isNotBlank() && !titleSan.equals(title, ignoreCase = true)) {
+                repository.insertBookTitleFtsTerm(insertedBookId, titleSan, title, categoryId)
+            }
+
+            // Insert acronym terms into FTS (reuse fetched terms if available)
+            val acronyms = runCatching { fetchAcronymsForTitle(title) }.getOrDefault(emptyList())
+            for (t in acronyms) {
+                repository.insertBookTitleFtsTerm(insertedBookId, t, title, categoryId)
+            }
+        } catch (e: Exception) {
+            logger.w(e) { "Failed to populate book_title_search for '$title'" }
+        }
 
         // Process content of the book
         processBookContent(path, insertedBookId)
@@ -644,6 +678,58 @@ class DatabaseGenerator(
         return topicNames.map { name ->
             Topic(name = name)
         }
+    }
+
+    /**
+     * Fetch and sanitize acronym terms for a given book title from the Acronymizer DB.
+     */
+    private fun fetchAcronymsForTitle(title: String): List<String> {
+        val path = acronymDbPath ?: return emptyList()
+        try {
+            if (acronymDb == null) {
+                acronymDb = java.sql.DriverManager.getConnection("jdbc:sqlite:$path")
+            }
+            val conn = acronymDb ?: return emptyList()
+
+            conn.prepareStatement(
+                "SELECT terms FROM AcronymResults WHERE book_title = ? ORDER BY id DESC LIMIT 1"
+            ).use { ps ->
+                ps.setString(1, title)
+                ps.executeQuery().use { rs ->
+                    if (!rs.next()) return emptyList()
+                    val raw = rs.getString(1) ?: return emptyList()
+                    val parts = raw.split(',')
+                    val clean = parts
+                        .map { sanitizeAcronymTerm(it) }
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+
+                    // De-duplicate and drop items identical to the title after normalization
+                    val titleNormalized = sanitizeAcronymTerm(title)
+                    return clean
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .filter { !it.equals(title, ignoreCase = true) }
+                        .filter { !it.equals(titleNormalized, ignoreCase = true) }
+                        .distinct()
+                }
+            }
+        } catch (e: Exception) {
+            logger.w(e) { "Error reading acronyms for '$title' from $path" }
+            return emptyList()
+        }
+    }
+
+    // Clean an acronym using HebrewTextUtils and remove gershayim
+    private fun sanitizeAcronymTerm(raw: String): String {
+        var s = raw.trim()
+        if (s.isEmpty()) return ""
+        s = HebrewTextUtils.removeAllDiacritics(s)
+        s = HebrewTextUtils.replaceMaqaf(s, " ")
+        s = s.replace("\u05F4", "") // remove Hebrew gershayim (״)
+        s = s.replace("\u05F3", "") // remove Hebrew geresh (׳)
+        s = s.replace("\\s+".toRegex(), " ").trim()
+        return s
     }
 
     /**
