@@ -71,49 +71,53 @@ class DatabaseGenerator(
             // Lower durability for faster bulk writes (restored afterward)
             logger.i { "Setting PRAGMA synchronous=OFF for bulk generation" }
             repository.setSynchronousOff()
+            logger.i { "Setting PRAGMA journal_mode=OFF for bulk generation" }
+            repository.setJournalModeOff()
 
-            // Load metadata
-            val metadata = loadMetadata()
-            logger.i { "Metadata loaded: ${metadata.size} entries" }
+            // Wrap the entire generation in a single transaction for major SQLite speedups
+            repository.runInTransaction {
+                // Load metadata
+                val metadata = loadMetadata()
+                logger.i { "Metadata loaded: ${metadata.size} entries" }
 
-            // Process hierarchy
-            val libraryPath = sourceDirectory.resolve("אוצריא")
-            if (!libraryPath.exists()) {
-                throw IllegalStateException("The directory אוצריא does not exist in $sourceDirectory")
+                // Process hierarchy
+                val libraryPath = sourceDirectory.resolve("אוצריא")
+                if (!libraryPath.exists()) {
+                    throw IllegalStateException("The directory אוצריא does not exist in $sourceDirectory")
+                }
+
+                // Save for relative path computations
+                libraryRoot = libraryPath
+
+                // Process priority books first (if any), then process the full library
+                runCatching {
+                    processPriorityBooks(loadMetadata = { metadata })
+                }.onFailure { e ->
+                    logger.w(e) { "Failed processing priority list; continuing with full generation" }
+                }
+
+                logger.i { "🚀 Starting to process library directory: $libraryPath" }
+                processDirectory(libraryPath, null, 0, metadata)
+
+                // Process links
+                processLinks()
+
+                // Build category closure table for fast descendant queries
+                logger.i { "Building category_closure (ancestor-descendant) table..." }
+                repository.rebuildCategoryClosure()
+
+                // Rebuild FTS5 index
+                logger.i { "Rebuilding FTS5 index..." }
+                rebuildFts5Index()
             }
-
-            // Save for relative path computations
-            libraryRoot = libraryPath
-
-            // Process priority books first (if any), then process the full library
-            runCatching {
-                processPriorityBooks(loadMetadata = { metadata })
-            }.onFailure { e ->
-                logger.w(e) { "Failed processing priority list; continuing with full generation" }
-            }
-
-            logger.i { "🚀 Starting to process library directory: $libraryPath" }
-            processDirectory(libraryPath, null, 0, metadata)
-
-            // Process links
-            processLinks()
-
-            // Re-enable foreign keys after all data is inserted
+            // Restore PRAGMAs after commit
             logger.i { "Re-enabling foreign keys..." }
             enableForeignKeys()
-
-            // Restore synchronous mode
             logger.i { "Restoring PRAGMA synchronous=NORMAL" }
             repository.setSynchronousNormal()
-
-            // Build category closure table for fast descendant queries
-            logger.i { "Building category_closure (ancestor-descendant) table..." }
-            repository.rebuildCategoryClosure()
-
-            // Rebuild FTS5 index
-            logger.i { "Rebuilding FTS5 index..." }
-            rebuildFts5Index()
-
+            // Restore journal mode after commit
+            logger.i { "Restoring PRAGMA journal_mode=WAL" }
+            repository.setJournalModeWal()
             logger.i { "Generation completed successfully!" }
         } catch (e: Exception) {
             // Make sure to re-enable foreign keys even if an error occurs
@@ -124,6 +128,9 @@ class DatabaseGenerator(
             }
             try {
                 repository.setSynchronousNormal()
+            } catch (_: Exception) {}
+            try {
+                repository.setJournalModeWal()
             } catch (_: Exception) {}
 
             logger.e(e) { "Error during generation" }

@@ -79,6 +79,12 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     suspend fun setSynchronousOff() = setSynchronous("OFF")
     suspend fun setSynchronousNormal() = setSynchronous("NORMAL")
 
+    suspend fun setJournalMode(mode: String) = withContext(Dispatchers.IO) {
+        driver.execute(null, "PRAGMA journal_mode=$mode", 0)
+    }
+    suspend fun setJournalModeOff() = setJournalMode("OFF")
+    suspend fun setJournalModeWal() = setJournalMode("WAL")
+
     suspend fun bulkUpsertLineToc(pairs: List<Pair<Long, Long>>) = withContext(Dispatchers.IO) {
         if (pairs.isEmpty()) return@withContext
         for ((lineId, tocEntryId) in pairs) {
