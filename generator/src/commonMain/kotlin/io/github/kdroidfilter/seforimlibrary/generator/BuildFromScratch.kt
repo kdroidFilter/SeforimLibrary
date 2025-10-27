@@ -21,29 +21,10 @@ fun main(args: Array<String>) = runBlocking {
     val logger = Logger.withTag("Main")
 
     // Resolve required inputs: seforim DB, source dir, and optional acronymizer DB
-    val dbPath = when {
-        args.size >= 1 -> args[0]
-        !System.getenv("SEFORIM_DB").isNullOrBlank() -> System.getenv("SEFORIM_DB")
-        else -> {
-            logger.e { "Missing required SEFORIM_DB (env or arg[0])" }
-            exitProcess(1)
-        }
-    }
+    val dbPath = "/home/elie-gambache/Documents/SeforimDB/271025/seforim.db"
 
-    val sourcePath = when {
-        args.size >= 2 -> Path(args[1])
-        !System.getenv("OTZARIA_SOURCE_DIR").isNullOrBlank() -> Path(System.getenv("OTZARIA_SOURCE_DIR"))
-        else -> {
-            logger.e { "Missing required OTZARIA_SOURCE_DIR (env or arg[1])" }
-            exitProcess(1)
-        }
-    }
-
-    val acronymDbPath: String? = when {
-        args.size >= 3 -> args[2]
-        !System.getenv("ACRONYM_DB").isNullOrBlank() -> System.getenv("ACRONYM_DB")
-        else -> null
-    }
+    val sourcePath = Path("/home/elie-gambache/Documents/SeforimDB/271025/otzaria_latest (2)")
+    val acronymDbPath: String? = "/home/elie-gambache/IdeaProjects/SeforimApp/SeforimAcronymizer/acronymizer/src/jvmMain/acronymizer.db"
 
     val dbFile = File(dbPath)
     val dbExists = dbFile.exists()

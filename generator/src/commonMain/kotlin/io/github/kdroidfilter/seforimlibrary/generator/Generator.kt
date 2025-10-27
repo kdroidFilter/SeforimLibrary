@@ -48,6 +48,12 @@ class DatabaseGenerator(
     // Optional connection to the Acronymizer DB (opened lazily)
     private var acronymDb: java.sql.Connection? = null
 
+    // Library root used for relative path normalization
+    private lateinit var libraryRoot: Path
+
+    // Tracks books processed from the priority list to avoid double insertion
+    private val processedPriorityBookKeys = mutableSetOf<String>()
+
 
     /**
      * Generates the database by processing metadata, directories, and links.
@@ -74,6 +80,16 @@ class DatabaseGenerator(
             val libraryPath = sourceDirectory.resolve("אוצריא")
             if (!libraryPath.exists()) {
                 throw IllegalStateException("The directory אוצריא does not exist in $sourceDirectory")
+            }
+
+            // Save for relative path computations
+            libraryRoot = libraryPath
+
+            // Process priority books first (if any), then process the full library
+            runCatching {
+                processPriorityBooks(loadMetadata = { metadata })
+            }.onFailure { e ->
+                logger.w(e) { "Failed processing priority list; continuing with full generation" }
             }
 
             logger.i { "🚀 Starting to process library directory: $libraryPath" }
@@ -180,6 +196,12 @@ class DatabaseGenerator(
                     }
 
                     Files.isRegularFile(entry) && entry.extension == "txt" -> {
+                        // Skip if already processed from the priority list
+                        val key = toLibraryRelativeKey(entry)
+                        if (processedPriorityBookKeys.contains(key)) {
+                            logger.i { "⏭️ Skipping already-processed priority book: $key" }
+                            continue
+                        }
                         if (parentCategoryId == null) {
                             logger.w { "❌ Book found without category: $entry" }
                             continue
@@ -515,6 +537,116 @@ class DatabaseGenerator(
             line.startsWith("<h5", ignoreCase = true) -> 5
             line.startsWith("<h6", ignoreCase = true) -> 6
             else -> 0
+        }
+    }
+
+    // ===== Priority handling =====
+
+    /**
+     * Reads the priority list from resources and returns normalized relative paths under the library root.
+     */
+    private fun loadPriorityList(): List<String> {
+        return try {
+            val stream = this::class.java.classLoader.getResourceAsStream("priority.txt")
+                ?: return emptyList()
+            stream.bufferedReader(Charsets.UTF_8).use { reader ->
+                reader.lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() && !it.startsWith("#") }
+                    .map { raw ->
+                        // Normalize separators
+                        var s = raw.replace('\\', '/')
+                        // Remove BOM if present
+                        if (s.isNotEmpty() && s[0].code == 0xFEFF) s = s.substring(1)
+                        // Remove leading slash
+                        s = s.removePrefix("/")
+                        // Try to start from 'אוצריא' if present
+                        val idx = s.indexOf("אוצריא")
+                        if (idx >= 0) s = s.substring(idx + "אוצריא".length).removePrefix("/")
+                        s
+                    }
+                    .filter { it.endsWith(".txt", ignoreCase = true) }
+                    .toList()
+            }
+        } catch (e: Exception) {
+            logger.w(e) { "Unable to read priority.txt from resources" }
+            emptyList()
+        }
+    }
+
+    /**
+     * Processes books listed in priority.txt before the normal directory traversal.
+     * Ensures categories exist and records processed books to avoid duplicates.
+     */
+    private suspend fun processPriorityBooks(loadMetadata: () -> Map<String, BookMetadata>) {
+        val entries = loadPriorityList()
+        if (entries.isEmpty()) {
+            logger.i { "No priority entries found" }
+            return
+        }
+
+        logger.i { "Processing ${entries.size} priority entries first" }
+        val metadata = loadMetadata()
+
+        outer@ for ((idx, relative) in entries.withIndex()) {
+            // Build the absolute path under the library root
+            val parts = relative.split('/').filter { it.isNotEmpty() }
+            if (parts.isEmpty()) continue
+
+            // Last part is the book filename, everything before are categories
+            val categories = if (parts.size > 1) parts.dropLast(1) else emptyList()
+            val bookFileName = parts.last()
+
+            // Fold into actual filesystem path
+            var currentPath = libraryRoot
+            for (p in categories) currentPath = currentPath.resolve(p)
+            val bookPath = currentPath.resolve(bookFileName)
+
+            if (!Files.isRegularFile(bookPath)) {
+                logger.w { "Priority entry ${idx + 1}/${entries.size}: file not found: $bookPath" }
+                continue@outer
+            }
+
+            // Avoid processing duplicates listed multiple times
+            val key = toLibraryRelativeKey(bookPath)
+            if (processedPriorityBookKeys.contains(key)) {
+                logger.d { "Priority entry ${idx + 1}/${entries.size}: already processed (dup in list): $key" }
+                continue@outer
+            }
+
+            // Ensure categories exist and get the final parent category id
+            var parentId: Long? = null
+            var level = 0
+            var catPath = libraryRoot
+            for (cat in categories) {
+                catPath = catPath.resolve(cat)
+                parentId = createCategory(catPath, parentId, level)
+                level += 1
+            }
+
+            if (parentId == null) {
+                logger.w { "Priority entry ${idx + 1}/${entries.size}: missing parent category for $bookPath; skipping" }
+                continue@outer
+            }
+
+            logger.i { "⭐ Priority ${idx + 1}/${entries.size}: processing $bookFileName under categories ${categories.joinToString("/")}" }
+            createAndProcessBook(bookPath, parentId, metadata)
+
+            // Mark as processed to avoid double insertion during full traversal
+            processedPriorityBookKeys.add(key)
+        }
+    }
+
+    /**
+     * Compute a normalized key for a book file relative to the library root.
+     */
+    private fun toLibraryRelativeKey(file: Path): String {
+        return try {
+            val rel = libraryRoot.relativize(file).toString().replace('\\', '/')
+            rel
+        } catch (_: Exception) {
+            // Fallback to filename
+            file.fileName.toString()
         }
     }
 
