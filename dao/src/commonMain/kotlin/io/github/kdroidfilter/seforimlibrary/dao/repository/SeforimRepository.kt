@@ -60,14 +60,23 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     private var txCounter = 0
 
     suspend fun <T> runInTransaction(block: suspend () -> T): T {
-        // Use explicit transaction boundaries to avoid savepoint issues with some SQLite configurations
-        withContext(Dispatchers.IO) { driver.execute(null, "BEGIN IMMEDIATE", 0) }
+        // Use SAVEPOINT to support nesting and avoid COMMIT/ROLLBACK state errors
+        val spName = "sp_${'$'}{++txCounter}"
+        withContext(Dispatchers.IO) { driver.execute(null, "SAVEPOINT ${'$'}spName", 0) }
         return try {
             val result = block()
-            withContext(Dispatchers.IO) { driver.execute(null, "COMMIT", 0) }
+            withContext(Dispatchers.IO) { driver.execute(null, "RELEASE SAVEPOINT ${'$'}spName", 0) }
             result
         } catch (t: Throwable) {
-            try { withContext(Dispatchers.IO) { driver.execute(null, "ROLLBACK", 0) } } catch (_: Throwable) {}
+            // Roll back to our savepoint and then release it to exit the savepoint scope
+            try {
+                withContext(Dispatchers.IO) {
+                    driver.execute(null, "ROLLBACK TO SAVEPOINT ${'$'}spName", 0)
+                    driver.execute(null, "RELEASE SAVEPOINT ${'$'}spName", 0)
+                }
+            } catch (_: Throwable) {
+                // Ignore secondary failures to keep original exception context
+            }
             throw t
         }
     }
@@ -1406,6 +1415,23 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     /**
+     * Sanitizes a raw, possibly wildcard-suffixed space-separated query into a safe FTS5 MATCH string
+     * using prefix tokens. This prevents syntax errors when the input contains punctuation like '>'
+     * by quoting and escaping each token and dropping punctuation-only tokens.
+     */
+    private fun sanitizeFtsPrefixQuery(raw: String): String {
+        if (raw.isBlank()) return ""
+        val tokens = raw.trim().split("\\s+".toRegex()).filter { it.isNotBlank() }
+        fun hasWordChar(s: String) = s.any { it.isLetterOrDigit() }
+        return tokens.mapNotNull { tok ->
+            val base = tok.trim().trimEnd('*')
+            if (!hasWordChar(base)) return@mapNotNull null
+            val esc = base.replace("\"", "\"\"")
+            "\"$esc\"*"
+        }.joinToString(" ")
+    }
+
+    /**
      * Executes a raw FTS5 query string that may contain operators like NEAR, AND/OR, etc.
      * The query is passed as-is to the FTS5 MATCH clause. Callers are responsible for
      * constructing a valid FTS5 query string.
@@ -1881,6 +1907,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     suspend fun searchBooksByTitleFts(matchQuery: String, limit: Int = 20): List<Book> = withContext(Dispatchers.IO) {
         ensureBookTitleFts()
+        val safeMatch = sanitizeFtsPrefixQuery(matchQuery)
         val ids: List<Long> = driver.executeQuery(null,
             "SELECT bookId FROM book_title_search WHERE book_title_search MATCH ? ORDER BY bm25(book_title_search) LIMIT ?",
             { cursor: SqlCursor ->
@@ -1894,7 +1921,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             },
             2
         ) {
-            bindString(0, matchQuery)
+            bindString(0, safeMatch)
             bindLong(1, limit.toLong())
         }.value
 
