@@ -115,6 +115,13 @@ SELECT COUNT(*)
 FROM line_search
 WHERE plainText MATCH ? AND bookId = ?;
 
+-- Compter les résultats dans une catégorie (incluant les descendants)
+countSearchResultsInCategory:
+SELECT COUNT(*)
+FROM line_search
+WHERE plainText MATCH ?
+  AND categoryId IN (SELECT descendantId FROM category_closure WHERE ancestorId = ?);
+
 -- Rebuild the FTS5 index
 rebuildFts5Index:
 INSERT INTO line_search(line_search) VALUES('rebuild');

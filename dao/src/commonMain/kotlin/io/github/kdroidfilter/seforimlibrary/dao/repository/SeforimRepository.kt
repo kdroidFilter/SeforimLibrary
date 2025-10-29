@@ -1484,6 +1484,19 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     // Note: For category filtering with descendants, the app currently aggregates per-book results.
 
+    // --- Counts for progress ---
+    suspend fun countSearchResults(ftsQuery: String): Long = withContext(Dispatchers.IO) {
+        database.searchQueriesQueries.countSearchResults(ftsQuery).executeAsOne()
+    }
+
+    suspend fun countSearchResultsInBook(ftsQuery: String, bookId: Long): Long = withContext(Dispatchers.IO) {
+        database.searchQueriesQueries.countSearchResultsInBook(ftsQuery, bookId).executeAsOne()
+    }
+
+    suspend fun countSearchResultsInCategory(ftsQuery: String, categoryId: Long): Long = withContext(Dispatchers.IO) {
+        database.searchQueriesQueries.countSearchResultsInCategory(ftsQuery, categoryId).executeAsOne()
+    }
+
     /**
      * Executes a raw SQL query.
      * This is useful for operations that are not covered by the generated queries,
