@@ -11,7 +11,6 @@ SELECT
     bm25(line_search) rank -- Utilisation de bm25 pour un meilleur ranking
 FROM line_search ls
 WHERE ls.plainText MATCH ?
-ORDER BY ls.bookId, ls.lineIndex, ls.id
 LIMIT ? OFFSET ?;
 
 -- Recherche dans un livre spécifique
@@ -25,7 +24,6 @@ SELECT
     bm25(line_search) rank
 FROM line_search ls
 WHERE ls.plainText MATCH ? AND ls.bookId = ?
-ORDER BY ls.lineIndex, ls.id
 LIMIT ? OFFSET ?;
 
 -- Recherche par auteur
@@ -41,7 +39,6 @@ FROM line_search ls
 JOIN book_author ba ON ls.bookId = ba.bookId
 JOIN author a ON ba.authorId = a.id
 WHERE ls.plainText MATCH ? AND a.name = ?
-ORDER BY ls.bookId, ls.lineIndex, ls.id
 LIMIT ? OFFSET ?;
 
 -- Recherche avec filtre sur le titre du livre
@@ -56,7 +53,6 @@ SELECT
 FROM line_search ls
 WHERE ls.plainText MATCH ?
 AND ls.bookTitle MATCH ?
-ORDER BY ls.bookId, ls.lineIndex, ls.id
 LIMIT ? OFFSET ?;
 
 -- Recherche avec phrase exacte
@@ -70,7 +66,6 @@ SELECT
     bm25(line_search) rank
 FROM line_search ls
 WHERE ls.plainText MATCH '"' || ? || '"'
-ORDER BY ls.bookId, ls.lineIndex, ls.id
 LIMIT ? OFFSET ?;
 
 -- Recherche avec opérateurs booléens
@@ -84,7 +79,7 @@ SELECT
     bm25(line_search) rank
 FROM line_search ls
 WHERE ls.plainText MATCH ?
-ORDER BY ls.bookId, ls.lineIndex, ls.id
+-- No ORDER BY for maximum throughput; rely on FTS natural order
 LIMIT ? OFFSET ?;
 
 -- Search within a category (using closure table for descendants)
@@ -99,7 +94,7 @@ SELECT
 FROM line_search ls
 WHERE ls.plainText MATCH ?
   AND ls.categoryId IN (SELECT descendantId FROM category_closure WHERE ancestorId = ?)
-ORDER BY ls.bookId, ls.lineIndex, ls.id
+-- No ORDER BY for maximum throughput; rely on FTS natural order
 LIMIT ? OFFSET ?;
 
 
