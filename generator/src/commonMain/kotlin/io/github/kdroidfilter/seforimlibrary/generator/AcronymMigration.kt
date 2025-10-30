@@ -33,8 +33,7 @@ object AcronymMigration {
             logger.i { "Found ${books.size} books in main DB" }
 
             var processed = 0
-            // Clear FTS index for titles, we will fully rebuild it
-            repository.clearBookTitleFts()
+            // Lucene-based setups do not require clearing a title FTS table; acronyms are stored in book_acronym only.
 
             for (book in books) {
                 try {
@@ -62,18 +61,10 @@ object AcronymMigration {
                                 repository.bulkInsertBookAcronyms(book.id, finalTerms)
                                 logger.d { "Book ${book.id} '${book.title}': inserted ${finalTerms.size} acronyms" }
 
-                                // Insert acronym terms into FTS
-                                finalTerms.forEach { t ->
-                                    repository.insertBookTitleFtsTerm(book.id, t, book.title, book.categoryId)
-                                }
+                                // FTS is no longer used; Lucene index should be rebuilt separately to incorporate new acronyms.
                             }
 
-                            // Always insert title (raw + sanitized if different) into FTS
-                            repository.insertBookTitleFtsTerm(book.id, book.title, book.title, book.categoryId)
-                            val titleSan = sanitize(book.title)
-                            if (titleSan.isNotBlank() && !titleSan.equals(book.title, ignoreCase = true)) {
-                                repository.insertBookTitleFtsTerm(book.id, titleSan, book.title, book.categoryId)
-                            }
+                            // Titles are handled by Lucene at index time; nothing to insert into FTS here.
                         }
                     }
                 } catch (e: Exception) {

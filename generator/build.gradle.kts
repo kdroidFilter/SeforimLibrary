@@ -31,6 +31,10 @@ kotlin {
         jvmMain.dependencies {
             implementation(libs.kotlinx.coroutines.swing)
             implementation(libs.sqlDelight.driver.sqlite)
+            implementation("org.apache.lucene:lucene-core:10.3.1")
+            implementation("org.apache.lucene:lucene-analysis-common:10.3.1")
+            implementation("org.apache.lucene:lucene-queryparser:10.3.1")
+            implementation("org.apache.lucene:lucene-highlighter:10.3.1")
         }
 
     }
@@ -50,7 +54,7 @@ tasks.register<JavaExec>("runBuildFromScratch") {
     // Ensure JVM classes/jar are built
     dependsOn("jvmJar")
 
-    // Top-level main() in BuildFromScratch.kt compiles to this class name
+    // Top-level main() in BuildFromScratch.kt (now in jvmMain) compiles to this class name
     mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.BuildFromScratchKt")
 
     // Use the JVM runtime classpath for the multiplatform 'jvm' target
@@ -72,47 +76,48 @@ tasks.register<JavaExec>("runBuildFromScratch") {
     }
 
     // Give the process a reasonable heap and GC for heavy indexing
-    jvmArgs = listOf("-Xmx4g", "-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200")
+    jvmArgs = listOf(
+        "-Xmx4g",
+        "-XX:+UseG1GC",
+        "-XX:MaxGCPauseMillis=200",
+        "--enable-native-access=ALL-UNNAMED",
+        "--add-modules=jdk.incubator.vector"
+    )
 }
 
-// Utility: rebuild category_closure + FTS5 for an existing DB
+// Removed legacy FTS rebuild task (replaced by upgradeToLucene)
+
+// Upgrade existing DB: drop legacy FTS objects and build Lucene index next to the DB
 // Usage:
-//   ./gradlew :generator:rebuildClosureAndFts -PseforimDb=/path/to/seforim.db
-// or set env var SEFORIM_DB and run the task without -P.
-tasks.register<JavaExec>("rebuildClosureAndFts") {
+//   ./gradlew :generator:upgradeToLucene -PseforimDb=/path/to/seforim.db [-PdropPlainText=true]
+tasks.register<JavaExec>("upgradeToLucene") {
     group = "application"
-    description = "Rebuild category_closure and FTS5 index for an existing DB. Use -PseforimDb=/path or SEFORIM_DB env."
+    description = "Upgrade an existing DB: drop FTS, build Lucene index. Use -PseforimDb=/path and optional -PdropPlainText=true."
 
     dependsOn("jvmJar")
-    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.RebuildClosureAndFtsKt")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.UpgradeToLuceneKt")
     classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
 
-    // Propagate DB path to the launched JVM
+    // Pass DB path and optional drop flag via system properties
     if (project.hasProperty("seforimDb")) {
         systemProperty("SEFORIM_DB", project.property("seforimDb") as String)
+    } else if (System.getenv("SEFORIM_DB") != null) {
+        systemProperty("SEFORIM_DB", System.getenv("SEFORIM_DB"))
+    }
+    if (project.findProperty("dropPlainText")?.toString()?.equals("true", ignoreCase = true) == true) {
+        systemProperty("DROP_PLAINTEXT", "true")
     }
 
-    // Give the process a reasonable heap
-    jvmArgs = listOf("-Xmx1g", "-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200")
+    jvmArgs = listOf(
+        "-Xmx2g",
+        "-XX:+UseG1GC",
+        "-XX:MaxGCPauseMillis=200",
+        "--enable-native-access=ALL-UNNAMED",
+        "--add-modules=jdk.incubator.vector"
+    )
 }
 
-// Utility: sanitize plainText (remove nikud + teamim, replace maqaf), then rebuild FTS
-// Usage:
-//   ./gradlew :generator:sanitizePlainText -PseforimDb=/path/to/seforim.db
-tasks.register<JavaExec>("sanitizePlainText") {
-    group = "application"
-    description = "Sanitize line.plainText in an existing DB (remove diacritics), then rebuild FTS. Use -PseforimDb=/path or SEFORIM_DB env."
-
-    dependsOn("jvmJar")
-    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.SanitizePlainTextKt")
-    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
-
-    if (project.hasProperty("seforimDb")) {
-        systemProperty("SEFORIM_DB", project.property("seforimDb") as String)
-    }
-
-    jvmArgs = listOf("-Xmx2g", "-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200")
-}
+// Removed legacy FTS sanitization task (replaced by Lucene indexer)
 
 // Utility: migrate acronyms from external Acronymizer DB into the main DB table book_acronym
 // Usage:

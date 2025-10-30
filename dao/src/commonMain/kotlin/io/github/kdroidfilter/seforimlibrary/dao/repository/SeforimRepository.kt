@@ -8,7 +8,6 @@ import io.github.kdroidfilter.seforimlibrary.core.models.*
 import app.cash.sqldelight.db.SqlCursor
 import app.cash.sqldelight.db.QueryResult
 import io.github.kdroidfilter.seforimlibrary.dao.extensions.toModel
-import io.github.kdroidfilter.seforimlibrary.dao.extensions.toSearchResult
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -903,10 +902,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             .executeAsOneOrNull()?.toModel()
     }
 
-    suspend fun updateLinePlainText(lineId: Long, plain: String) = withContext(Dispatchers.IO) {
-        database.lineExtraQueriesQueries.updatePlainText(plain, lineId)
-    }
-
     suspend fun insertLine(line: Line): Long = withContext(Dispatchers.IO) {
         logger.d{"Repository inserting line with bookId: ${line.bookId}"}
 
@@ -917,7 +912,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 bookId = line.bookId,
                 lineIndex = line.lineIndex.toLong(),
                 content = line.content,
-                plainText = line.plainText,
                 tocEntryId = null
             )
             logger.d{"Repository inserted line with explicit ID: ${line.id} and bookId: ${line.bookId}"}
@@ -928,7 +922,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 bookId = line.bookId,
                 lineIndex = line.lineIndex.toLong(),
                 content = line.content,
-                plainText = line.plainText,
                 tocEntryId = null
             )
             val lineId = database.lineQueriesQueries.lastInsertRowId().executeAsOne()
@@ -943,7 +936,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                     return@withContext existingLine.id
                 }
 
-                throw RuntimeException("Failed to insert line for book ${line.bookId} at index ${line.lineIndex} - insertion returned ID 0. Context: content='${line.content.take(50)}${if (line.content.length > 50) "..." else ""}', plainText='${line.plainText.take(50)}${if (line.plainText.length > 50) "..." else ""}')")
+                throw RuntimeException("Failed to insert line for book ${line.bookId} at index ${line.lineIndex} - insertion returned ID 0. Context: content='${line.content.take(50)}${if (line.content.length > 50) "..." else ""}')")
             }
 
             return@withContext lineId
@@ -1344,181 +1337,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
     }
 
-    // --- Search ---
-
-    /**
-     * Searches for text across all books.
-     *
-     * @param query The search query
-     * @param limit Maximum number of results to return
-     * @param offset Number of results to skip (for pagination)
-     * @return A list of search results
-     */
-    suspend fun search(
-        query: String,
-        limit: Int = 20,
-        offset: Int = 0
-    ): List<SearchResult> = withContext(Dispatchers.IO) {
-        val ftsQuery = prepareFtsQuery(query)
-        database.searchQueriesQueries.searchAll(ftsQuery, limit.toLong(), offset.toLong())
-            .executeAsList()
-            .map { it.toSearchResult() }
-    }
-
-    /**
-     * Searches for text within a specific book.
-     *
-     * @param bookId The ID of the book to search in
-     * @param query The search query
-     * @param limit Maximum number of results to return
-     * @param offset Number of results to skip (for pagination)
-     * @return A list of search results
-     */
-    suspend fun searchInBook(
-        bookId: Long,
-        query: String,
-        limit: Int = 20,
-        offset: Int = 0
-    ): List<SearchResult> = withContext(Dispatchers.IO) {
-        val ftsQuery = prepareFtsQuery(query)
-        database.searchQueriesQueries.searchInBook(
-            ftsQuery, bookId, limit.toLong(), offset.toLong()
-        ).executeAsList().map { it.toSearchResult() }
-    }
-
-    /**
-     * Same as searchInBook but accepts a raw FTS query (e.g., NEAR operators).
-     */
-    suspend fun searchInBookWithOperators(
-        bookId: Long,
-        ftsQuery: String,
-        limit: Int = 200,
-        offset: Int = 0
-    ): List<SearchResult> = withContext(Dispatchers.IO) {
-        database.searchQueriesQueries.searchInBook(
-            ftsQuery, bookId, limit.toLong(), offset.toLong()
-        ).executeAsList().map { it.toSearchResult() }
-    }
-
-    /**
-     * Searches for text in books by a specific author.
-     *
-     * @param author The author name to filter by
-     * @param query The search query
-     * @param limit Maximum number of results to return
-     * @param offset Number of results to skip (for pagination)
-     * @return A list of search results
-     */
-    suspend fun searchByAuthor(
-        author: String,
-        query: String,
-        limit: Int = 20,
-        offset: Int = 0
-    ): List<SearchResult> = withContext(Dispatchers.IO) {
-        val ftsQuery = prepareFtsQuery(query)
-        database.searchQueriesQueries.searchByAuthor(
-            ftsQuery, author, limit.toLong(), offset.toLong()
-        ).executeAsList().map { it.toSearchResult() }
-    }
-
-    // --- Helpers ---
-
-    /**
-     * Prepares a search query for full-text search.
-     * Adds wildcards and quotes to improve search results.
-     *
-     * @param query The raw search query
-     * @return The formatted query for FTS
-     */
-    private fun prepareFtsQuery(query: String): String {
-        return query.trim()
-            .split("\\s+".toRegex())
-            .filter { it.isNotBlank() }
-            .joinToString(" ") { "\"$it\"*" }
-    }
-
-    /**
-     * Sanitizes a raw, possibly wildcard-suffixed space-separated query into a safe FTS5 MATCH string
-     * using prefix tokens. This prevents syntax errors when the input contains punctuation like '>'
-     * by quoting and escaping each token and dropping punctuation-only tokens.
-     */
-    private fun sanitizeFtsPrefixQuery(raw: String): String {
-        if (raw.isBlank()) return ""
-        val tokens = raw.trim().split("\\s+".toRegex()).filter { it.isNotBlank() }
-        fun hasWordChar(s: String) = s.any { it.isLetterOrDigit() }
-        return tokens.mapNotNull { tok ->
-            val base = tok.trim().trimEnd('*')
-            if (!hasWordChar(base)) return@mapNotNull null
-            val esc = base.replace("\"", "\"\"")
-            "\"$esc\"*"
-        }.joinToString(" ")
-    }
-
-    /**
-     * Executes a raw FTS5 query string that may contain operators like NEAR, AND/OR, etc.
-     * The query is passed as-is to the FTS5 MATCH clause. Callers are responsible for
-     * constructing a valid FTS5 query string.
-     *
-     * This is useful for proximity searches such as: term1 NEAR/5 term2
-     */
-    suspend fun searchWithOperators(
-        ftsQuery: String,
-        limit: Int = 50,
-        offset: Int = 0
-    ): List<SearchResult> = withContext(Dispatchers.IO) {
-        database.searchQueriesQueries
-            .searchWithOperators(ftsQuery, limit.toLong(), offset.toLong())
-            .executeAsList()
-            .map { row ->
-                io.github.kdroidfilter.seforimlibrary.core.models.SearchResult(
-                    bookId = row.bookId ?: 0,
-                    bookTitle = row.bookTitle ?: "",
-                    lineId = row.id ?: 0,
-                    lineIndex = row.lineIndex?.toInt() ?: 0,
-                    snippet = row.snippet ?: "",
-                    rank = row.rank
-                )
-            }
-    }
-
-    /**
-     * Searches within a category (including descendants) using a raw FTS query with operators.
-     */
-    suspend fun searchInCategoryWithOperators(
-        categoryId: Long,
-        ftsQuery: String,
-        limit: Int = 50,
-        offset: Int = 0
-    ): List<SearchResult> = withContext(Dispatchers.IO) {
-        database.searchQueriesQueries
-            .searchInCategoryWithOperators(ftsQuery, categoryId, limit.toLong(), offset.toLong())
-            .executeAsList()
-            .map { row ->
-                io.github.kdroidfilter.seforimlibrary.core.models.SearchResult(
-                    bookId = row.bookId ?: 0,
-                    bookTitle = row.bookTitle ?: "",
-                    lineId = row.id ?: 0,
-                    lineIndex = row.lineIndex?.toInt() ?: 0,
-                    snippet = row.snippet ?: "",
-                    rank = row.rank
-                )
-            }
-    }
-
-    // Note: For category filtering with descendants, the app currently aggregates per-book results.
-
-    // --- Counts for progress ---
-    suspend fun countSearchResults(ftsQuery: String): Long = withContext(Dispatchers.IO) {
-        database.searchQueriesQueries.countSearchResults(ftsQuery).executeAsOne()
-    }
-
-    suspend fun countSearchResultsInBook(ftsQuery: String, bookId: Long): Long = withContext(Dispatchers.IO) {
-        database.searchQueriesQueries.countSearchResultsInBook(ftsQuery, bookId).executeAsOne()
-    }
-
-    suspend fun countSearchResultsInCategory(ftsQuery: String, categoryId: Long): Long = withContext(Dispatchers.IO) {
-        database.searchQueriesQueries.countSearchResultsInCategory(ftsQuery, categoryId).executeAsOne()
-    }
+    // Search functions removed (migrated to Lucene in app layer).
 
     /**
      * Executes a raw SQL query.
@@ -1533,15 +1352,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         logger.d { "Raw SQL query executed successfully" }
     }
 
-    /**
-     * Rebuilds the FTS5 index for the line_search table.
-     * This should be called after all data has been inserted to ensure optimal search performance.
-     */
-    suspend fun rebuildFts5Index() = withContext(Dispatchers.IO) {
-        logger.d { "Rebuilding FTS5 index for line_search table" }
-        database.searchQueriesQueries.rebuildFts5Index()
-        logger.d { "FTS5 index rebuilt successfully" }
-    }
+    // FTS rebuild removed (Lucene managed externally by generator).
 
     /**
      * Updates the book_has_links table to indicate whether a book has source links, target links, or both.
@@ -1909,60 +1720,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
     }
 
-    // --- Book title FTS (titles + acronyms as terms) managed via raw SQL ---
-
-    private fun ensureBookTitleFts() {
-        driver.execute(
-            null,
-            """
-                CREATE VIRTUAL TABLE IF NOT EXISTS book_title_search USING fts5(
-                    bookId UNINDEXED,
-                    term,
-                    displayTitle UNINDEXED,
-                    categoryId UNINDEXED
-                )
-            """.trimIndent(),
-            0
-        )
-    }
-
-    suspend fun clearBookTitleFts() = withContext(Dispatchers.IO) {
-        ensureBookTitleFts()
-        driver.execute(null, "DELETE FROM book_title_search", 0)
-    }
-
-    suspend fun insertBookTitleFtsTerm(bookId: Long, term: String, displayTitle: String, categoryId: Long) = withContext(Dispatchers.IO) {
-        ensureBookTitleFts()
-        driver.execute(null, "INSERT INTO book_title_search(bookId, term, displayTitle, categoryId) VALUES (?, ?, ?, ?)", 4) {
-            bindLong(0, bookId)
-            bindString(1, term)
-            bindString(2, displayTitle)
-            bindLong(3, categoryId)
-        }
-    }
-
-    suspend fun searchBooksByTitleFts(matchQuery: String, limit: Int = 20): List<Book> = withContext(Dispatchers.IO) {
-        ensureBookTitleFts()
-        val safeMatch = sanitizeFtsPrefixQuery(matchQuery)
-        val ids: List<Long> = driver.executeQuery(null,
-            "SELECT bookId FROM book_title_search WHERE book_title_search MATCH ? ORDER BY bm25(book_title_search) LIMIT ?",
-            { cursor: SqlCursor ->
-                val out = ArrayList<Long>()
-                while (true) {
-                    val hasNext = cursor.next().value
-                    if (!hasNext) break
-                    out.add(cursor.getLong(0)!!)
-                }
-                QueryResult.Value(out)
-            },
-            2
-        ) {
-            bindString(0, safeMatch)
-            bindLong(1, limit.toLong())
-        }.value
-
-        ids.distinct().mapNotNull { id -> getBook(id) }
-    }
+    // Legacy book-title FTS removed (handled by Lucene index in generator/app).
 
     /**
      * Deletes all acronym rows for a book.

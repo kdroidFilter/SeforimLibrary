@@ -1,5 +1,0 @@
--- Extra queries for line table maintenance
-
-updatePlainText:
-UPDATE line SET plainText = ? WHERE id = ?;
-

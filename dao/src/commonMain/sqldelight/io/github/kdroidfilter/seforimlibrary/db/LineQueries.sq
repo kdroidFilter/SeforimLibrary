@@ -17,12 +17,12 @@ selectByBookIdAndIndex:
 SELECT * FROM line WHERE bookId = ? AND lineIndex = ?;
 
 insert:
-INSERT INTO line (bookId, lineIndex, content, plainText, tocEntryId)
-VALUES (?, ?, ?, ?, ?);
+INSERT INTO line (bookId, lineIndex, content, tocEntryId)
+VALUES (?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO line (id, bookId, lineIndex, content, plainText, tocEntryId)
-VALUES (?, ?, ?, ?, ?, ?);
+INSERT INTO line (id, bookId, lineIndex, content, tocEntryId)
+VALUES (?, ?, ?, ?, ?);
 
 updateTocEntryId:
 UPDATE line SET tocEntryId = ? WHERE id = ?;

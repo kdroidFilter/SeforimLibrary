@@ -31,7 +31,9 @@ import kotlin.io.path.readText
 class DatabaseGenerator(
     private val sourceDirectory: Path,
     private val repository: SeforimRepository,
-    private val acronymDbPath: String? = null
+    private val acronymDbPath: String? = null,
+    private val textIndex: io.github.kdroidfilter.seforimlibrary.generator.lucene.TextIndexWriter? = null,
+    private val lookupIndex: io.github.kdroidfilter.seforimlibrary.generator.lucene.LookupIndexWriter? = null
 ) {
 
     private val logger = Logger.withTag("DatabaseGenerator")
@@ -53,6 +55,10 @@ class DatabaseGenerator(
 
     // Tracks books processed from the priority list to avoid double insertion
     private val processedPriorityBookKeys = mutableSetOf<String>()
+
+    // Overall progress across books
+    private var totalBooksToProcess: Int = 0
+    private var processedBooksCount: Int = 0
 
 
     /**
@@ -89,6 +95,14 @@ class DatabaseGenerator(
                 // Save for relative path computations
                 libraryRoot = libraryPath
 
+                // Estimate total number of books (txt files) for progress tracking
+                totalBooksToProcess = try {
+                    Files.walk(libraryRoot).use { s ->
+                        s.filter { Files.isRegularFile(it) && it.extension == "txt" }.count().toInt()
+                    }
+                } catch (_: Exception) { 0 }
+                logger.i { "Planned to process approximately $totalBooksToProcess books" }
+
                 // Process priority books first (if any), then process the full library
                 runCatching {
                     processPriorityBooks(loadMetadata = { metadata })
@@ -106,9 +120,13 @@ class DatabaseGenerator(
                 logger.i { "Building category_closure (ancestor-descendant) table..." }
                 repository.rebuildCategoryClosure()
 
-                // Rebuild FTS5 index
-                logger.i { "Rebuilding FTS5 index..." }
-                rebuildFts5Index()
+                // Finalize Lucene index if present
+                runCatching { textIndex?.commit() }
+                    .onSuccess { logger.i { "Lucene index commit completed" } }
+                    .onFailure { e -> logger.w(e) { "Lucene index commit failed" } }
+                runCatching { lookupIndex?.commit() }
+                    .onSuccess { logger.i { "Lookup index commit completed" } }
+                    .onFailure { e -> logger.w(e) { "Lookup index commit failed" } }
             }
             // Restore PRAGMAs after commit
             logger.i { "Re-enabling foreign keys..." }
@@ -337,27 +355,40 @@ class DatabaseGenerator(
             logger.w(e) { "Failed to insert acronyms for '$title'" }
         }
 
-        // Populate book_title_search FTS with title and acronym terms
-        try {
-            // Always insert the exact title term
-            repository.insertBookTitleFtsTerm(insertedBookId, title, title, categoryId)
-            // Also insert a sanitized variant if different
+        // Populate Lucene title index (title + acronyms)
+        runCatching {
+            // Always index exact title
+            textIndex?.addBookTitleTerm(insertedBookId, categoryId, title, title)
+            // Also index sanitized variant if different
             val titleSan = sanitizeAcronymTerm(title)
             if (titleSan.isNotBlank() && !titleSan.equals(title, ignoreCase = true)) {
-                repository.insertBookTitleFtsTerm(insertedBookId, titleSan, title, categoryId)
+                textIndex?.addBookTitleTerm(insertedBookId, categoryId, title, titleSan)
             }
-
-            // Insert acronym terms into FTS (reuse fetched terms if available)
+            // Acronyms
             val acronyms = runCatching { fetchAcronymsForTitle(title) }.getOrDefault(emptyList())
-            for (t in acronyms) {
-                repository.insertBookTitleFtsTerm(insertedBookId, t, title, categoryId)
-            }
-        } catch (e: Exception) {
-            logger.w(e) { "Failed to populate book_title_search for '$title'" }
+            for (t in acronyms) textIndex?.addBookTitleTerm(insertedBookId, categoryId, title, t)
+        }.onFailure { e ->
+            logger.w(e) { "Failed to index book title terms for '$title'" }
         }
 
+        // Populate Lookup index (books + acronyms)
+        runCatching {
+            val terms = buildList {
+                add(title)
+                val tSan = sanitizeAcronymTerm(title)
+                if (tSan.isNotBlank() && !tSan.equals(title, ignoreCase = true)) add(tSan)
+                addAll(runCatching { fetchAcronymsForTitle(title) }.getOrDefault(emptyList()))
+            }
+            lookupIndex?.addBook(insertedBookId, categoryId, title, terms)
+        }.onFailure { e -> logger.w(e) { "Failed to index book lookup for '$title'" } }
+
         // Process content of the book
-        processBookContent(path, insertedBookId)
+        processBookContent(path, insertedBookId, title, categoryId)
+
+        // Book-level progress
+        processedBooksCount += 1
+        val pct = if (totalBooksToProcess > 0) (processedBooksCount * 100 / totalBooksToProcess) else 0
+        logger.i { "Books progress: $processedBooksCount/$totalBooksToProcess (${pct}%)" }
     }
 
     /**
@@ -366,7 +397,7 @@ class DatabaseGenerator(
      * @param path The path to the book file
      * @param bookId The ID of the book in the database
      */
-    private suspend fun processBookContent(path: Path, bookId: Long) = coroutineScope {
+    private suspend fun processBookContent(path: Path, bookId: Long, bookTitle: String, categoryId: Long) = coroutineScope {
         logger.d { "Processing content for book ID: $bookId" }
         logger.i { "Processing content of book ID: $bookId (ID generated by the database)" }
 
@@ -376,7 +407,7 @@ class DatabaseGenerator(
         logger.i { "Number of lines: ${lines.size}" }
 
         // Process each line one by one, handling TOC entries as we go
-        processLinesWithTocEntries(bookId, lines)
+        processLinesWithTocEntries(bookId, bookTitle, categoryId, lines)
 
         // Update the total number of lines
         repository.updateBookTotalLines(bookId, lines.size)
@@ -391,7 +422,7 @@ class DatabaseGenerator(
      * @param bookId The ID of the book in the database
      * @param lines The lines of the book content
      */
-    private suspend fun processLinesWithTocEntries(bookId: Long, lines: List<String>) {
+    private suspend fun processLinesWithTocEntries(bookId: Long, bookTitle: String, categoryId: Long, lines: List<String>) {
         logger.d { "Processing lines and TOC entries together for book ID: $bookId" }
 
         // Structure pour stocker toutes les entrées TOC créées
@@ -456,8 +487,7 @@ class DatabaseGenerator(
                         id = currentLineId,
                         bookId = bookId,
                         lineIndex = lineIndex,
-                        content = line,
-                        plainText = plainText
+                        content = line
                     )
                 )
                 repository.updateTocEntryLineId(tocEntryId, lineId)
@@ -468,6 +498,30 @@ class DatabaseGenerator(
                     repository.bulkUpsertLineToc(lineTocBuffer)
                     lineTocBuffer.clear()
                 }
+                // Index heading line
+                runCatching {
+                    textIndex?.addLine(
+                        bookId = bookId,
+                        bookTitle = bookTitle,
+                        categoryId = categoryId,
+                        lineId = lineId,
+                        lineIndex = lineIndex,
+                        normalizedText = plainText,
+                        rawPlainText = plainText
+                    )
+                }.onFailure { e -> logger.w(e) { "Failed to index heading line $lineId in book $bookId" } }
+
+                // Index TOC for lookup
+                runCatching {
+                    lookupIndex?.addToc(
+                        tocId = tocEntryId,
+                        bookId = bookId,
+                        categoryId = categoryId,
+                        bookTitle = bookTitle,
+                        text = plainText,
+                        level = level
+                    )
+                }.onFailure { e -> logger.w(e) { "Failed to index TOC $tocEntryId for book $bookId" } }
             } else {
                 // Regular line
                 val currentLineId = nextLineId++
@@ -476,8 +530,7 @@ class DatabaseGenerator(
                         id = currentLineId,
                         bookId = bookId,
                         lineIndex = lineIndex,
-                        content = line,
-                        plainText = plainText
+                        content = line
                     )
                 )
                 // Buffer mapping for regular line if there is a current owner
@@ -488,10 +541,23 @@ class DatabaseGenerator(
                         lineTocBuffer.clear()
                     }
                 }
+                // Index regular line
+                runCatching {
+                    textIndex?.addLine(
+                        bookId = bookId,
+                        bookTitle = bookTitle,
+                        categoryId = categoryId,
+                        lineId = insertedLineId,
+                        lineIndex = lineIndex,
+                        normalizedText = plainText,
+                        rawPlainText = plainText
+                    )
+                }.onFailure { e -> logger.w(e) { "Failed to index line $insertedLineId in book $bookId" } }
             }
 
             if (lineIndex % 1000 == 0) {
-                logger.i { "Progress: $lineIndex/${lines.size} lines" }
+                val pct = if (lines.isNotEmpty()) (lineIndex * 100 / lines.size) else 0
+                logger.i { "Book $bookId '$bookTitle': $lineIndex/${lines.size} lines (${pct}%)" }
             }
         }
 
@@ -889,15 +955,7 @@ class DatabaseGenerator(
         repository.executeRawQuery("PRAGMA foreign_keys = ON")
     }
 
-    /**
-     * Rebuilds the FTS5 index for the line_search table.
-     * This should be called after all data has been inserted to ensure optimal search performance.
-     */
-    private suspend fun rebuildFts5Index() {
-        logger.d { "Rebuilding FTS5 index for line_search table" }
-        repository.rebuildFts5Index()
-        logger.i { "FTS5 index rebuilt successfully" }
-    }
+    // Removed: FTS rebuild is obsolete (Lucene index is committed in this run)
 
     /**
      * Updates the book_has_links table to indicate which books have source links, target links, or both.
