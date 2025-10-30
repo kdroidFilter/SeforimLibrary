@@ -219,6 +219,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     /**
+     * Returns all descendant category IDs (including the category itself) using the
+     * category_closure table. This is a bulk way to scope by category without recursive calls.
+     */
+    suspend fun getDescendantCategoryIds(ancestorId: Long): List<Long> = withContext(Dispatchers.IO) {
+        database.categoryClosureQueriesQueries.selectDescendants(ancestorId).executeAsList()
+    }
+
+    /**
      * Finds categories whose title matches the LIKE pattern. Use %term% for contains.
      */
     suspend fun findCategoriesByTitleLike(pattern: String, limit: Int = 20): List<Category> = withContext(Dispatchers.IO) {
@@ -366,6 +374,21 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     suspend fun getBooksByCategory(categoryId: Long): List<Book> = withContext(Dispatchers.IO) {
         val books = database.bookQueriesQueries.selectByCategoryId(categoryId).executeAsList()
         return@withContext books.map { bookData ->
+            val authors = getBookAuthors(bookData.id)
+            val topics = getBookTopics(bookData.id)
+            val pubPlaces = getBookPubPlaces(bookData.id)
+            val pubDates = getBookPubDates(bookData.id)
+            bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+        }
+    }
+
+    /**
+     * Retrieves all books under the given ancestor category (including the category itself)
+     * using the category_closure table in a single query.
+     */
+    suspend fun getBooksUnderCategoryTree(ancestorCategoryId: Long): List<Book> = withContext(Dispatchers.IO) {
+        val rows = database.bookQueriesQueries.selectByAncestorCategory(ancestorCategoryId).executeAsList()
+        rows.map { bookData ->
             val authors = getBookAuthors(bookData.id)
             val topics = getBookTopics(bookData.id)
             val pubPlaces = getBookPubPlaces(bookData.id)

@@ -9,6 +9,12 @@ SELECT * FROM book WHERE id = ?;
 selectByCategoryId:
 SELECT * FROM book WHERE categoryId = ? ORDER BY orderIndex, title;
 
+-- Select all books whose category is a descendant of the given ancestor category
+selectByAncestorCategory:
+SELECT b.* FROM book b
+WHERE b.categoryId IN (SELECT descendantId FROM category_closure WHERE ancestorId = ?)
+ORDER BY b.orderIndex, b.title;
+
 selectByTitle:
 SELECT * FROM book WHERE title = ? LIMIT 1;
 
