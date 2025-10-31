@@ -60,18 +60,18 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     suspend fun <T> runInTransaction(block: suspend () -> T): T {
         // Use SAVEPOINT to support nesting and avoid COMMIT/ROLLBACK state errors
-        val spName = "sp_${'$'}{++txCounter}"
-        withContext(Dispatchers.IO) { driver.execute(null, "SAVEPOINT ${'$'}spName", 0) }
+        val spName = "sp_${++txCounter}"
+        withContext(Dispatchers.IO) { driver.execute(null, "SAVEPOINT $spName", 0) }
         return try {
             val result = block()
-            withContext(Dispatchers.IO) { driver.execute(null, "RELEASE SAVEPOINT ${'$'}spName", 0) }
+            withContext(Dispatchers.IO) { driver.execute(null, "RELEASE SAVEPOINT $spName", 0) }
             result
         } catch (t: Throwable) {
             // Roll back to our savepoint and then release it to exit the savepoint scope
             try {
                 withContext(Dispatchers.IO) {
-                    driver.execute(null, "ROLLBACK TO SAVEPOINT ${'$'}spName", 0)
-                    driver.execute(null, "RELEASE SAVEPOINT ${'$'}spName", 0)
+                    driver.execute(null, "ROLLBACK TO SAVEPOINT $spName", 0)
+                    driver.execute(null, "RELEASE SAVEPOINT $spName", 0)
                 }
             } catch (_: Throwable) {
                 // Ignore secondary failures to keep original exception context
