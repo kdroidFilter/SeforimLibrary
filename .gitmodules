@@ -1,0 +1,3 @@
+[submodule "HebMorph"]
+	path = HebMorph
+	url = https://github.com/kdroidFilter/HebMorph.git
