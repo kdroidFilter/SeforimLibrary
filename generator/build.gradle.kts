@@ -36,7 +36,7 @@ kotlin {
             implementation("org.apache.lucene:lucene-queryparser:10.3.1")
             implementation("org.apache.lucene:lucene-highlighter:10.3.1")
             // HebMorph Lucene integration (substituted by included build SeforimLibrary/HebMorph/java)
-            implementation("com.code972.hebmorph:hebmorph-lucene:10.3.1")
+            api("com.code972.hebmorph:hebmorph-lucene:10.3.1")
         }
 
     }
@@ -144,4 +144,40 @@ tasks.register<JavaExec>("migrateAcronyms") {
     }
 
     jvmArgs = listOf("-Xmx1g")
+}
+
+// Build Lucene index using HebMorph analyzer against an existing SQLite DB
+// Usage:
+//   ./gradlew :generator:buildHebMorphIndex -PseforimDb=/path/to/seforim.db \
+//     [-Phebmorph.hspell.path=/path/to/hspell-data-files]
+tasks.register<JavaExec>("buildHebMorphIndex") {
+    group = "application"
+    description = "Build Lucene index using HebMorph analyzer. Requires -PseforimDb and hspell data path."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.BuildHebMorphIndexKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    // Pass DB path as system property recognized by the Kotlin entrypoint
+    if (project.hasProperty("seforimDb")) {
+        systemProperty("seforimDb", project.property("seforimDb") as String)
+    } else if (System.getenv("SEFORIM_DB") != null) {
+        systemProperty("SEFORIM_DB", System.getenv("SEFORIM_DB"))
+    }
+
+    // Optional: pass explicit hspell path
+    if (project.hasProperty("hebmorph.hspell.path")) {
+        systemProperty("hebmorph.hspell.path", project.property("hebmorph.hspell.path") as String)
+    } else if (System.getenv("HEBMORPH_HSPELL_PATH") != null) {
+        systemProperty("HEBMORPH_HSPELL_PATH", System.getenv("HEBMORPH_HSPELL_PATH"))
+    }
+
+    // Generous heap for indexing
+    jvmArgs = listOf(
+        "-Xmx4g",
+        "-XX:+UseG1GC",
+        "-XX:MaxGCPauseMillis=200",
+        "--enable-native-access=ALL-UNNAMED",
+        "--add-modules=jdk.incubator.vector"
+    )
 }

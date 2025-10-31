@@ -131,7 +131,8 @@ fun main() = runBlocking {
             val total = book.totalLines
             val batch = 5000
             var start = 0
-            while (start <= total) {
+            var nextLogPct = 10
+            while (start < total) {
                 val end = min(total - 1, start + batch - 1)
                 val lines = runCatching { repo.getLines(book.id, start, end) }.getOrDefault(emptyList())
                 for (ln in lines) {
@@ -149,9 +150,9 @@ fun main() = runBlocking {
                 start = end + 1
                 if (total > 0) {
                     val pct = (start.toLong() * 100L / total).toInt().coerceIn(0, 100)
-                    // Log every ~10% or at batch boundaries
-                    if (pct % 10 == 0 || start % (batch * 2) == 0) {
+                    if (pct >= nextLogPct) {
                         logger.i { "   Lines ${start}/$total (${pct}%) for '${book.title}'" }
+                        nextLogPct = ((pct / 10) + 1) * 10
                     }
                 }
             }
