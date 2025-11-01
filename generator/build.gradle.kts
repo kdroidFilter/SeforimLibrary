@@ -166,27 +166,3 @@ tasks.register<JavaExec>("generateLinks") {
     )
 }
 
-// Phase 3: build Lucene indexes only
-// Usage:
-//   ./gradlew :generator:buildLuceneIndex -PseforimDb=/path/to/seforim.db
-tasks.register<JavaExec>("buildLuceneIndex") {
-    group = "application"
-    description = "Phase 3: build Lucene index next to the DB. Use -PseforimDb."
-
-    dependsOn("jvmJar")
-    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.BuildLuceneIndexKt")
-    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
-
-    // Default DB path in build/
-    val defaultDbPath = layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
-    systemProperty("seforimDb", defaultDbPath)
-
-    jvmArgs = listOf(
-        "-Xmx4g",
-        "-XX:+UseG1GC",
-        "-XX:MaxGCPauseMillis=200",
-        "--enable-native-access=ALL-UNNAMED",
-        "--add-modules=jdk.incubator.vector"
-    )
-}
-// (no imports at end)
