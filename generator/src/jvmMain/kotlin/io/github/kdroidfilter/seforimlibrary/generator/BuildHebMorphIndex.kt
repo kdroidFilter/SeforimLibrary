@@ -35,7 +35,7 @@ fun main() = runBlocking {
     Logger.setMinSeverity(Severity.Info)
     val logger = Logger.withTag("BuildHebMorphIndex")
 
-    val dbPath =  "/Volumes/Data/Downloads/seforim.db"
+    val dbPath =  "/Volumes/Data/Downloads/seforim_lucene.db"
 
     val dbFile = File(dbPath)
     require(dbFile.exists()) { "Database not found at $dbPath" }

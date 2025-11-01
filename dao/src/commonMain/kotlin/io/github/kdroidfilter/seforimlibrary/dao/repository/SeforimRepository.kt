@@ -54,31 +54,11 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         database.lineTocQueriesQueries.upsert(lineId, tocEntryId)
     }
 
-    // --- Performance helpers (transactions/PRAGMAs) ---
-
-    private var txCounter = 0
-
-    suspend fun <T> runInTransaction(block: suspend () -> T): T {
-        // Use SAVEPOINT to support nesting and avoid COMMIT/ROLLBACK state errors
-        val spName = "sp_${++txCounter}"
-        withContext(Dispatchers.IO) { driver.execute(null, "SAVEPOINT $spName", 0) }
-        return try {
-            val result = block()
-            withContext(Dispatchers.IO) { driver.execute(null, "RELEASE SAVEPOINT $spName", 0) }
-            result
-        } catch (t: Throwable) {
-            // Roll back to our savepoint and then release it to exit the savepoint scope
-            try {
-                withContext(Dispatchers.IO) {
-                    driver.execute(null, "ROLLBACK TO SAVEPOINT $spName", 0)
-                    driver.execute(null, "RELEASE SAVEPOINT $spName", 0)
-                }
-            } catch (_: Throwable) {
-                // Ignore secondary failures to keep original exception context
-            }
-            throw t
-        }
-    }
+    // --- Transactions ---
+    // Avoid custom transaction management that wraps the entire generation.
+    // Use SQLDelight's default behavior (per‑statement auto-commit) at call sites.
+    // Keep signature for compatibility with existing callers.
+    suspend fun <T> runInTransaction(block: suspend () -> T): T = block()
 
     suspend fun setSynchronous(mode: String) = withContext(Dispatchers.IO) {
         driver.execute(null, "PRAGMA synchronous=$mode", 0)

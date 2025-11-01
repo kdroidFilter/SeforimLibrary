@@ -157,6 +157,69 @@ class DatabaseGenerator(
     }
 
     /**
+     * Phase 1: Generate categories, books, TOCs and lines only (no links).
+     */
+    suspend fun generateLinesOnly(): Unit = coroutineScope {
+        logger.i { "Starting phase 1: categories/books/lines generation..." }
+        try {
+            // Performance PRAGMAs
+            disableForeignKeys()
+            repository.setSynchronousOff()
+            repository.setJournalModeOff()
+
+            repository.runInTransaction {
+                val metadata = loadMetadata()
+                val libraryPath = sourceDirectory.resolve("אוצריא")
+                if (!libraryPath.exists()) {
+                    throw IllegalStateException("The directory אוצריא does not exist in $sourceDirectory")
+                }
+                libraryRoot = libraryPath
+
+                totalBooksToProcess = try {
+                    Files.walk(libraryRoot).use { s ->
+                        s.filter { Files.isRegularFile(it) && it.extension == "txt" }.count().toInt()
+                    }
+                } catch (_: Exception) { 0 }
+                logger.i { "Planned to process approximately $totalBooksToProcess books (phase 1)" }
+
+                runCatching { processPriorityBooks(loadMetadata = { metadata }) }
+                    .onFailure { e -> logger.w(e) { "Failed processing priority list; continuing with full generation (phase 1)" } }
+
+                processDirectory(libraryPath, null, 0, metadata)
+
+                // Build category closure after categories insertion
+                logger.i { "Building category_closure table (phase 1)..." }
+                repository.rebuildCategoryClosure()
+            }
+        } finally {
+            runCatching { enableForeignKeys() }
+            runCatching { repository.setSynchronousNormal() }
+            runCatching { repository.setJournalModeWal() }
+            logger.i { "Phase 1 completed." }
+        }
+    }
+
+    /**
+     * Phase 2: Process links only and update link-related flags.
+     */
+    suspend fun generateLinksOnly(): Unit = coroutineScope {
+        logger.i { "Starting phase 2: links processing..." }
+        try {
+            disableForeignKeys()
+            repository.setSynchronousOff()
+            repository.setJournalModeOff()
+            repository.runInTransaction {
+                processLinks()
+            }
+        } finally {
+            runCatching { enableForeignKeys() }
+            runCatching { repository.setSynchronousNormal() }
+            runCatching { repository.setJournalModeWal() }
+            logger.i { "Phase 2 completed." }
+        }
+    }
+
+    /**
      * Loads book metadata from the metadata.json file.
      * Attempts to parse the file in different formats (Map or List).
      *

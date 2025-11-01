@@ -43,107 +43,28 @@ kotlin {
 
 }
 
-
-// Run the generator's main (BuildFromScratch.kt) on the JVM target
-// Usage (from repo root):
-//   SEFORIM_DB=/path/to/seforim.db \
-//   OTZARIA_SOURCE_DIR=/path/to/otzaria_source \
-//   ./gradlew :generator:runBuildFromScratch --no-daemon
-tasks.register<JavaExec>("runBuildFromScratch") {
+// Download latest Acronymizer DB into build/acronymizer/acronymizer.db
+tasks.register<JavaExec>("downloadAcronymizer") {
     group = "application"
-    description = "Run the Otzaria DB generator (BuildFromScratch). Requires SEFORIM_DB and OTZARIA_SOURCE_DIR."
+    description = "Download latest SeforimAcronymizer .db into build/acronymizer/acronymizer.db"
 
-    // Ensure JVM classes/jar are built
     dependsOn("jvmJar")
-
-    // Top-level main() in BuildFromScratch.kt (now in jvmMain) compiles to this class name
-    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.BuildFromScratchKt")
-
-    // Use the JVM runtime classpath for the multiplatform 'jvm' target
-    // and include the project's jar itself
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.DownloadAcronymizerKt")
     classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
 
-    // Allow passing args: db, source, optional acronym DB
-    if (project.hasProperty("seforimDb")) {
-        args(project.property("seforimDb") as String)
-    }
-    if (project.hasProperty("sourceDir")) {
-        if (!project.hasProperty("seforimDb")) args("")
-        args(project.property("sourceDir") as String)
-    }
-    if (project.hasProperty("acronymDb")) {
-        if (!project.hasProperty("seforimDb")) args("")
-        if (!project.hasProperty("sourceDir")) args("")
-        args(project.property("acronymDb") as String)
-    }
-
-    // Give the process a reasonable heap and GC for heavy indexing
-    jvmArgs = listOf(
-        "-Xmx4g",
-        "-XX:+UseG1GC",
-        "-XX:MaxGCPauseMillis=200",
-        "--enable-native-access=ALL-UNNAMED",
-        "--add-modules=jdk.incubator.vector"
-    )
+    jvmArgs = listOf("-Xmx512m")
 }
 
-// Removed legacy FTS rebuild task (replaced by upgradeToLucene)
-
-// Upgrade existing DB: drop legacy FTS objects and build Lucene index next to the DB
-// Usage:
-//   ./gradlew :generator:upgradeToLucene -PseforimDb=/path/to/seforim.db [-PdropPlainText=true]
-tasks.register<JavaExec>("upgradeToLucene") {
+// Download latest Otzaria source into build/otzaria/source
+tasks.register<JavaExec>("downloadOtzaria") {
     group = "application"
-    description = "Upgrade an existing DB: drop FTS, build Lucene index. Use -PseforimDb=/path and optional -PdropPlainText=true."
+    description = "Download latest otzaria-library zip and extract to build/otzaria/source"
 
     dependsOn("jvmJar")
-    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.UpgradeToLuceneKt")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.DownloadOtzariaKt")
     classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
 
-    // Pass DB path and optional drop flag via system properties
-    if (project.hasProperty("seforimDb")) {
-        systemProperty("SEFORIM_DB", project.property("seforimDb") as String)
-    } else if (System.getenv("SEFORIM_DB") != null) {
-        systemProperty("SEFORIM_DB", System.getenv("SEFORIM_DB"))
-    }
-    if (project.findProperty("dropPlainText")?.toString()?.equals("true", ignoreCase = true) == true) {
-        systemProperty("DROP_PLAINTEXT", "true")
-    }
-
-    jvmArgs = listOf(
-        "-Xmx2g",
-        "-XX:+UseG1GC",
-        "-XX:MaxGCPauseMillis=200",
-        "--enable-native-access=ALL-UNNAMED",
-        "--add-modules=jdk.incubator.vector"
-    )
-}
-
-// Removed legacy FTS sanitization task (replaced by Lucene indexer)
-
-// Utility: migrate acronyms from external Acronymizer DB into the main DB table book_acronym
-// Usage:
-//   ./gradlew :generator:migrateAcronyms -PseforimDb=/path/to/seforim.db -PacronymDb=/path/to/acronymizer.db
-tasks.register<JavaExec>("migrateAcronyms") {
-    group = "application"
-    description = "Populate book_acronym from Acronymizer DB. Use -PseforimDb and -PacronymDb or env vars SEFORIM_DB/ACRONYM_DB."
-
-    dependsOn("jvmJar")
-    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.AcronymMigrationKt")
-    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
-
-    if (project.hasProperty("seforimDb")) {
-        args(project.property("seforimDb") as String)
-    }
-    if (project.hasProperty("acronymDb")) {
-        if (!project.hasProperty("seforimDb")) {
-            // placeholder to satisfy arg order
-            args("")
-        }
-        args(project.property("acronymDb") as String)
-    }
-
-    jvmArgs = listOf("-Xmx1g")
+    jvmArgs = listOf("-Xmx512m")
 }
 
 // Build Lucene index using HebMorph analyzer against an existing SQLite DB
@@ -163,6 +84,10 @@ tasks.register<JavaExec>("buildHebMorphIndex") {
         systemProperty("seforimDb", project.property("seforimDb") as String)
     } else if (System.getenv("SEFORIM_DB") != null) {
         systemProperty("SEFORIM_DB", System.getenv("SEFORIM_DB"))
+    } else {
+        // Default to DB under build/
+        val defaultDbPath = layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+        systemProperty("seforimDb", defaultDbPath)
     }
 
     // Optional: pass explicit hspell path
@@ -181,3 +106,87 @@ tasks.register<JavaExec>("buildHebMorphIndex") {
         "--add-modules=jdk.incubator.vector"
     )
 }
+
+
+// Phase 1: generate categories/books/lines only
+// Usage:
+//   ./gradlew :generator:generateLines -PseforimDb=/path/to.db -PsourceDir=/path/to/otzaria [-PacronymDb=/path/acronymizer.db]
+tasks.register<JavaExec>("generateLines") {
+    group = "application"
+    description = "Phase 1: categories/books/lines only."
+
+    dependsOn("jvmJar")
+    dependsOn("downloadAcronymizer")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.GenerateLinesKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    // Always provide a default DB path under build/ so no -PseforimDb is needed
+    val defaultDbPath = layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+    val defaultAcronymDb = layout.buildDirectory.file("acronymizer/acronymizer.db").get().asFile.absolutePath
+    // arg0: DB path only; sourceDir omitted so Kotlin will auto-download Otzaria
+    args(defaultDbPath)
+
+    // Provide acronym DB via system property so Kotlin picks it up
+    if (project.hasProperty("acronymDb")) {
+        systemProperty("acronymDb", project.property("acronymDb") as String)
+    } else {
+        systemProperty("acronymDb", defaultAcronymDb)
+    }
+
+    jvmArgs = listOf(
+        "-Xmx4g",
+        "-XX:+UseG1GC",
+        "-XX:MaxGCPauseMillis=200",
+        "--enable-native-access=ALL-UNNAMED",
+        "--add-modules=jdk.incubator.vector"
+    )
+}
+
+// Phase 2: process links only
+// Usage:
+//   ./gradlew :generator:generateLinks -PseforimDb=/path/to.db -PsourceDir=/path/to/otzaria
+tasks.register<JavaExec>("generateLinks") {
+    group = "application"
+    description = "Phase 2: process links only."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.GenerateLinksKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    // Default DB path in build/
+    val defaultDbPath = layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+    args(defaultDbPath)
+
+    jvmArgs = listOf(
+        "-Xmx2g",
+        "-XX:+UseG1GC",
+        "-XX:MaxGCPauseMillis=200",
+        "--enable-native-access=ALL-UNNAMED",
+        "--add-modules=jdk.incubator.vector"
+    )
+}
+
+// Phase 3: build Lucene indexes only
+// Usage:
+//   ./gradlew :generator:buildLuceneIndex -PseforimDb=/path/to/seforim.db
+tasks.register<JavaExec>("buildLuceneIndex") {
+    group = "application"
+    description = "Phase 3: build Lucene index next to the DB. Use -PseforimDb."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.BuildLuceneIndexKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    // Default DB path in build/
+    val defaultDbPath = layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+    systemProperty("seforimDb", defaultDbPath)
+
+    jvmArgs = listOf(
+        "-Xmx4g",
+        "-XX:+UseG1GC",
+        "-XX:MaxGCPauseMillis=200",
+        "--enable-native-access=ALL-UNNAMED",
+        "--add-modules=jdk.incubator.vector"
+    )
+}
+// (no imports at end)

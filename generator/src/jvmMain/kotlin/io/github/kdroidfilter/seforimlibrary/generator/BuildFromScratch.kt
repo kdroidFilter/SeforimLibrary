@@ -21,9 +21,9 @@ fun main(args: Array<String>) = runBlocking {
     val logger = Logger.withTag("Main")
 
     // Resolve inputs (adapt as needed)
-    val dbPath = "/home/elie-gambache/Documents/SeforimDB/271025/seforim.db"
-    val sourcePath = KPath("/home/elie-gambache/Documents/SeforimDB/271025/otzaria_latest (2)")
-    val acronymDbPath: String? = "/home/elie-gambache/IdeaProjects/SeforimApp/SeforimAcronymizer/acronymizer/src/jvmMain/acronymizer.db"
+    val dbPath = "/Volumes/Data/Downloads/seforim_lucene.db"
+    val sourcePath = KPath("/Volumes/Data/Downloads/otzaria_latest")
+    val acronymDbPath: String? = "/Volumes/Data/Downloads/acronymizer.db"
 
     val dbFile = File(dbPath)
     val dbExists = dbFile.exists()
