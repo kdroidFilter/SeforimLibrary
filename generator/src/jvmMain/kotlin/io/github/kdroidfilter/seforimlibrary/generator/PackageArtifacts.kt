@@ -85,7 +85,7 @@ fun main(args: Array<String>) {
     val zstdLevel = (args.getOrNull(2)
         ?: System.getProperty("zstdLevel")
         ?: System.getenv("ZSTD_LEVEL")
-        ?: "19").toIntOrNull()?.coerceIn(1, 22) ?: 22
+        ?: "22").toIntOrNull()?.coerceIn(1, 22) ?: 22
 
     // Workers (threads). Default: all available processors (like zstd -T0)
     val workers = (

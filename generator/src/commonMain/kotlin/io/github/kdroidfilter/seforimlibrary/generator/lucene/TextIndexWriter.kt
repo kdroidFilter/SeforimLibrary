@@ -13,8 +13,9 @@ interface TextIndexWriter : AutoCloseable {
      * @param categoryId The category id of the book
      * @param lineId The line id
      * @param lineIndex The 0-based line index within the book
-     * @param normalizedText Normalized text to index (diacritics removed, maqaf replaced)
+     * @param normalizedText Normalized text to index in the primary field (typically StandardAnalyzer)
      * @param rawPlainText Optional raw plain text (stored) for snippet generation
+     * @param normalizedTextHebrew Optional normalized text for a HebMorph-targeted field
      */
     fun addLine(
         bookId: Long,
@@ -23,7 +24,8 @@ interface TextIndexWriter : AutoCloseable {
         lineId: Long,
         lineIndex: Int,
         normalizedText: String,
-        rawPlainText: String? = null
+        rawPlainText: String? = null,
+        normalizedTextHebrew: String? = null
     )
 
     /**
@@ -44,4 +46,3 @@ interface TextIndexWriter : AutoCloseable {
 
     override fun close()
 }
-

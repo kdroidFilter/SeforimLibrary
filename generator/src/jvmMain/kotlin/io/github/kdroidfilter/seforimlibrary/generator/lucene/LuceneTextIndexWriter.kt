@@ -19,7 +19,12 @@ import java.nio.file.Path
  *  - type=line: searchable book line (text field analyzed) + stored metadata
  *  - type=book_title: terms for title/acronym suggestions (analyzed field 'title')
  */
-class LuceneTextIndexWriter(indexDir: Path, analyzer: Analyzer = StandardAnalyzer()) : TextIndexWriter {
+class LuceneTextIndexWriter(
+    indexDir: Path,
+    analyzer: Analyzer = StandardAnalyzer(),
+    private val indexHebrewField: Boolean = false,
+    private val indexPrimaryText: Boolean = true
+) : TextIndexWriter {
     companion object Fields {
         const val FIELD_TYPE = "type"
         const val TYPE_LINE = "line"
@@ -32,6 +37,7 @@ class LuceneTextIndexWriter(indexDir: Path, analyzer: Analyzer = StandardAnalyze
         const val FIELD_LINE_INDEX = "line_index"
         const val FIELD_TEXT = "text"
         const val FIELD_TEXT_RAW = "text_raw"
+        const val FIELD_TEXT_HE = "text_he"
         const val FIELD_TITLE = "title" // analyzed suggestion term
     }
 
@@ -50,7 +56,8 @@ class LuceneTextIndexWriter(indexDir: Path, analyzer: Analyzer = StandardAnalyze
         lineId: Long,
         lineIndex: Int,
         normalizedText: String,
-        rawPlainText: String?
+        rawPlainText: String?,
+        normalizedTextHebrew: String?
     ) {
         val doc = Document().apply {
             add(StringField(FIELD_TYPE, TYPE_LINE, Field.Store.NO))
@@ -66,7 +73,12 @@ class LuceneTextIndexWriter(indexDir: Path, analyzer: Analyzer = StandardAnalyze
             add(StoredField(FIELD_LINE_INDEX, lineIndex))
             add(IntPoint(FIELD_LINE_INDEX, lineIndex))
 
-            add(TextField(FIELD_TEXT, normalizedText, Field.Store.NO))
+            if (indexPrimaryText) {
+                add(TextField(FIELD_TEXT, normalizedText, Field.Store.NO))
+            }
+            // Optionally index the same content into a HebMorph-targeted field
+            val hebText = normalizedTextHebrew ?: if (indexHebrewField) normalizedText else null
+            hebText?.let { add(TextField(FIELD_TEXT_HE, it, Field.Store.NO)) }
             rawPlainText?.let { add(StoredField(FIELD_TEXT_RAW, it)) }
         }
         writer.addDocument(doc)
@@ -94,4 +106,3 @@ class LuceneTextIndexWriter(indexDir: Path, analyzer: Analyzer = StandardAnalyze
         dir.close()
     }
 }
-

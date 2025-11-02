@@ -8,7 +8,12 @@ import co.touchlab.kermit.Severity
 import com.code972.hebmorph.datastructures.DictHebMorph
 import com.code972.hebmorph.hspell.HSpellDictionaryLoader
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.Dispatchers
 import org.apache.lucene.analysis.hebrew.HebrewLegacyIndexingAnalyzer
+import org.apache.lucene.analysis.standard.StandardAnalyzer
+import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import io.github.kdroidfilter.seforimlibrary.generator.lucene.LuceneLookupIndexWriter
 import io.github.kdroidfilter.seforimlibrary.generator.lucene.LuceneTextIndexWriter
@@ -19,6 +24,8 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.StandardCopyOption
+import java.util.Comparator
 import kotlin.math.min
 
 /**
@@ -34,7 +41,7 @@ import kotlin.math.min
  *       [-Phebmorph.hspell.path=/path/to/hspell-data-files]
  */
 fun main() = runBlocking {
-    Logger.setMinSeverity(Severity.Info)
+    Logger.setMinSeverity(Severity.Warn)
     val logger = Logger.withTag("BuildHebMorphIndex")
 
     // Resolve DB path: prefer -PseforimDb / SEFORIM_DB, fallback to build/seforim.db
@@ -52,27 +59,65 @@ fun main() = runBlocking {
     logger.i { "Using hspell path: $hspellPath" }
     val dict: DictHebMorph = HSpellDictionaryLoader().loadDictionaryFromPath(hspellPath)
 
-    // Prepare index output paths next to the DB
-    val indexDir: Path = if (dbPath.endsWith(".db")) Paths.get("$dbPath.lucene") else Paths.get("$dbPath.luceneindex")
-    val lookupDir: Path = if (dbPath.endsWith(".db")) Paths.get("$dbPath.lookup.lucene") else Paths.get("$dbPath.lookupindex")
-    runCatching { Files.createDirectories(indexDir) }
-    runCatching { Files.createDirectories(lookupDir) }
+    // Final index output paths next to the DB
+    val finalIndexDir: Path = if (dbPath.endsWith(".db")) Paths.get("$dbPath.lucene") else Paths.get("$dbPath.luceneindex")
+    val finalLookupDir: Path = if (dbPath.endsWith(".db")) Paths.get("$dbPath.lookup.lucene") else Paths.get("$dbPath.lookupindex")
+    runCatching { Files.createDirectories(finalIndexDir.parent) }
+    runCatching { Files.createDirectories(finalLookupDir.parent) }
 
-    // Open repository
+    // By default, write indices directly to disk. Tmpfs can be enabled explicitly via -DuseTmpfsForIndex=true
+    val useTmpfsForIndex = (System.getProperty("useTmpfsForIndex") ?: "false").equals("true", ignoreCase = true)
+    // Prefer tmpfs (/dev/shm or /mnt/ramdisk) only when explicitly requested
+    val tmpfsRoot = if (useTmpfsForIndex) {
+        System.getProperty("tmpfsDir")
+            ?: (Paths.get("/dev/shm").takeIf { Files.isDirectory(it) }?.toString())
+            ?: (Paths.get("/mnt/ramdisk").takeIf { Files.isDirectory(it) }?.toString())
+    } else null
+
+    val copyDbToTmpfs = (System.getProperty("copyDbToTmpfs") == "true")
+    var needCopyBack = false // for indices
+    val processDbPath: String // DB path to open (original path by default)
+    val indexDir: Path
+    val lookupDir: Path
+
+    if (tmpfsRoot != null) {
+        val workDir = Paths.get(tmpfsRoot, "seforim-index-${System.currentTimeMillis()}")
+        Files.createDirectories(workDir)
+        logger.i { "[Index] Using tmpfs work dir: $workDir" }
+        // By default, DO NOT copy the DB. Only if explicitly requested via -DcopyDbToTmpfs=true
+        processDbPath = if (copyDbToTmpfs) {
+            val workDb = workDir.resolve("seforim.db")
+            Files.copy(dbFile.toPath(), workDb, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES)
+            logger.i { "[Index] Copied DB to tmpfs: $workDb" }
+            workDb.toString()
+        } else dbPath
+        indexDir = workDir.resolve("lucene")
+        lookupDir = workDir.resolve("lookup")
+        Files.createDirectories(indexDir)
+        Files.createDirectories(lookupDir)
+        needCopyBack = true
+    } else {
+        processDbPath = dbPath
+        indexDir = finalIndexDir
+        lookupDir = finalLookupDir
+        Files.createDirectories(indexDir)
+        Files.createDirectories(lookupDir)
+    }
+
+    // Open repository on the chosen DB path (default to in-memory DB)
     val useMemoryDb = (System.getProperty("inMemoryDb") ?: "true") != "false"
-    val jdbcUrl = if (useMemoryDb) "jdbc:sqlite::memory:" else "jdbc:sqlite:$dbPath"
+    // Use shared in-memory DB so multiple connections can read concurrently
+    val jdbcUrl = if (useMemoryDb) "jdbc:sqlite:file:seforim_index?mode=memory&cache=shared" else "jdbc:sqlite:$processDbPath"
     val driver = JdbcSqliteDriver(url = jdbcUrl)
-    val repo = SeforimRepository(dbPath, driver)
+    val repo = SeforimRepository(processDbPath, driver)
 
-    // Optionally seed in-memory DB from disk DB for faster reads
+    // If using in-memory DB, seed it from the disk DB (original dbPath)
     if (useMemoryDb) {
         val baseDb = dbPath
-        val baseFile = File(baseDb)
-        if (baseFile.exists()) {
+        if (File(baseDb).exists()) {
             logger.i { "[Index] Seeding in-memory DB from $baseDb" }
             runCatching {
                 val escaped = baseDb.replace("'", "''")
-                // Disable FKs during bulk copy to avoid validation overhead
                 repo.executeRawQuery("PRAGMA foreign_keys=OFF")
                 repo.executeRawQuery("ATTACH DATABASE '$escaped' AS disk")
                 val tables = driver.executeQuery(null,
@@ -84,7 +129,6 @@ fun main() = runBlocking {
                     }, 0
                 ).value
                 for (t in tables) {
-                    // Ensure target table exists (schema already created by repo init)
                     repo.executeRawQuery("DELETE FROM \"$t\"")
                     repo.executeRawQuery("INSERT INTO \"$t\" SELECT * FROM disk.\"$t\"")
                 }
@@ -92,7 +136,7 @@ fun main() = runBlocking {
                 repo.executeRawQuery("PRAGMA foreign_keys=ON")
                 logger.i { "[Index] Seed complete: ${'$'}{tables.size} tables copied" }
             }.onFailure { e ->
-                logger.e(e) { "[Index] Failed to seed in-memory DB; falling back to slower disk reads" }
+                logger.e(e) { "[Index] Failed to seed in-memory DB; falling back to file DB reads" }
             }
         } else {
             logger.w { "[Index] Base DB not found at $baseDb; cannot seed in-memory DB" }
@@ -101,103 +145,147 @@ fun main() = runBlocking {
 
     // Build analyzers and writers
     val hebrewAnalyzer = HebrewLegacyIndexingAnalyzer(dict)
+    // Precision-first: use HebMorph analyzer as default (FIELD_TEXT), and for FIELD_TEXT_HE as well.
+    val perFieldAnalyzer = PerFieldAnalyzerWrapper(
+        hebrewAnalyzer,
+        mapOf(
+            LuceneTextIndexWriter.FIELD_TEXT_HE to hebrewAnalyzer
+        )
+    )
 
-    LuceneTextIndexWriter(indexDir, analyzer = hebrewAnalyzer).use { writer ->
-        LuceneLookupIndexWriter(lookupDir).use { lookup ->
+    LuceneTextIndexWriter(indexDir, analyzer = perFieldAnalyzer, indexHebrewField = true, indexPrimaryText = false).use { writer ->
+        LuceneLookupIndexWriter(lookupDir, analyzer = io.github.kdroidfilter.seforimlibrary.analysis.HebrewCliticAwareAnalyzer()).use { lookup ->
             val books = repo.getAllBooks()
+            val indexThreads = (System.getProperty("indexThreads") ?: Runtime.getRuntime().availableProcessors().toString()).toInt().coerceAtLeast(1)
+            val workerDispatcher = Dispatchers.Default.limitedParallelism(indexThreads)
             val totalBooks = books.size
             var processedBooks = 0
             logger.i { "Indexing $totalBooks books into $indexDir using HebMorph" }
-            for (book in books) {
-                processedBooks += 1
-                val globalPct = if (totalBooks > 0) (processedBooks * 100 / totalBooks) else 0
-                logger.i { "[$processedBooks/$totalBooks | ${globalPct}%] Indexing book: '${book.title}' (id=${book.id})" }
+            val progress = java.util.concurrent.atomic.AtomicInteger(0)
+            books.map { book ->
+                async(workerDispatcher) {
+                    val current = progress.incrementAndGet()
+                    val globalPct = if (totalBooks > 0) (current * 100 / totalBooks) else 0
+                    logger.i { "[$current/$totalBooks | ${globalPct}%] Indexing book: '${book.title}' (id=${book.id})" }
 
-                // Title terms (stored in text index for future use)
-                writer.addBookTitleTerm(book.id, book.categoryId, book.title, book.title)
-                val titleSan = sanitizeAcronymTerm(book.title)
-                if (titleSan.isNotBlank() && !titleSan.equals(book.title, ignoreCase = true)) {
-                    writer.addBookTitleTerm(book.id, book.categoryId, book.title, titleSan)
-                }
-                // Topics as additional terms for book lookup by subject
-                runCatching {
-                    val topicTerms = book.topics
-                        .asSequence()
-                        .map { sanitizeAcronymTerm(it.name) }
-                        .map { it.trim() }
-                        .filter { it.isNotEmpty() }
-                        .distinct()
-                        .toList()
-                    topicTerms.forEach { t ->
-                        writer.addBookTitleTerm(book.id, book.categoryId, book.title, t)
-                    }
-                }
-
-                // Lookup index: include title, sanitized title, acronyms and topics (StandardAnalyzer-based) for prefix suggestions
-                runCatching {
-                    val acronyms = runCatching { repo.getAcronymsForBook(book.id) }.getOrDefault(emptyList())
-                    val topicTerms = book.topics
-                        .asSequence()
-                        .map { sanitizeAcronymTerm(it.name) }
-                        .map { it.trim() }
-                        .filter { it.isNotEmpty() }
-                        .distinct()
-                        .toList()
-                    val terms = buildList {
-                        add(book.title)
-                        if (titleSan.isNotBlank()) add(titleSan)
-                        addAll(acronyms)
-                        addAll(topicTerms)
-                    }.filter { it.isNotBlank() }
-                    lookup.addBook(book.id, book.categoryId, book.title, terms)
-                }
-
-                // Lines: stream in batches and index with HebMorph analyzer
-                val total = book.totalLines
-                val allLines = if (total > 0) runCatching { repo.getLines(book.id, 0, total - 1) }.getOrDefault(emptyList()) else emptyList()
-                var processed = 0
-                var nextLogPct = 10
-                for (ln in allLines) {
-                    val normalized = normalizeForIndex(ln.content)
-                    writer.addLine(
-                        bookId = book.id,
-                        bookTitle = book.title,
-                        categoryId = book.categoryId,
-                        lineId = ln.id,
-                        lineIndex = ln.lineIndex,
-                        normalizedText = normalized,
-                        rawPlainText = normalized
-                    )
-                    processed += 1
-                    if (total > 0) {
-                        val pct = (processed.toLong() * 100L / total).toInt().coerceIn(0, 100)
-                        if (pct >= nextLogPct) {
-                            logger.i { "   Lines ${processed}/$total (${pct}%) for '${book.title}'" }
-                            nextLogPct = ((pct / 10) + 1) * 10
+                    // Create a separate read-only connection for concurrent reads
+                    val localRepo = SeforimRepository(processDbPath, JdbcSqliteDriver(url = jdbcUrl))
+                    try {
+                        // Titles
+                        writer.addBookTitleTerm(book.id, book.categoryId, book.title, book.title)
+                        val titleSan = sanitizeAcronymTerm(book.title)
+                        if (titleSan.isNotBlank() && !titleSan.equals(book.title, ignoreCase = true)) {
+                            writer.addBookTitleTerm(book.id, book.categoryId, book.title, titleSan)
                         }
+                        // Topics → title terms
+                        runCatching {
+                            val topicTerms = book.topics.asSequence()
+                                .map { sanitizeAcronymTerm(it.name) }
+                                .map { it.trim() }
+                                .filter { it.isNotEmpty() }
+                                .distinct()
+                                .toList()
+                            topicTerms.forEach { t -> writer.addBookTitleTerm(book.id, book.categoryId, book.title, t) }
+                        }
+                        // Lookup: acronyms + topics
+                        runCatching {
+                            val acronyms = runCatching { localRepo.getAcronymsForBook(book.id) }.getOrDefault(emptyList())
+                            val topicTerms = book.topics.asSequence()
+                                .map { sanitizeAcronymTerm(it.name) }
+                                .map { it.trim() }
+                                .filter { it.isNotEmpty() }
+                                .distinct()
+                                .toList()
+                            val terms = buildList {
+                                add(book.title)
+                                if (titleSan.isNotBlank()) add(titleSan)
+                                addAll(acronyms)
+                                addAll(topicTerms)
+                            }.filter { it.isNotBlank() }
+                            lookup.addBook(book.id, book.categoryId, book.title, terms)
+                        }
+                        // Lines in parallel chunks (but per-book task already parallelized; here we keep single-thread to reduce contention)
+                        val total = book.totalLines
+                        if (total > 0) {
+                            val lines = runCatching { localRepo.getLines(book.id, 0, total - 1) }.getOrDefault(emptyList())
+                            var processed = 0
+                            var nextLogPct = 10
+                            for (ln in lines) {
+                                val normalizedHeb = normalizeForIndex(ln.content)
+                                writer.addLine(
+                                    bookId = book.id,
+                                    bookTitle = book.title,
+                                    categoryId = book.categoryId,
+                                    lineId = ln.id,
+                                    lineIndex = ln.lineIndex,
+                                    // Index HebMorph tokens as primary (FIELD_TEXT)
+                                    normalizedText = normalizedHeb,
+                                    rawPlainText = null,
+                                    // Also index HebMorph-targeted field (FIELD_TEXT_HE)
+                                    normalizedTextHebrew = normalizedHeb
+                                )
+                                processed += 1
+                                val pct = (processed.toLong() * 100L / total).toInt().coerceIn(0, 100)
+                                if (pct >= nextLogPct) {
+                                    logger.i { "   Lines ${processed}/$total (${pct}%) for '${book.title}' (bookParallel)" }
+                                    nextLogPct = ((pct / 10) + 1) * 10
+                                }
+                            }
+                        }
+                        // TOC into lookup
+                        runCatching {
+                            val tocs = localRepo.getBookToc(book.id)
+                            for (t in tocs) {
+                                val norm = normalizeForIndex(t.text)
+                                lookup.addToc(
+                                    tocId = t.id,
+                                    bookId = t.bookId,
+                                    categoryId = book.categoryId,
+                                    bookTitle = book.title,
+                                    text = norm,
+                                    level = t.level
+                                )
+                            }
+                        }
+                        logger.i { "Completed '${book.title}' [$current/$totalBooks | ${globalPct}%]" }
+                    } finally {
+                        localRepo.close()
                     }
                 }
-                // TOC into lookup index only
-                runCatching {
-                    val tocs = repo.getBookToc(book.id)
-                    for (t in tocs) {
-                        val norm = normalizeForIndex(t.text)
-                        lookup.addToc(
-                            tocId = t.id,
-                            bookId = t.bookId,
-                            categoryId = book.categoryId,
-                            bookTitle = book.title,
-                            text = norm,
-                            level = t.level
-                        )
-                    }
-                }
-                logger.i { "Completed '${book.title}' [${processedBooks}/$totalBooks | ${globalPct}%]" }
-            }
+            }.awaitAll()
             writer.commit()
             lookup.commit()
             logger.i { "Lucene text index built successfully at $indexDir (HebMorph analyzer)" }
             logger.i { "Lucene lookup index built successfully at $lookupDir" }
+        }
+    }
+
+    // If built in tmpfs, copy back to final destinations and cleanup
+    if (needCopyBack) {
+        fun copyTree(src: Path, dst: Path) {
+            if (Files.exists(dst)) {
+                Files.walk(dst).sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
+            Files.createDirectories(dst)
+            Files.walk(src).forEach { p ->
+                val rel = src.relativize(p)
+                val target = dst.resolve(rel)
+                if (Files.isDirectory(p)) Files.createDirectories(target)
+                else Files.copy(p, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES)
+            }
+        }
+        runCatching { copyTree(indexDir, finalIndexDir) }
+            .onSuccess { logger.i { "[Index] Copied text index to $finalIndexDir" } }
+            .onFailure { logger.e(it) { "[Index] Failed to copy text index to $finalIndexDir" } }
+        runCatching { copyTree(lookupDir, finalLookupDir) }
+            .onSuccess { logger.i { "[Index] Copied lookup index to $finalLookupDir" } }
+            .onFailure { logger.e(it) { "[Index] Failed to copy lookup index to $finalLookupDir" } }
+
+        // Cleanup work dir
+        val workRoot = Paths.get(processDbPath).parent
+        if (workRoot != null && workRoot.startsWith(tmpfsRoot)) {
+            runCatching { Files.walk(workRoot).sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) } }
+            logger.i { "[Index] Cleaned tmpfs dir: $workRoot" }
         }
     }
 
