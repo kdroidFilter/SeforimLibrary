@@ -156,8 +156,11 @@ tasks.register<JavaExec>("generateLines") {
     // Always provide a default DB path under build/ so no -PseforimDb is needed
     val defaultDbPath = layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
     val defaultAcronymDb = layout.buildDirectory.file("acronymizer/acronymizer.db").get().asFile.absolutePath
+    // In-memory DB generation enabled by default (override with -PinMemoryDb=false)
+    val inMemory = project.findProperty("inMemoryDb") != "false"
+    val cliDbPath = if (inMemory) ":memory:" else defaultDbPath
     // arg0: DB path only; sourceDir omitted so Kotlin will auto-download Otzaria
-    args(defaultDbPath)
+    args(cliDbPath)
 
     // Provide acronym DB via system property so Kotlin picks it up
     if (project.hasProperty("acronymDb")) {
@@ -166,8 +169,17 @@ tasks.register<JavaExec>("generateLines") {
         systemProperty("acronymDb", defaultAcronymDb)
     }
 
+    // If in-memory DB is used, persist destination (default to build/seforim.db)
+    if (inMemory) {
+        if (project.hasProperty("persistDb")) {
+            systemProperty("persistDb", project.property("persistDb") as String)
+        } else {
+            systemProperty("persistDb", defaultDbPath)
+        }
+    }
+
     jvmArgs = listOf(
-        "-Xmx4g",
+        "-Xmx48g",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200",
         "--enable-native-access=ALL-UNNAMED",
@@ -188,10 +200,27 @@ tasks.register<JavaExec>("generateLinks") {
 
     // Default DB path in build/
     val defaultDbPath = layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
-    args(defaultDbPath)
+    // In-memory DB generation enabled by default (override with -PinMemoryDb=false)
+    val inMemory = project.findProperty("inMemoryDb") != "false"
+    val cliDbPath = if (inMemory) ":memory:" else defaultDbPath
+    args(cliDbPath)
+
+    if (inMemory) {
+        if (project.hasProperty("persistDb")) {
+            systemProperty("persistDb", project.property("persistDb") as String)
+        } else {
+            systemProperty("persistDb", defaultDbPath)
+        }
+        // Seed from base DB on disk by default
+        if (project.hasProperty("seforimDb")) {
+            systemProperty("baseDb", project.property("seforimDb") as String)
+        } else {
+            systemProperty("baseDb", defaultDbPath)
+        }
+    }
 
     jvmArgs = listOf(
-        "-Xmx2g",
+        "-Xmx48g",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200",
         "--enable-native-access=ALL-UNNAMED",
