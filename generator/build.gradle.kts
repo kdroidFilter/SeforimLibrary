@@ -130,9 +130,15 @@ tasks.register<JavaExec>("buildHebMorphIndex") {
         systemProperty("HEBMORPH_HSPELL_PATH", System.getenv("HEBMORPH_HSPELL_PATH"))
     }
 
+    // Prefer in-memory DB for faster reads (can override with -PinMemoryDb=false)
+    val inMemory = project.findProperty("inMemoryDb") != "false"
+    if (inMemory) {
+        systemProperty("inMemoryDb", "true")
+    }
+
     // Generous heap for indexing
     jvmArgs = listOf(
-        "-Xmx4g",
+        "-Xmx48g",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200",
         "--enable-native-access=ALL-UNNAMED",

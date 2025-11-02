@@ -1,6 +1,8 @@
 package io.github.kdroidfilter.seforimlibrary.generator
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import app.cash.sqldelight.db.SqlCursor
+import app.cash.sqldelight.db.QueryResult
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
 import com.code972.hebmorph.datastructures.DictHebMorph
@@ -57,8 +59,45 @@ fun main() = runBlocking {
     runCatching { Files.createDirectories(lookupDir) }
 
     // Open repository
-    val driver = JdbcSqliteDriver(url = "jdbc:sqlite:$dbPath")
+    val useMemoryDb = (System.getProperty("inMemoryDb") ?: "true") != "false"
+    val jdbcUrl = if (useMemoryDb) "jdbc:sqlite::memory:" else "jdbc:sqlite:$dbPath"
+    val driver = JdbcSqliteDriver(url = jdbcUrl)
     val repo = SeforimRepository(dbPath, driver)
+
+    // Optionally seed in-memory DB from disk DB for faster reads
+    if (useMemoryDb) {
+        val baseDb = dbPath
+        val baseFile = File(baseDb)
+        if (baseFile.exists()) {
+            logger.i { "[Index] Seeding in-memory DB from $baseDb" }
+            runCatching {
+                val escaped = baseDb.replace("'", "''")
+                // Disable FKs during bulk copy to avoid validation overhead
+                repo.executeRawQuery("PRAGMA foreign_keys=OFF")
+                repo.executeRawQuery("ATTACH DATABASE '$escaped' AS disk")
+                val tables = driver.executeQuery(null,
+                    "SELECT name FROM disk.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+                    { c: SqlCursor ->
+                        val list = mutableListOf<String>()
+                        while (c.next().value) c.getString(0)?.let { list.add(it) }
+                        QueryResult.Value(list)
+                    }, 0
+                ).value
+                for (t in tables) {
+                    // Ensure target table exists (schema already created by repo init)
+                    repo.executeRawQuery("DELETE FROM \"$t\"")
+                    repo.executeRawQuery("INSERT INTO \"$t\" SELECT * FROM disk.\"$t\"")
+                }
+                repo.executeRawQuery("DETACH DATABASE disk")
+                repo.executeRawQuery("PRAGMA foreign_keys=ON")
+                logger.i { "[Index] Seed complete: ${'$'}{tables.size} tables copied" }
+            }.onFailure { e ->
+                logger.e(e) { "[Index] Failed to seed in-memory DB; falling back to slower disk reads" }
+            }
+        } else {
+            logger.w { "[Index] Base DB not found at $baseDb; cannot seed in-memory DB" }
+        }
+    }
 
     // Build analyzers and writers
     val hebrewAnalyzer = HebrewLegacyIndexingAnalyzer(dict)
@@ -115,29 +154,25 @@ fun main() = runBlocking {
 
                 // Lines: stream in batches and index with HebMorph analyzer
                 val total = book.totalLines
-                val batch = 5000
-                var start = 0
+                val allLines = if (total > 0) runCatching { repo.getLines(book.id, 0, total - 1) }.getOrDefault(emptyList()) else emptyList()
+                var processed = 0
                 var nextLogPct = 10
-                while (start < total) {
-                    val end = min(total - 1, start + batch - 1)
-                    val lines = runCatching { repo.getLines(book.id, start, end) }.getOrDefault(emptyList())
-                    for (ln in lines) {
-                        val normalized = normalizeForIndex(ln.content)
-                        writer.addLine(
-                            bookId = book.id,
-                            bookTitle = book.title,
-                            categoryId = book.categoryId,
-                            lineId = ln.id,
-                            lineIndex = ln.lineIndex,
-                            normalizedText = normalized,
-                            rawPlainText = normalized
-                        )
-                    }
-                    start = end + 1
+                for (ln in allLines) {
+                    val normalized = normalizeForIndex(ln.content)
+                    writer.addLine(
+                        bookId = book.id,
+                        bookTitle = book.title,
+                        categoryId = book.categoryId,
+                        lineId = ln.id,
+                        lineIndex = ln.lineIndex,
+                        normalizedText = normalized,
+                        rawPlainText = normalized
+                    )
+                    processed += 1
                     if (total > 0) {
-                        val pct = (start.toLong() * 100L / total).toInt().coerceIn(0, 100)
+                        val pct = (processed.toLong() * 100L / total).toInt().coerceIn(0, 100)
                         if (pct >= nextLogPct) {
-                            logger.i { "   Lines ${start}/$total (${pct}%) for '${book.title}'" }
+                            logger.i { "   Lines ${processed}/$total (${pct}%) for '${book.title}'" }
                             nextLogPct = ((pct / 10) + 1) * 10
                         }
                     }
