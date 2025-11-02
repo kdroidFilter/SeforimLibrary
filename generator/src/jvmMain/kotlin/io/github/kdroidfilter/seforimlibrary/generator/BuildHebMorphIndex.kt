@@ -35,7 +35,11 @@ fun main() = runBlocking {
     Logger.setMinSeverity(Severity.Info)
     val logger = Logger.withTag("BuildHebMorphIndex")
 
-    val dbPath =  "/Volumes/Data/Downloads/seforim_lucene.db"
+    // Resolve DB path: prefer -PseforimDb / SEFORIM_DB, fallback to build/seforim.db
+    val dbPath: String =
+        System.getProperty("seforimDb")
+            ?: System.getenv("SEFORIM_DB")
+            ?: Paths.get("build", "seforim.db").toString()
 
     val dbFile = File(dbPath)
     require(dbFile.exists()) { "Database not found at $dbPath" }
@@ -76,14 +80,35 @@ fun main() = runBlocking {
                 if (titleSan.isNotBlank() && !titleSan.equals(book.title, ignoreCase = true)) {
                     writer.addBookTitleTerm(book.id, book.categoryId, book.title, titleSan)
                 }
+                // Topics as additional terms for book lookup by subject
+                runCatching {
+                    val topicTerms = book.topics
+                        .asSequence()
+                        .map { sanitizeAcronymTerm(it.name) }
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .distinct()
+                        .toList()
+                    topicTerms.forEach { t ->
+                        writer.addBookTitleTerm(book.id, book.categoryId, book.title, t)
+                    }
+                }
 
-                // Lookup index: keep StandardAnalyzer-based terms for prefix suggestions
+                // Lookup index: include title, sanitized title, acronyms and topics (StandardAnalyzer-based) for prefix suggestions
                 runCatching {
                     val acronyms = runCatching { repo.getAcronymsForBook(book.id) }.getOrDefault(emptyList())
+                    val topicTerms = book.topics
+                        .asSequence()
+                        .map { sanitizeAcronymTerm(it.name) }
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .distinct()
+                        .toList()
                     val terms = buildList {
                         add(book.title)
                         if (titleSan.isNotBlank()) add(titleSan)
                         addAll(acronyms)
+                        addAll(topicTerms)
                     }.filter { it.isNotBlank() }
                     lookup.addBook(book.id, book.categoryId, book.title, terms)
                 }

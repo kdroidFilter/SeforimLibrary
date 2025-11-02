@@ -418,7 +418,7 @@ class DatabaseGenerator(
             logger.w(e) { "Failed to insert acronyms for '$title'" }
         }
 
-        // Populate Lucene title index (title + acronyms)
+        // Populate Lucene title index (title + acronyms + topics)
         runCatching {
             // Always index exact title
             textIndex?.addBookTitleTerm(insertedBookId, categoryId, title, title)
@@ -430,17 +430,36 @@ class DatabaseGenerator(
             // Acronyms
             val acronyms = runCatching { fetchAcronymsForTitle(title) }.getOrDefault(emptyList())
             for (t in acronyms) textIndex?.addBookTitleTerm(insertedBookId, categoryId, title, t)
+            // Topics (if present)
+            val topicTerms = book.topics
+                .asSequence()
+                .map { sanitizeAcronymTerm(it.name) }
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .toList()
+            for (t in topicTerms) textIndex?.addBookTitleTerm(insertedBookId, categoryId, title, t)
         }.onFailure { e ->
             logger.w(e) { "Failed to index book title terms for '$title'" }
         }
 
-        // Populate Lookup index (books + acronyms)
+        // Populate Lookup index (books + acronyms + topics)
         runCatching {
             val terms = buildList {
                 add(title)
                 val tSan = sanitizeAcronymTerm(title)
                 if (tSan.isNotBlank() && !tSan.equals(title, ignoreCase = true)) add(tSan)
                 addAll(runCatching { fetchAcronymsForTitle(title) }.getOrDefault(emptyList()))
+                // topics from the book model
+                addAll(
+                    book.topics
+                        .asSequence()
+                        .map { sanitizeAcronymTerm(it.name) }
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .distinct()
+                        .toList()
+                )
             }
             lookupIndex?.addBook(insertedBookId, categoryId, title, terms)
         }.onFailure { e -> logger.w(e) { "Failed to index book lookup for '$title'" } }

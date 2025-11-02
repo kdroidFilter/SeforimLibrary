@@ -31,12 +31,14 @@ kotlin {
         jvmMain.dependencies {
             implementation(libs.kotlinx.coroutines.swing)
             implementation(libs.sqlDelight.driver.sqlite)
-            implementation("org.apache.lucene:lucene-core:10.3.1")
-            implementation("org.apache.lucene:lucene-analysis-common:10.3.1")
-            implementation("org.apache.lucene:lucene-queryparser:10.3.1")
-            implementation("org.apache.lucene:lucene-highlighter:10.3.1")
+            implementation(libs.lucene.core)
+            implementation(libs.lucene.analysis.common)
+            implementation(libs.lucene.queryparser)
+            implementation(libs.lucene.highlighter)
             // HebMorph Lucene integration (substituted by included build SeforimLibrary/HebMorph/java)
             api("com.code972.hebmorph:hebmorph-lucene:10.3.1")
+            implementation("com.github.luben:zstd-jni:1.5.7-6")
+            implementation("org.apache.commons:commons-compress:1.26.2")
         }
 
     }
@@ -63,6 +65,37 @@ tasks.register<JavaExec>("downloadOtzaria") {
     dependsOn("jvmJar")
     mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.DownloadOtzariaKt")
     classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    jvmArgs = listOf("-Xmx512m")
+}
+
+// Package DB (.zst) and Lucene indexes (.tar.zst)
+tasks.register<JavaExec>("packageArtifacts") {
+    group = "application"
+    description = "Compress seforim.db to .zst and Lucene indexes to .tar.zst with zstd."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.PackageArtifactsKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    // Pass optional properties if provided
+    if (project.hasProperty("seforimDb")) {
+        systemProperty("seforimDb", project.property("seforimDb") as String)
+    }
+    // New properties for separate outputs
+    if (project.hasProperty("dbOutput")) {
+        systemProperty("dbOutput", project.property("dbOutput") as String)
+    }
+    if (project.hasProperty("indexesOutput")) {
+        systemProperty("indexesOutput", project.property("indexesOutput") as String)
+    }
+    // Backward-compatible: if -Poutput was provided, map it to indexesOutput
+    if (project.hasProperty("output")) {
+        systemProperty("output", project.property("output") as String)
+    }
+    if (project.hasProperty("zstdLevel")) {
+        systemProperty("zstdLevel", project.property("zstdLevel") as String)
+    }
 
     jvmArgs = listOf("-Xmx512m")
 }
@@ -165,4 +198,3 @@ tasks.register<JavaExec>("generateLinks") {
         "--add-modules=jdk.incubator.vector"
     )
 }
-
