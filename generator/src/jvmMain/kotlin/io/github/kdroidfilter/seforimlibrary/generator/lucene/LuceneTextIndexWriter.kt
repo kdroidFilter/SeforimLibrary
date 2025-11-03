@@ -38,6 +38,7 @@ class LuceneTextIndexWriter(
         const val FIELD_TEXT = "text"
         const val FIELD_TEXT_RAW = "text_raw"
         const val FIELD_TEXT_HE = "text_he"
+        const val FIELD_TEXT_NG4 = "text_ng4"
         const val FIELD_TITLE = "title" // analyzed suggestion term
     }
 
@@ -79,6 +80,8 @@ class LuceneTextIndexWriter(
             // Optionally index the same content into a HebMorph-targeted field
             val hebText = normalizedTextHebrew ?: if (indexHebrewField) normalizedText else null
             hebText?.let { add(TextField(FIELD_TEXT_HE, it, Field.Store.NO)) }
+            // Index 4-gram tokens for substring search (per-field analyzer applies NGram filter)
+            add(TextField(FIELD_TEXT_NG4, normalizedText, Field.Store.NO))
             rawPlainText?.let { add(StoredField(FIELD_TEXT_RAW, it)) }
         }
         writer.addDocument(doc)

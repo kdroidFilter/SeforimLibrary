@@ -31,13 +31,12 @@ kotlin {
         jvmMain.dependencies {
             implementation(libs.kotlinx.coroutines.swing)
             implementation(libs.sqlDelight.driver.sqlite)
-            implementation(project(":analysis"))
             implementation(libs.lucene.core)
             implementation(libs.lucene.analysis.common)
             implementation(libs.lucene.queryparser)
             implementation(libs.lucene.highlighter)
             // HebMorph Lucene integration (substituted by included build SeforimLibrary/HebMorph/java)
-            api("com.code972.hebmorph:hebmorph-lucene:10.3.1")
+//            api("com.code972.hebmorph:hebmorph-lucene:10.3.1")
             implementation("com.github.luben:zstd-jni:1.5.7-6")
             implementation("org.apache.commons:commons-compress:1.26.2")
         }
@@ -215,63 +214,6 @@ tasks.register<JavaExec>("generateLinks") {
         } else {
             systemProperty("baseDb", defaultDbPath)
         }
-    }
-
-    jvmArgs = listOf(
-        "-Xmx48g",
-        "-XX:+UseG1GC",
-        "-XX:MaxGCPauseMillis=200",
-        "--enable-native-access=ALL-UNNAMED",
-        "--add-modules=jdk.incubator.vector"
-    )
-}
-
-// Build HebMorph-based Lucene index (uses HebrewExactAnalyzer/LegacyIndexingAnalyzer)
-// Usage:
-//   ./gradlew :generator:buildHebMorphIndex -PseforimDb=/path/to/seforim.db \
-//       [-Phebmorph.hspell.path=/path/to/hspell-data-files] \
-//       [-PinMemoryDb=true] [-PuseTmpfsForIndex=true] [-PtmpfsDir=/dev/shm]
-tasks.register<JavaExec>("buildHebMorphIndex") {
-    group = "application"
-    description = "Build Lucene text+lookup indexes using HebMorph (field text_he). Requires -PseforimDb."
-
-    dependsOn("jvmJar")
-    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.BuildHebMorphIndexKt")
-    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
-
-    // Database path
-    if (project.hasProperty("seforimDb")) {
-        systemProperty("seforimDb", project.property("seforimDb") as String)
-    } else if (System.getenv("SEFORIM_DB") != null) {
-        systemProperty("SEFORIM_DB", System.getenv("SEFORIM_DB"))
-    } else {
-        val defaultDbPath = layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
-        systemProperty("seforimDb", defaultDbPath)
-    }
-
-    // Optional: hspell path for HebMorph
-    if (project.hasProperty("hebmorph.hspell.path")) {
-        systemProperty("hebmorph.hspell.path", project.property("hebmorph.hspell.path") as String)
-    } else if (System.getenv("HEBMORPH_HSPELL_PATH") != null) {
-        systemProperty("hebmorph.hspell.path", System.getenv("HEBMORPH_HSPELL_PATH"))
-    }
-
-    // Use in-memory DB for faster reads by default (override with -PinMemoryDb=false)
-    val inMemory = project.findProperty("inMemoryDb") != "false"
-    if (inMemory) systemProperty("inMemoryDb", "true")
-
-    // Optional tmpfs usage for faster index writes
-    if (project.hasProperty("useTmpfsForIndex")) {
-        systemProperty("useTmpfsForIndex", project.property("useTmpfsForIndex") as String)
-    }
-    if (project.hasProperty("tmpfsDir")) {
-        systemProperty("tmpfsDir", project.property("tmpfsDir") as String)
-    }
-    if (project.hasProperty("copyDbToTmpfs")) {
-        systemProperty("copyDbToTmpfs", project.property("copyDbToTmpfs") as String)
-    }
-    if (project.hasProperty("indexThreads")) {
-        systemProperty("indexThreads", project.property("indexThreads") as String)
     }
 
     jvmArgs = listOf(

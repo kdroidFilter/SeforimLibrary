@@ -14,7 +14,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.Dispatchers
 import org.apache.lucene.analysis.standard.StandardAnalyzer
-import io.github.kdroidfilter.seforimlibrary.analysis.HebrewCliticAwareAnalyzer
+import org.apache.lucene.analysis.Analyzer
+import org.apache.lucene.analysis.TokenStream
+import org.apache.lucene.analysis.core.LowerCaseFilter
+import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper
+import org.apache.lucene.analysis.ngram.NGramTokenFilter
 import org.jsoup.Jsoup
 import org.jsoup.safety.Safelist
 import java.io.File
@@ -23,7 +27,7 @@ import java.nio.file.Path
 import java.nio.file.Paths
 
 /**
- * Build Lucene indexes using Lucene's default StandardAnalyzer (no HebMorph).
+ * Build Lucene indexes using Lucene's StandardAnalyzer and an extra 4-gram field for substring search.
  *
  * Input: path to an existing SQLite DB (seforim.db).
  *
@@ -44,7 +48,7 @@ fun main() = runBlocking {
     require(dbFile.exists()) { "Database not found at $dbPath" }
 
     // Prepare index output paths next to the DB
-    // Use a distinct suffix for the StandardAnalyzer index to avoid clashing with HebMorph indexes
+    // Use a distinct suffix for this index to avoid clashing with other variants
     val indexDir: Path = if (dbPath.endsWith(".db")) Paths.get("$dbPath.lucene") else Paths.get("$dbPath.lucene")
     val lookupDir: Path = if (dbPath.endsWith(".db")) Paths.get("$dbPath.lookup.lucene") else Paths.get("$dbPath.lookup")
     runCatching { Files.createDirectories(indexDir) }
@@ -89,8 +93,23 @@ fun main() = runBlocking {
         }
     }
 
-    // Use Standard + clitic-aware expansion so that tokens like "ויוצא" also index a variant "יוצא".
-    val analyzer = HebrewCliticAwareAnalyzer()
+    // Use Lucene's StandardAnalyzer by default; add per-field 4-gram analyzer for substring search
+    val defaultAnalyzer = StandardAnalyzer()
+    val ngram4Analyzer = object : Analyzer() {
+        override fun createComponents(fieldName: String): TokenStreamComponents {
+            val src = org.apache.lucene.analysis.standard.StandardTokenizer()
+            var ts: TokenStream = src
+            ts = LowerCaseFilter(ts)
+            ts = NGramTokenFilter(ts, 4, 4, false)
+            return TokenStreamComponents(src, ts)
+        }
+    }
+    val analyzer = PerFieldAnalyzerWrapper(
+        defaultAnalyzer,
+        mapOf(
+            LuceneTextIndexWriter.FIELD_TEXT_NG4 to ngram4Analyzer
+        )
+    )
 
     LuceneTextIndexWriter(indexDir, analyzer = analyzer).use { writer ->
         LuceneLookupIndexWriter(lookupDir, analyzer = analyzer).use { lookup ->
@@ -98,7 +117,7 @@ fun main() = runBlocking {
             val indexThreads = (System.getProperty("indexThreads") ?: Runtime.getRuntime().availableProcessors().toString()).toInt().coerceAtLeast(1)
             val workerDispatcher = Dispatchers.Default.limitedParallelism(indexThreads)
             val totalBooks = books.size
-            logger.i { "Indexing $totalBooks books into $indexDir using StandardAnalyzer" }
+            logger.i { "Indexing $totalBooks books into $indexDir using StandardAnalyzer + 4-gram field" }
             val progress = java.util.concurrent.atomic.AtomicInteger(0)
 
             books.map { book ->
@@ -196,7 +215,7 @@ fun main() = runBlocking {
             }.awaitAll()
             writer.commit()
             lookup.commit()
-            logger.i { "Lucene text index built successfully at $indexDir (StandardAnalyzer)" }
+            logger.i { "Lucene text index built successfully at $indexDir (StandardAnalyzer + 4-gram)" }
             logger.i { "Lucene lookup index built successfully at $lookupDir" }
         }
     }
@@ -209,8 +228,12 @@ private fun normalizeForIndexDefault(html: String): String {
         .trim()
         .replace("\\s+".toRegex(), " ")
     val withoutMaqaf = HebrewTextUtils.replaceMaqaf(cleaned, " ")
-    // For StandardAnalyzer, drop diacritics entirely
-    return HebrewTextUtils.removeAllDiacritics(withoutMaqaf)
+    // Drop gershayim (U+05F4) and geresh (U+05F3)
+    val withoutGeresh = withoutMaqaf
+        .replace("\u05F4", "")
+        .replace("\u05F3", "")
+    // For Hebrew tokenizer, drop diacritics entirely so indexing is unpointed; keep base letters as-is
+    return HebrewTextUtils.removeAllDiacritics(withoutGeresh)
 }
 
 private fun sanitizeAcronymTerm(raw: String): String {
@@ -223,3 +246,5 @@ private fun sanitizeAcronymTerm(raw: String): String {
     s = s.replace("\\s+".toRegex(), " ").trim()
     return s
 }
+
+// No final-form normalization: index and query use the same Hebrew tokenizer pipeline.

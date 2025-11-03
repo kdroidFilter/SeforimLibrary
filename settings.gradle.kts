@@ -30,7 +30,6 @@ dependencyResolutionManagement {
 }
 include(":core")
 include(":dao")
-include(":analysis")
 include(":generator")
 include(":sample:composeApp")
 includeBuild("HebMorph/java") {
