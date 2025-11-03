@@ -6,6 +6,7 @@ import com.github.luben.zstd.ZstdOutputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import java.io.BufferedOutputStream
+import java.io.BufferedInputStream
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -62,30 +63,21 @@ fun main(args: Array<String>) {
         logger.w { "Lucene lookup index directory missing: $lookupIndexDir (will skip)" }
     }
 
-    // Outputs
+    // Output: single bundle tar.zst
     val legacyOutput = System.getProperty("output") ?: System.getenv("OUTPUT_TAR_ZST")
-    val dbOutputStr = args.getOrNull(1)
-        ?: System.getProperty("dbOutput")
-        ?: System.getProperty("outputDbZst")
-        ?: System.getenv("OUTPUT_DB_ZST")
-        ?: Paths.get("build", "package", "seforim.db.zst").toString()
-    val indexesOutputStr = args.getOrNull(2)
-        ?: System.getProperty("indexesOutput")
-        ?: System.getProperty("outputIndexesTarZst")
-        ?: System.getenv("OUTPUT_INDEXES_TAR_ZST")
+    val bundleOutputStr = System.getProperty("bundleOutput")
+        ?: System.getenv("OUTPUT_BUNDLE_TAR_ZST")
         ?: legacyOutput
-        ?: Paths.get("build", "package", "lucene_indexes.tar.zst").toString()
-
-    val dbOutputPath = Paths.get(dbOutputStr)
-    val indexesOutputPath = Paths.get(indexesOutputStr)
-    Files.createDirectories(dbOutputPath.parent)
-    Files.createDirectories(indexesOutputPath.parent)
+        ?: Paths.get("build", "package", "seforim_bundle.tar.zst").toString()
+    val bundleOutputPath = Paths.get(bundleOutputStr)
+    Files.createDirectories(bundleOutputPath.parent)
 
     // Compression level (default ultra 22)
-    val zstdLevel = (args.getOrNull(2)
-        ?: System.getProperty("zstdLevel")
-        ?: System.getenv("ZSTD_LEVEL")
-        ?: "22").toIntOrNull()?.coerceIn(1, 22) ?: 22
+    val zstdLevel = (
+        System.getProperty("zstdLevel")
+            ?: System.getenv("ZSTD_LEVEL")
+            ?: "22"
+        ).toIntOrNull()?.coerceIn(1, 22) ?: 22
 
     // Workers (threads). Default: all available processors (like zstd -T0)
     val workers = (
@@ -95,60 +87,66 @@ fun main(args: Array<String>) {
     ).toIntOrNull()?.let { if (it <= 0) Runtime.getRuntime().availableProcessors() else it }
         ?: Runtime.getRuntime().availableProcessors()
 
-    logger.i { "Packaging:\n - DB: $dbPath\n - Text index: $textIndexDir\n - Lookup index: $lookupIndexDir\n -> DB .zst: $dbOutputPath\n -> Indexes .tar.zst: $indexesOutputPath\n (zstd level $zstdLevel, workers $workers)" }
+    // Split part size (~1.9 GiB by default)
+    val defaultSplitSize = (1.9 * 1024.0 * 1024.0 * 1024.0).toLong()
+    val splitPartBytes = (
+        System.getProperty("splitPartBytes")
+            ?: System.getenv("SPLIT_PART_BYTES")
+            ?: defaultSplitSize.toString()
+        ).toLongOrNull()?.takeIf { it > 0 } ?: defaultSplitSize
+
+    logger.i {
+        "Packaging into single bundle:\n" +
+            " - DB: $dbPath\n" +
+            " - Text index: $textIndexDir\n" +
+            " - Lookup index: $lookupIndexDir\n" +
+            " -> Bundle .tar.zst: $bundleOutputPath\n" +
+            " (zstd level $zstdLevel, workers $workers, split ${humanSize(splitPartBytes)})"
+    }
 
     try {
-        // 1) Compress the DB file directly to .zst (no tar)
-        Files.newOutputStream(dbOutputPath).use { fos ->
+        // Tar + zstd the three artifacts into a single bundle
+        Files.newOutputStream(bundleOutputPath).use { fos ->
             BufferedOutputStream(fos, 1 shl 20).use { bos ->
                 ZstdOutputStream(bos, zstdLevel).use { zstd ->
                     runCatching { zstd.setWorkers(workers) }
                         .onFailure { logger.w(it) { "zstd setWorkers($workers) failed; continuing single-threaded" } }
-                    Files.newInputStream(dbPath).use { input ->
-                        val buffer = ByteArray(1 shl 20)
-                        while (true) {
-                            val read = input.read(buffer)
-                            if (read <= 0) break
-                            zstd.write(buffer, 0, read)
+                    TarArchiveOutputStream(zstd).use { tar ->
+                        tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX)
+                        tar.setBigNumberMode(TarArchiveOutputStream.BIGNUMBER_POSIX)
+
+                        val haveText = textIndexDir.toFile().isDirectory
+                        val haveLookup = lookupIndexDir.toFile().isDirectory
+
+                        if (haveLookup) {
+                            addDirectoryToTar(tar, lookupIndexDir, lookupIndexDir.fileName.toString(), logger)
+                        } else {
+                            logger.w { "Lucene lookup index directory missing: $lookupIndexDir (skipped)" }
                         }
+                        if (haveText) {
+                            addDirectoryToTar(tar, textIndexDir, textIndexDir.fileName.toString(), logger)
+                        } else {
+                            logger.w { "Lucene text index directory missing: $textIndexDir (skipped)" }
+                        }
+
+                        // Add the database file itself
+                        addFileToTar(tar, dbPath, dbPath.fileName.toString(), logger)
+                        tar.finish()
                     }
-                    zstd.flush()
                 }
             }
         }
-        val dbSizeMb = Files.size(dbOutputPath).toDouble() / (1024 * 1024)
-        logger.i { "DB compressed: $dbOutputPath (${"%.2f".format(dbSizeMb)} MB)" }
-        println(dbOutputPath.toAbsolutePath().toString())
 
-        // 2) Tar + zst the Lucene indexes (if present)
-        val haveText = textIndexDir.toFile().isDirectory
-        val haveLookup = lookupIndexDir.toFile().isDirectory
-        if (!haveText && !haveLookup) {
-            logger.w { "No Lucene indexes found. Skipping indexes archive." }
+        val bundleSizeMb = Files.size(bundleOutputPath).toDouble() / (1024 * 1024)
+        logger.i { "Bundle written: $bundleOutputPath (${"%.2f".format(bundleSizeMb)} MB)" }
+        println(bundleOutputPath.toAbsolutePath().toString())
+
+        // Split the bundle into parts of ~1.9 GiB (or configured size)
+        val partCount = splitFile(bundleOutputPath, splitPartBytes, logger)
+        if (partCount > 1) {
+            logger.i { "Bundle split into $partCount parts of up to ${humanSize(splitPartBytes)} each" }
         } else {
-            Files.newOutputStream(indexesOutputPath).use { fos ->
-                BufferedOutputStream(fos, 1 shl 20).use { bos ->
-                    ZstdOutputStream(bos, zstdLevel).use { zstd ->
-                        runCatching { zstd.setWorkers(workers) }
-                            .onFailure { logger.w(it) { "zstd setWorkers($workers) failed; continuing single-threaded" } }
-                        TarArchiveOutputStream(zstd).use { tar ->
-                            tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX)
-                            tar.setBigNumberMode(TarArchiveOutputStream.BIGNUMBER_POSIX)
-
-                            if (haveText) {
-                                addDirectoryToTar(tar, textIndexDir, textIndexDir.fileName.toString(), logger)
-                            }
-                            if (haveLookup) {
-                                addDirectoryToTar(tar, lookupIndexDir, lookupIndexDir.fileName.toString(), logger)
-                            }
-                            tar.finish()
-                        }
-                    }
-                }
-            }
-            val idxSizeMb = Files.size(indexesOutputPath).toDouble() / (1024 * 1024)
-            logger.i { "Indexes archive written: $indexesOutputPath (${"%.2f".format(idxSizeMb)} MB)" }
-            println(indexesOutputPath.toAbsolutePath().toString())
+            logger.i { "Bundle size below split threshold; no split files created" }
         }
     } catch (e: Exception) {
         logger.e(e) { "Failed to package artifacts" }
@@ -204,4 +202,59 @@ private fun addFileToTar(tar: TarArchiveOutputStream, file: Path, entryName: Str
         }
     }
     tar.closeArchiveEntry()
+}
+
+private fun splitFile(source: Path, partSizeBytes: Long, logger: Logger): Int {
+    val size = try { Files.size(source) } catch (e: IOException) { 0L }
+    if (size <= partSizeBytes || size <= 0L) return 1
+
+    val parent = source.parent ?: Paths.get(".")
+    val baseName = source.fileName.toString()
+
+    val buffer = ByteArray(8 * 1024 * 1024) // 8 MiB
+    var index = 1
+    var bytesInPart = 0L
+    var currentOut: BufferedOutputStream? = null
+
+    fun openNext(): BufferedOutputStream {
+        val suffix = String.format(".part%02d", index)
+        val outPath = parent.resolve(baseName + suffix)
+        val bos = BufferedOutputStream(Files.newOutputStream(outPath), buffer.size)
+        logger.i { "Writing part $index -> ${outPath.toAbsolutePath()}" }
+        return bos
+    }
+
+    BufferedInputStream(Files.newInputStream(source), buffer.size).use { input ->
+        currentOut = openNext()
+        while (true) {
+            val remainingInPart = partSizeBytes - bytesInPart
+            val toRead = if (remainingInPart < buffer.size) remainingInPart.toInt() else buffer.size
+            val read = input.read(buffer, 0, toRead)
+            if (read <= 0) break
+            currentOut!!.write(buffer, 0, read)
+            bytesInPart += read
+            if (bytesInPart >= partSizeBytes) {
+                currentOut!!.flush()
+                currentOut!!.close()
+                index += 1
+                bytesInPart = 0
+                currentOut = openNext()
+            }
+        }
+    }
+    currentOut?.flush()
+    currentOut?.close()
+    return index
+}
+
+private fun humanSize(bytes: Long): String {
+    val kb = 1024.0
+    val mb = kb * 1024
+    val gb = mb * 1024
+    return when {
+        bytes >= gb -> String.format("%.2f GiB", bytes / gb)
+        bytes >= mb -> String.format("%.2f MiB", bytes / mb)
+        bytes >= kb -> String.format("%.2f KiB", bytes / kb)
+        else -> "$bytes B"
+    }
 }

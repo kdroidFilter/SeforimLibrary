@@ -68,10 +68,10 @@ tasks.register<JavaExec>("downloadOtzaria") {
     jvmArgs = listOf("-Xmx512m")
 }
 
-// Package DB (.zst) and Lucene indexes (.tar.zst)
+// Package DB + Lucene indexes into single tar.zst and split
 tasks.register<JavaExec>("packageArtifacts") {
     group = "application"
-    description = "Compress seforim.db to .zst and Lucene indexes to .tar.zst with zstd."
+    description = "Create seforim_bundle.tar.zst (DB + indexes) with zstd and split into ~1.9GiB parts."
 
     dependsOn("jvmJar")
     mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.PackageArtifactsKt")
@@ -81,19 +81,22 @@ tasks.register<JavaExec>("packageArtifacts") {
     if (project.hasProperty("seforimDb")) {
         systemProperty("seforimDb", project.property("seforimDb") as String)
     }
-    // New properties for separate outputs
-    if (project.hasProperty("dbOutput")) {
-        systemProperty("dbOutput", project.property("dbOutput") as String)
+    // Output bundle
+    if (project.hasProperty("bundleOutput")) {
+        systemProperty("bundleOutput", project.property("bundleOutput") as String)
     }
-    if (project.hasProperty("indexesOutput")) {
-        systemProperty("indexesOutput", project.property("indexesOutput") as String)
-    }
-    // Backward-compatible: if -Poutput was provided, map it to indexesOutput
+    // Backward-compatible: if -Poutput was provided, pass it through as legacy
     if (project.hasProperty("output")) {
         systemProperty("output", project.property("output") as String)
     }
     if (project.hasProperty("zstdLevel")) {
         systemProperty("zstdLevel", project.property("zstdLevel") as String)
+    }
+    if (project.hasProperty("zstdWorkers")) {
+        systemProperty("zstdWorkers", project.property("zstdWorkers") as String)
+    }
+    if (project.hasProperty("splitPartBytes")) {
+        systemProperty("splitPartBytes", project.property("splitPartBytes") as String)
     }
 
     jvmArgs = listOf("-Xmx512m")
