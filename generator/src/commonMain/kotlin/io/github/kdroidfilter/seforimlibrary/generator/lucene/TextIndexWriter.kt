@@ -15,7 +15,7 @@ interface TextIndexWriter : AutoCloseable {
      * @param lineIndex The 0-based line index within the book
      * @param normalizedText Normalized text to index in the primary field (typically StandardAnalyzer)
      * @param rawPlainText Optional raw plain text (stored) for snippet generation
-     * @param normalizedTextHebrew Optional normalized text for a HebMorph-targeted field
+     * @param normalizedTextHebrew Optional normalized text for a secondary text field
      */
     fun addLine(
         bookId: Long,

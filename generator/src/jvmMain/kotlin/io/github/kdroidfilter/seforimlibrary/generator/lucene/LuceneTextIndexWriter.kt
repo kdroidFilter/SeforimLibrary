@@ -77,7 +77,7 @@ class LuceneTextIndexWriter(
             if (indexPrimaryText) {
                 add(TextField(FIELD_TEXT, normalizedText, Field.Store.NO))
             }
-            // Optionally index the same content into a HebMorph-targeted field
+            // Optional secondary text field
             val hebText = normalizedTextHebrew ?: if (indexHebrewField) normalizedText else null
             hebText?.let { add(TextField(FIELD_TEXT_HE, it, Field.Store.NO)) }
             // Index 4-gram tokens for substring search (per-field analyzer applies NGram filter)

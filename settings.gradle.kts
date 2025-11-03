@@ -32,8 +32,3 @@ include(":core")
 include(":dao")
 include(":generator")
 include(":sample:composeApp")
-includeBuild("HebMorph/java") {
-    dependencySubstitution {
-        substitute(module("com.code972.hebmorph:hebmorph-lucene")).using(project(":"))
-    }
-}

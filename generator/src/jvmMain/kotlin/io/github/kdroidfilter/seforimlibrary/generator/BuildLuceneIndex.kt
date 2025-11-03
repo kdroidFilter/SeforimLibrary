@@ -232,8 +232,10 @@ private fun normalizeForIndexDefault(html: String): String {
     val withoutGeresh = withoutMaqaf
         .replace("\u05F4", "")
         .replace("\u05F3", "")
-    // For Hebrew tokenizer, drop diacritics entirely so indexing is unpointed; keep base letters as-is
-    return HebrewTextUtils.removeAllDiacritics(withoutGeresh)
+    // Normalize final forms (ך/ם/ן/ף/ץ) -> base letters (כ/מ/נ/פ/צ)
+    val noFinals = normalizeFinalLetters(withoutGeresh)
+    // Drop diacritics entirely to index unpointed text
+    return HebrewTextUtils.removeAllDiacritics(noFinals)
 }
 
 private fun sanitizeAcronymTerm(raw: String): String {
@@ -243,8 +245,15 @@ private fun sanitizeAcronymTerm(raw: String): String {
     s = HebrewTextUtils.replaceMaqaf(s, " ")
     s = s.replace("\u05F4", "") // gershayim
     s = s.replace("\u05F3", "") // geresh
+    s = normalizeFinalLetters(s)
     s = s.replace("\\s+".toRegex(), " ").trim()
     return s
 }
 
-// No final-form normalization: index and query use the same Hebrew tokenizer pipeline.
+/** Replace Hebrew final letters (sofit) by their base forms. */
+private fun normalizeFinalLetters(text: String): String = text
+    .replace('\u05DA', '\u05DB') // ך -> כ
+    .replace('\u05DD', '\u05DE') // ם -> מ
+    .replace('\u05DF', '\u05E0') // ן -> נ
+    .replace('\u05E3', '\u05E4') // ף -> פ
+    .replace('\u05E5', '\u05E6') // ץ -> צ

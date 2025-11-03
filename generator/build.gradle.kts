@@ -35,8 +35,7 @@ kotlin {
             implementation(libs.lucene.analysis.common)
             implementation(libs.lucene.queryparser)
             implementation(libs.lucene.highlighter)
-            // HebMorph Lucene integration (substituted by included build SeforimLibrary/HebMorph/java)
-//            api("com.code972.hebmorph:hebmorph-lucene:10.3.1")
+            // (No external Hebrew morphology module required)
             implementation("com.github.luben:zstd-jni:1.5.7-6")
             implementation("org.apache.commons:commons-compress:1.26.2")
         }
@@ -100,12 +99,12 @@ tasks.register<JavaExec>("packageArtifacts") {
     jvmArgs = listOf("-Xmx512m")
 }
 
-// Build Lucene index using StandardAnalyzer (no HebMorph)
+// Build Lucene index using StandardAnalyzer
 // Usage:
 //   ./gradlew :generator:buildLuceneIndexDefault -PseforimDb=/path/to/seforim.db
 tasks.register<JavaExec>("buildLuceneIndexDefault") {
     group = "application"
-    description = "Build Lucene index using StandardAnalyzer (no HebMorph). Requires -PseforimDb."
+    description = "Build Lucene index using StandardAnalyzer. Requires -PseforimDb."
 
     dependsOn("jvmJar")
     mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.BuildLuceneIndexKt")
