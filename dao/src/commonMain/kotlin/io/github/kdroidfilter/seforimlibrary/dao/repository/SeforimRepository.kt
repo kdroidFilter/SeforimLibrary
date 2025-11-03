@@ -5,8 +5,9 @@ package io.github.kdroidfilter.seforimlibrary.dao.repository
 import app.cash.sqldelight.db.SqlDriver
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.*
+import app.cash.sqldelight.db.SqlCursor
+import app.cash.sqldelight.db.QueryResult
 import io.github.kdroidfilter.seforimlibrary.dao.extensions.toModel
-import io.github.kdroidfilter.seforimlibrary.dao.extensions.toSearchResult
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -53,29 +54,11 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         database.lineTocQueriesQueries.upsert(lineId, tocEntryId)
     }
 
-    // --- Performance helpers (transactions/PRAGMAs) ---
-
-    private var txCounter = 0
-
-    suspend fun <T> runInTransaction(block: suspend () -> T): T {
-        val name = "tx_${++txCounter}"
-        // Use SAVEPOINT to be safe even if nested or if outer code handles transactions
-        withContext(Dispatchers.IO) { driver.execute(null, "SAVEPOINT $name", 0) }
-        try {
-            val result = block()
-            withContext(Dispatchers.IO) { driver.execute(null, "RELEASE SAVEPOINT $name", 0) }
-            return result
-        } catch (t: Throwable) {
-            try {
-                withContext(Dispatchers.IO) { driver.execute(null, "ROLLBACK TO SAVEPOINT $name", 0) }
-            } catch (_: Throwable) {
-            } finally {
-                // Always release to clear the savepoint even if rollback failed
-                try { withContext(Dispatchers.IO) { driver.execute(null, "RELEASE SAVEPOINT $name", 0) } } catch (_: Throwable) {}
-            }
-            throw t
-        }
-    }
+    // --- Transactions ---
+    // Avoid custom transaction management that wraps the entire generation.
+    // Use SQLDelight's default behavior (per‑statement auto-commit) at call sites.
+    // Keep signature for compatibility with existing callers.
+    suspend fun <T> runInTransaction(block: suspend () -> T): T = block()
 
     suspend fun setSynchronous(mode: String) = withContext(Dispatchers.IO) {
         driver.execute(null, "PRAGMA synchronous=$mode", 0)
@@ -83,6 +66,12 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     suspend fun setSynchronousOff() = setSynchronous("OFF")
     suspend fun setSynchronousNormal() = setSynchronous("NORMAL")
+
+    suspend fun setJournalMode(mode: String) = withContext(Dispatchers.IO) {
+        driver.execute(null, "PRAGMA journal_mode=$mode", 0)
+    }
+    suspend fun setJournalModeOff() = setJournalMode("OFF")
+    suspend fun setJournalModeWal() = setJournalMode("WAL")
 
     suspend fun bulkUpsertLineToc(pairs: List<Pair<Long, Long>>) = withContext(Dispatchers.IO) {
         if (pairs.isEmpty()) return@withContext
@@ -175,6 +164,21 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     /**
+     * Retrieves a category by its exact title.
+     */
+    suspend fun getCategoryByTitle(title: String): Category? = withContext(Dispatchers.IO) {
+        database.categoryQueriesQueries.selectByTitle(title).executeAsOneOrNull()?.toModel()
+    }
+
+    /**
+     * Retrieves best-matching category by name, trying exact, normalized, then LIKE.
+     */
+    suspend fun findCategoryByTitlePreferExact(title: String): Category? = withContext(Dispatchers.IO) {
+        database.categoryQueriesQueries.selectByTitle(title).executeAsOneOrNull()?.toModel()
+            ?: database.categoryQueriesQueries.selectByTitleLike("%$title%").executeAsOneOrNull()?.toModel()
+    }
+
+    /**
      * Retrieves all root categories (categories without a parent).
      *
      * @return A list of root categories
@@ -191,6 +195,21 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
      */
     suspend fun getCategoryChildren(parentId: Long): List<Category> = withContext(Dispatchers.IO) {
         database.categoryQueriesQueries.selectByParentId(parentId).executeAsList().map { it.toModel() }
+    }
+
+    /**
+     * Returns all descendant category IDs (including the category itself) using the
+     * category_closure table. This is a bulk way to scope by category without recursive calls.
+     */
+    suspend fun getDescendantCategoryIds(ancestorId: Long): List<Long> = withContext(Dispatchers.IO) {
+        database.categoryClosureQueriesQueries.selectDescendants(ancestorId).executeAsList()
+    }
+
+    /**
+     * Finds categories whose title matches the LIKE pattern. Use %term% for contains.
+     */
+    suspend fun findCategoriesByTitleLike(pattern: String, limit: Int = 20): List<Category> = withContext(Dispatchers.IO) {
+        database.categoryQueriesQueries.selectManyByTitleLike(pattern, limit.toLong()).executeAsList().map { it.toModel() }
     }
 
 
@@ -283,6 +302,31 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
     }
 
+    /**
+     * Rebuilds the category_closure table from the current category tree.
+     * Inserts self-pairs and ancestor-descendant pairs for fast descendant filtering.
+     */
+    suspend fun rebuildCategoryClosure() = withContext(Dispatchers.IO) {
+        // Clear existing closure data
+        database.categoryClosureQueriesQueries.clear()
+        // Load all categories (id, parentId)
+        val rows = database.categoryQueriesQueries.selectAll().executeAsList()
+        val parentMap = rows.associate { it.id to it.parentId }
+        // For each category, walk up to root and insert pairs
+        for (desc in rows) {
+            var anc: Long? = desc.id
+            // Self
+            database.categoryClosureQueriesQueries.insert(desc.id, desc.id)
+            anc = parentMap[desc.id]
+            val safety = 128
+            var guard = 0
+            while (anc != null && guard++ < safety) {
+                database.categoryClosureQueriesQueries.insert(anc, desc.id)
+                anc = parentMap[anc]
+            }
+        }
+    }
+
     // --- Books ---
 
     /**
@@ -316,6 +360,37 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
         }
     }
+
+    /**
+     * Retrieves all books under the given ancestor category (including the category itself)
+     * using the category_closure table in a single query.
+     */
+    suspend fun getBooksUnderCategoryTree(ancestorCategoryId: Long): List<Book> = withContext(Dispatchers.IO) {
+        val rows = database.bookQueriesQueries.selectByAncestorCategory(ancestorCategoryId).executeAsList()
+        rows.map { bookData ->
+            val authors = getBookAuthors(bookData.id)
+            val topics = getBookTopics(bookData.id)
+            val pubPlaces = getBookPubPlaces(bookData.id)
+            val pubDates = getBookPubDates(bookData.id)
+            bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+        }
+    }
+
+    /**
+     * Finds books whose title matches the LIKE pattern. Use %term% for contains.
+     */
+    suspend fun findBooksByTitleLike(pattern: String, limit: Int = 20): List<Book> = withContext(Dispatchers.IO) {
+        val rows = database.bookQueriesQueries.selectManyByTitleLike(pattern, limit.toLong()).executeAsList()
+        rows.map { bookData ->
+            val authors = getBookAuthors(bookData.id)
+            val topics = getBookTopics(bookData.id)
+            val pubPlaces = getBookPubPlaces(bookData.id)
+            val pubDates = getBookPubDates(bookData.id)
+            bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+        }
+    }
+
+    
 
 
 
@@ -436,6 +511,21 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val pubPlaces = getBookPubPlaces(bookData.id)
         val pubDates = getBookPubDates(bookData.id)
         return@withContext bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+    }
+
+    /**
+     * Retrieves a book by approximate title (exact, normalized, or LIKE).
+     */
+    suspend fun findBookByTitlePreferExact(title: String): Book? = withContext(Dispatchers.IO) {
+        val row = database.bookQueriesQueries.selectByTitle(title).executeAsOneOrNull()
+            ?: database.bookQueriesQueries.selectByTitleLike("%$title%").executeAsOneOrNull()
+        row?.let { bookData ->
+            val authors = getBookAuthors(bookData.id)
+            val topics = getBookTopics(bookData.id)
+            val pubPlaces = getBookPubPlaces(bookData.id)
+            val pubDates = getBookPubDates(bookData.id)
+            bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+        }
     }
 
     // Get a topic by name, returns null if not found
@@ -802,7 +892,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 bookId = line.bookId,
                 lineIndex = line.lineIndex.toLong(),
                 content = line.content,
-                plainText = line.plainText,
                 tocEntryId = null
             )
             logger.d{"Repository inserted line with explicit ID: ${line.id} and bookId: ${line.bookId}"}
@@ -813,7 +902,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 bookId = line.bookId,
                 lineIndex = line.lineIndex.toLong(),
                 content = line.content,
-                plainText = line.plainText,
                 tocEntryId = null
             )
             val lineId = database.lineQueriesQueries.lastInsertRowId().executeAsOne()
@@ -828,7 +916,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                     return@withContext existingLine.id
                 }
 
-                throw RuntimeException("Failed to insert line for book ${line.bookId} at index ${line.lineIndex} - insertion returned ID 0. Context: content='${line.content.take(50)}${if (line.content.length > 50) "..." else ""}', plainText='${line.plainText.take(50)}${if (line.plainText.length > 50) "..." else ""}')")
+                throw RuntimeException("Failed to insert line for book ${line.bookId} at index ${line.lineIndex} - insertion returned ID 0. Context: content='${line.content.take(50)}${if (line.content.length > 50) "..." else ""}')")
             }
 
             return@withContext lineId
@@ -1229,84 +1317,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
     }
 
-    // --- Search ---
-
-    /**
-     * Searches for text across all books.
-     *
-     * @param query The search query
-     * @param limit Maximum number of results to return
-     * @param offset Number of results to skip (for pagination)
-     * @return A list of search results
-     */
-    suspend fun search(
-        query: String,
-        limit: Int = 20,
-        offset: Int = 0
-    ): List<SearchResult> = withContext(Dispatchers.IO) {
-        val ftsQuery = prepareFtsQuery(query)
-        database.searchQueriesQueries.searchAll(ftsQuery, limit.toLong(), offset.toLong())
-            .executeAsList()
-            .map { it.toSearchResult() }
-    }
-
-    /**
-     * Searches for text within a specific book.
-     *
-     * @param bookId The ID of the book to search in
-     * @param query The search query
-     * @param limit Maximum number of results to return
-     * @param offset Number of results to skip (for pagination)
-     * @return A list of search results
-     */
-    suspend fun searchInBook(
-        bookId: Long,
-        query: String,
-        limit: Int = 20,
-        offset: Int = 0
-    ): List<SearchResult> = withContext(Dispatchers.IO) {
-        val ftsQuery = prepareFtsQuery(query)
-        database.searchQueriesQueries.searchInBook(
-            ftsQuery, bookId, limit.toLong(), offset.toLong()
-        ).executeAsList().map { it.toSearchResult() }
-    }
-
-    /**
-     * Searches for text in books by a specific author.
-     *
-     * @param author The author name to filter by
-     * @param query The search query
-     * @param limit Maximum number of results to return
-     * @param offset Number of results to skip (for pagination)
-     * @return A list of search results
-     */
-    suspend fun searchByAuthor(
-        author: String,
-        query: String,
-        limit: Int = 20,
-        offset: Int = 0
-    ): List<SearchResult> = withContext(Dispatchers.IO) {
-        val ftsQuery = prepareFtsQuery(query)
-        database.searchQueriesQueries.searchByAuthor(
-            ftsQuery, author, limit.toLong(), offset.toLong()
-        ).executeAsList().map { it.toSearchResult() }
-    }
-
-    // --- Helpers ---
-
-    /**
-     * Prepares a search query for full-text search.
-     * Adds wildcards and quotes to improve search results.
-     *
-     * @param query The raw search query
-     * @return The formatted query for FTS
-     */
-    private fun prepareFtsQuery(query: String): String {
-        return query.trim()
-            .split("\\s+".toRegex())
-            .filter { it.isNotBlank() }
-            .joinToString(" ") { "\"$it\"*" }
-    }
+    // Search functions removed (migrated to Lucene in app layer).
 
     /**
      * Executes a raw SQL query.
@@ -1321,15 +1332,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         logger.d { "Raw SQL query executed successfully" }
     }
 
-    /**
-     * Rebuilds the FTS5 index for the line_search table.
-     * This should be called after all data has been inserted to ensure optimal search performance.
-     */
-    suspend fun rebuildFts5Index() = withContext(Dispatchers.IO) {
-        logger.d { "Rebuilding FTS5 index for line_search table" }
-        database.searchQueriesQueries.rebuildFts5Index()
-        logger.d { "FTS5 index rebuilt successfully" }
-    }
+    // FTS rebuild removed (Lucene managed externally by generator).
 
     /**
      * Updates the book_has_links table to indicate whether a book has source links, target links, or both.
@@ -1636,6 +1639,74 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val count = database.linkQueriesQueries.countLinksByTargetBook(bookId).executeAsOne()
         logger.d { "Found $count links where book $bookId is the target" }
         count
+    }
+
+    // --- Acronyms ---
+
+    /**
+     * Inserts a single acronym term for a book (ignores duplicates).
+     */
+    suspend fun insertBookAcronym(bookId: Long, term: String) = withContext(Dispatchers.IO) {
+        database.acronymQueriesQueries.insert(bookId, term)
+    }
+
+    /**
+     * Bulk inserts acronym terms for a given bookId. Ignores duplicates.
+     */
+    suspend fun bulkInsertBookAcronyms(bookId: Long, terms: Collection<String>) = withContext(Dispatchers.IO) {
+        if (terms.isEmpty()) return@withContext
+        for (t in terms) database.acronymQueriesQueries.insert(bookId, t)
+    }
+
+    /**
+     * Returns all acronym terms for a given book.
+     */
+    suspend fun getAcronymsForBook(bookId: Long): List<String> = withContext(Dispatchers.IO) {
+        database.acronymQueriesQueries.selectTermsByBookId(bookId).executeAsList()
+    }
+
+    /**
+     * Finds all book IDs whose acronym list contains exactly the given term.
+     */
+    suspend fun findBookIdsByAcronym(term: String): List<Long> = withContext(Dispatchers.IO) {
+        database.acronymQueriesQueries.selectBookIdsByTerm(term).executeAsList()
+    }
+
+    /**
+     * Finds books by acronym LIKE pattern. Use %term% or term% for prefix.
+     */
+    suspend fun findBooksByAcronymLike(pattern: String, limit: Int = 20): List<Book> = withContext(Dispatchers.IO) {
+        val ids = database.acronymQueriesQueries.selectBookIdsByTermLike(pattern, limit.toLong()).executeAsList()
+        ids.distinct().mapNotNull { id -> getBook(id) }
+    }
+
+    /**
+     * Finds books by exact acronym term.
+     */
+    suspend fun findBooksByAcronymExact(term: String, limit: Int = 20): List<Book> = withContext(Dispatchers.IO) {
+        val ids = database.acronymQueriesQueries.selectBookIdsByTerm(term).executeAsList()
+        ids.take(limit).mapNotNull { id -> getBook(id) }
+    }
+
+    /**
+     * Returns the hierarchical depth for a category using the closure table.
+     * Depth = number of ancestors (including self) - 1. Falls back to stored level if closure empty.
+     */
+    suspend fun getCategoryDepth(categoryId: Long): Int = withContext(Dispatchers.IO) {
+        val count = database.categoryClosureQueriesQueries.countAncestorsByDescendant(categoryId).executeAsOne()
+        if (count > 0) (count - 1).toInt() else {
+            // Fallback to category.level if closure not built
+            database.categoryQueriesQueries.selectById(categoryId).executeAsOneOrNull()?.level?.toInt() ?: 0
+        }
+    }
+
+    // Legacy book-title FTS removed (handled by Lucene index in generator/app).
+
+    /**
+     * Deletes all acronym rows for a book.
+     */
+    suspend fun deleteAcronymsForBook(bookId: Long) = withContext(Dispatchers.IO) {
+        database.acronymQueriesQueries.deleteByBookId(bookId)
     }
 
     /**

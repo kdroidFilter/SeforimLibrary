@@ -11,10 +11,7 @@ import io.github.kdroidfilter.seforimlibrary.core.models.PubPlace
 import io.github.kdroidfilter.seforimlibrary.core.models.SearchResult
 import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
 import io.github.kdroidfilter.seforimlibrary.core.models.Topic
-import io.github.kdroidfilter.seforimlibrary.db.SearchAll
-import io.github.kdroidfilter.seforimlibrary.db.SearchByAuthor
-import io.github.kdroidfilter.seforimlibrary.db.SearchInBook
-import io.github.kdroidfilter.seforimlibrary.db.SearchWithBookFilter
+// Legacy FTS result types removed (Lucene now used at app layer)
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
 import co.touchlab.kermit.Logger
@@ -116,8 +113,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.Line.toModel(): Line {
         id = id,
         bookId = bookId,
         lineIndex = lineIndex.toInt(),
-        content = content,
-        plainText = plainText
+        content = content
     )
 }
 
@@ -288,14 +284,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectLinksBySourceBook.toModel(): 
  *
  * @return The domain SearchResult model
  */
-fun SearchAll.toSearchResult(): SearchResult = SearchResult(
-    bookId = bookId ?: 0,
-    bookTitle = bookTitle ?: "",
-    lineId = id ?: 0,
-    lineIndex = lineIndex?.toInt() ?: 0,
-    snippet = snippet ?: "",
-    rank = rank
-)
+// Removed: FTS-based search result mappers (SearchAll/SearchInBook/etc.)
 
 /**
  * Converts a SearchInBook database result to a domain SearchResult model.
@@ -303,14 +292,7 @@ fun SearchAll.toSearchResult(): SearchResult = SearchResult(
  *
  * @return The domain SearchResult model
  */
-fun SearchInBook.toSearchResult(): SearchResult = SearchResult(
-    bookId = bookId ?: 0,
-    bookTitle = bookTitle ?: "",
-    lineId = id ?: 0,
-    lineIndex = lineIndex?.toInt() ?: 0,
-    snippet = snippet ?: "",
-    rank = rank
-)
+// Removed: see LuceneSearchService for search results mapping
 
 /**
  * Converts a SearchByAuthor database result to a domain SearchResult model.
@@ -318,14 +300,7 @@ fun SearchInBook.toSearchResult(): SearchResult = SearchResult(
  *
  * @return The domain SearchResult model
  */
-fun SearchByAuthor.toSearchResult(): SearchResult = SearchResult(
-    bookId = bookId ?: 0,
-    bookTitle = bookTitle ?: "",
-    lineId = id ?: 0,
-    lineIndex = lineIndex?.toInt() ?: 0,
-    snippet = snippet ?: "",
-    rank = rank
-)
+// Removed
 
 /**
  * Converts a SearchWithBookFilter database result to a domain SearchResult model.
@@ -333,11 +308,4 @@ fun SearchByAuthor.toSearchResult(): SearchResult = SearchResult(
  *
  * @return The domain SearchResult model
  */
-fun SearchWithBookFilter.toSearchResult(): SearchResult = SearchResult(
-    bookId = bookId ?: 0,
-    bookTitle = bookTitle ?: "",
-    lineId = id ?: 0,
-    lineIndex = lineIndex?.toInt() ?: 0,
-    snippet = snippet ?: "",
-    rank = rank
-)
+// Removed

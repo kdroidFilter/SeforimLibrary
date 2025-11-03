@@ -6,6 +6,8 @@ import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import io.github.kdroidfilter.seforimlibrary.generator.utils.HebrewTextUtils
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -30,7 +32,10 @@ import kotlin.io.path.readText
  */
 class DatabaseGenerator(
     private val sourceDirectory: Path,
-    private val repository: SeforimRepository
+    private val repository: SeforimRepository,
+    private val acronymDbPath: String? = null,
+    private val textIndex: io.github.kdroidfilter.seforimlibrary.generator.lucene.TextIndexWriter? = null,
+    private val lookupIndex: io.github.kdroidfilter.seforimlibrary.generator.lucene.LookupIndexWriter? = null
 ) {
 
     private val logger = Logger.withTag("DatabaseGenerator")
@@ -43,6 +48,28 @@ class DatabaseGenerator(
     private var nextBookId = 1L // Counter for book IDs
     private var nextLineId = 1L // Counter for line IDs
     private var nextTocEntryId = 1L // Counter for TOC entry IDs
+
+    // Optional connection to the Acronymizer DB (opened lazily)
+    private var acronymDb: java.sql.Connection? = null
+
+    // Library root used for relative path normalization
+    private lateinit var libraryRoot: Path
+
+    // In-memory caches to accelerate link processing using available RAM
+    private var booksByTitle: Map<String, Book> = emptyMap()
+    private var booksById: Map<Long, Book> = emptyMap()
+    // For each bookId, maps lineIndex -> lineId (0 means missing)
+    private val lineIdCache = mutableMapOf<Long, LongArray>()
+
+    // Tracks books processed from the priority list to avoid double insertion
+    private val processedPriorityBookKeys = mutableSetOf<String>()
+
+    // Overall progress across books
+    private var totalBooksToProcess: Int = 0
+    private var processedBooksCount: Int = 0
+
+    // Book contents cache: maps library-relative key -> list of lines
+    private val bookContentCache = mutableMapOf<String, List<String>>()
 
 
     /**
@@ -61,35 +88,67 @@ class DatabaseGenerator(
             // Lower durability for faster bulk writes (restored afterward)
             logger.i { "Setting PRAGMA synchronous=OFF for bulk generation" }
             repository.setSynchronousOff()
+            logger.i { "Setting PRAGMA journal_mode=OFF for bulk generation" }
+            repository.setJournalModeOff()
 
-            // Load metadata
-            val metadata = loadMetadata()
-            logger.i { "Metadata loaded: ${metadata.size} entries" }
+            // Wrap the entire generation in a single transaction for major SQLite speedups
+            repository.runInTransaction {
+                // Load metadata
+                val metadata = loadMetadata()
+                logger.i { "Metadata loaded: ${metadata.size} entries" }
 
-            // Process hierarchy
-            val libraryPath = sourceDirectory.resolve("אוצריא")
-            if (!libraryPath.exists()) {
-                throw IllegalStateException("The directory אוצריא does not exist in $sourceDirectory")
+                // Process hierarchy
+                val libraryPath = sourceDirectory.resolve("אוצריא")
+                if (!libraryPath.exists()) {
+                    throw IllegalStateException("The directory אוצריא does not exist in $sourceDirectory")
+                }
+
+                // Save for relative path computations
+                libraryRoot = libraryPath
+
+                // Estimate total number of books (txt files) for progress tracking
+                totalBooksToProcess = try {
+                    Files.walk(libraryRoot).use { s ->
+                        s.filter { Files.isRegularFile(it) && it.extension == "txt" }.count().toInt()
+                    }
+                } catch (_: Exception) { 0 }
+                logger.i { "Planned to process approximately $totalBooksToProcess books" }
+
+                // Process priority books first (if any), then process the full library
+                runCatching {
+                    processPriorityBooks(loadMetadata = { metadata })
+                }.onFailure { e ->
+                    logger.w(e) { "Failed processing priority list; continuing with full generation" }
+                }
+
+                logger.i { "🚀 Starting to process library directory: $libraryPath" }
+                // Preload all book .txt contents into RAM for faster processing
+                preloadAllBookContents(libraryPath)
+                processDirectory(libraryPath, null, 0, metadata)
+
+                // Process links
+                processLinks()
+
+                // Build category closure table for fast descendant queries
+                logger.i { "Building category_closure (ancestor-descendant) table..." }
+                repository.rebuildCategoryClosure()
+
+                // Finalize Lucene index if present
+                runCatching { textIndex?.commit() }
+                    .onSuccess { logger.i { "Lucene index commit completed" } }
+                    .onFailure { e -> logger.w(e) { "Lucene index commit failed" } }
+                runCatching { lookupIndex?.commit() }
+                    .onSuccess { logger.i { "Lookup index commit completed" } }
+                    .onFailure { e -> logger.w(e) { "Lookup index commit failed" } }
             }
-
-            logger.i { "🚀 Starting to process library directory: $libraryPath" }
-            processDirectory(libraryPath, null, 0, metadata)
-
-            // Process links
-            processLinks()
-
-            // Re-enable foreign keys after all data is inserted
+            // Restore PRAGMAs after commit
             logger.i { "Re-enabling foreign keys..." }
             enableForeignKeys()
-
-            // Restore synchronous mode
             logger.i { "Restoring PRAGMA synchronous=NORMAL" }
             repository.setSynchronousNormal()
-
-            // Rebuild FTS5 index
-            logger.i { "Rebuilding FTS5 index..." }
-            rebuildFts5Index()
-
+            // Restore journal mode after commit
+            logger.i { "Restoring PRAGMA journal_mode=WAL" }
+            repository.setJournalModeWal()
             logger.i { "Generation completed successfully!" }
         } catch (e: Exception) {
             // Make sure to re-enable foreign keys even if an error occurs
@@ -101,10 +160,133 @@ class DatabaseGenerator(
             try {
                 repository.setSynchronousNormal()
             } catch (_: Exception) {}
+            try {
+                repository.setJournalModeWal()
+            } catch (_: Exception) {}
 
             logger.e(e) { "Error during generation" }
             throw e
         }
+    }
+
+    /**
+     * Phase 1: Generate categories, books, TOCs and lines only (no links).
+     */
+    suspend fun generateLinesOnly(): Unit = coroutineScope {
+        logger.i { "Starting phase 1: categories/books/lines generation..." }
+        try {
+            // Performance PRAGMAs
+            disableForeignKeys()
+            repository.setSynchronousOff()
+            repository.setJournalModeOff()
+
+            repository.runInTransaction {
+                val metadata = loadMetadata()
+                val libraryPath = sourceDirectory.resolve("אוצריא")
+                if (!libraryPath.exists()) {
+                    throw IllegalStateException("The directory אוצריא does not exist in $sourceDirectory")
+                }
+                libraryRoot = libraryPath
+
+                totalBooksToProcess = try {
+                    Files.walk(libraryRoot).use { s ->
+                        s.filter { Files.isRegularFile(it) && it.extension == "txt" }.count().toInt()
+                    }
+                } catch (_: Exception) { 0 }
+                logger.i { "Planned to process approximately $totalBooksToProcess books (phase 1)" }
+
+                runCatching { processPriorityBooks(loadMetadata = { metadata }) }
+                    .onFailure { e -> logger.w(e) { "Failed processing priority list; continuing with full generation (phase 1)" } }
+                // Preload all book .txt contents into RAM for faster processing
+                preloadAllBookContents(libraryPath)
+                processDirectory(libraryPath, null, 0, metadata)
+
+                // Build category closure after categories insertion
+                logger.i { "Building category_closure table (phase 1)..." }
+                repository.rebuildCategoryClosure()
+            }
+        } finally {
+            runCatching { enableForeignKeys() }
+            runCatching { repository.setSynchronousNormal() }
+            runCatching { repository.setJournalModeWal() }
+            logger.i { "Phase 1 completed." }
+        }
+    }
+
+    /**
+     * Phase 2: Process links only and update link-related flags.
+     */
+    suspend fun generateLinksOnly(): Unit = coroutineScope {
+        logger.i { "Starting phase 2: links processing..." }
+        try {
+            disableForeignKeys()
+            repository.setSynchronousOff()
+            repository.setJournalModeOff()
+            repository.runInTransaction {
+                processLinks()
+            }
+        } finally {
+            runCatching { enableForeignKeys() }
+            runCatching { repository.setSynchronousNormal() }
+            runCatching { repository.setJournalModeWal() }
+            logger.i { "Phase 2 completed." }
+        }
+    }
+
+    // Prepare caches so that link resolution uses RAM instead of round-trips
+    private suspend fun ensureCachesLoaded() {
+        if (booksByTitle.isEmpty()) {
+            val allBooks = repository.getAllBooks()
+            booksByTitle = allBooks.associateBy { it.title }
+            booksById = allBooks.associateBy { it.id }
+            logger.i { "Preloaded ${allBooks.size} books into memory for fast link processing" }
+        }
+    }
+
+    // Ensure we have lineIndex -> lineId mapping for the given book in memory
+    private suspend fun ensureLineIndexCache(bookId: Long) {
+        if (lineIdCache.containsKey(bookId)) return
+        val totalLines = booksById[bookId]?.totalLines ?: repository.getBook(bookId)?.totalLines ?: 0
+        val arr = LongArray(totalLines.coerceAtLeast(0)) { 0L }
+        // Use existing repository.getLines to load ids and indices; content is ignored here
+        val lines = if (totalLines > 0) repository.getLines(bookId, 0, totalLines - 1) else emptyList()
+        for (ln in lines) {
+            val idx = ln.lineIndex
+            if (idx >= 0 && idx < arr.size) arr[idx] = ln.id
+        }
+        lineIdCache[bookId] = arr
+        logger.d { "Loaded ${lines.size} line id/index pairs for book $bookId into memory" }
+    }
+
+    // Lookup helper using the RAM cache
+    private suspend fun getLineIdCached(bookId: Long, lineIndex: Int): Long? {
+        ensureLineIndexCache(bookId)
+        val arr = lineIdCache[bookId] ?: return null
+        if (lineIndex < 0 || lineIndex >= arr.size) return null
+        val id = arr[lineIndex]
+        return if (id == 0L) null else id
+    }
+
+    // Preload all book file contents into RAM, keyed by library-relative path
+    private suspend fun preloadAllBookContents(libraryPath: Path) {
+        // Avoid reloading if already populated
+        if (bookContentCache.isNotEmpty()) return
+        logger.i { "Preloading book contents into RAM from $libraryPath ..." }
+        val files = Files.walk(libraryPath).use { s ->
+            s.filter { Files.isRegularFile(it) && it.extension == "txt" }.toList()
+        }
+        // Parallelize reads
+        val loaded = coroutineScope {
+            files.map { p ->
+                async {
+                    val key = toLibraryRelativeKey(p)
+                    val content = p.readText(Charsets.UTF_8)
+                    key to content.lines()
+                }
+            }.awaitAll()
+        }
+        for ((k, v) in loaded) bookContentCache[k] = v
+        logger.i { "Preloaded ${bookContentCache.size} books into RAM" }
     }
 
     /**
@@ -172,6 +354,12 @@ class DatabaseGenerator(
                     }
 
                     Files.isRegularFile(entry) && entry.extension == "txt" -> {
+                        // Skip if already processed from the priority list
+                        val key = toLibraryRelativeKey(entry)
+                        if (processedPriorityBookKeys.contains(key)) {
+                            logger.i { "⏭️ Skipping already-processed priority book: $key" }
+                            continue
+                        }
                         if (parentCategoryId == null) {
                             logger.w { "❌ Book found without category: $entry" }
                             continue
@@ -289,8 +477,70 @@ class DatabaseGenerator(
 
         logger.d { "Book '${book.title}' inserted with ID: $insertedBookId and categoryId: $categoryId" }
 
+        // Insert acronyms for this book if an Acronymizer DB is available
+        try {
+            val terms = fetchAcronymsForTitle(title)
+            if (terms.isNotEmpty()) {
+                repository.bulkInsertBookAcronyms(insertedBookId, terms)
+                logger.i { "Inserted ${terms.size} acronyms for '${title}'" }
+            }
+        } catch (e: Exception) {
+            logger.w(e) { "Failed to insert acronyms for '$title'" }
+        }
+
+        // Populate Lucene title index (title + acronyms + topics)
+        runCatching {
+            // Always index exact title
+            textIndex?.addBookTitleTerm(insertedBookId, categoryId, title, title)
+            // Also index sanitized variant if different
+            val titleSan = sanitizeAcronymTerm(title)
+            if (titleSan.isNotBlank() && !titleSan.equals(title, ignoreCase = true)) {
+                textIndex?.addBookTitleTerm(insertedBookId, categoryId, title, titleSan)
+            }
+            // Acronyms
+            val acronyms = runCatching { fetchAcronymsForTitle(title) }.getOrDefault(emptyList())
+            for (t in acronyms) textIndex?.addBookTitleTerm(insertedBookId, categoryId, title, t)
+            // Topics (if present)
+            val topicTerms = book.topics
+                .asSequence()
+                .map { sanitizeAcronymTerm(it.name) }
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .toList()
+            for (t in topicTerms) textIndex?.addBookTitleTerm(insertedBookId, categoryId, title, t)
+        }.onFailure { e ->
+            logger.w(e) { "Failed to index book title terms for '$title'" }
+        }
+
+        // Populate Lookup index (books + acronyms + topics)
+        runCatching {
+            val terms = buildList {
+                add(title)
+                val tSan = sanitizeAcronymTerm(title)
+                if (tSan.isNotBlank() && !tSan.equals(title, ignoreCase = true)) add(tSan)
+                addAll(runCatching { fetchAcronymsForTitle(title) }.getOrDefault(emptyList()))
+                // topics from the book model
+                addAll(
+                    book.topics
+                        .asSequence()
+                        .map { sanitizeAcronymTerm(it.name) }
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .distinct()
+                        .toList()
+                )
+            }
+            lookupIndex?.addBook(insertedBookId, categoryId, title, terms)
+        }.onFailure { e -> logger.w(e) { "Failed to index book lookup for '$title'" } }
+
         // Process content of the book
-        processBookContent(path, insertedBookId)
+        processBookContent(path, insertedBookId, title, categoryId)
+
+        // Book-level progress
+        processedBooksCount += 1
+        val pct = if (totalBooksToProcess > 0) (processedBooksCount * 100 / totalBooksToProcess) else 0
+        logger.i { "Books progress: $processedBooksCount/$totalBooksToProcess (${pct}%)" }
     }
 
     /**
@@ -299,17 +549,20 @@ class DatabaseGenerator(
      * @param path The path to the book file
      * @param bookId The ID of the book in the database
      */
-    private suspend fun processBookContent(path: Path, bookId: Long) = coroutineScope {
+    private suspend fun processBookContent(path: Path, bookId: Long, bookTitle: String, categoryId: Long) = coroutineScope {
         logger.d { "Processing content for book ID: $bookId" }
         logger.i { "Processing content of book ID: $bookId (ID generated by the database)" }
 
-        val content = path.readText(Charsets.UTF_8)
-
-        val lines = content.lines()
+        // Prefer preloaded content from RAM if available
+        val key = toLibraryRelativeKey(path)
+        val lines = bookContentCache[key] ?: run {
+            val content = path.readText(Charsets.UTF_8)
+            content.lines()
+        }
         logger.i { "Number of lines: ${lines.size}" }
 
         // Process each line one by one, handling TOC entries as we go
-        processLinesWithTocEntries(bookId, lines)
+        processLinesWithTocEntries(bookId, bookTitle, categoryId, lines)
 
         // Update the total number of lines
         repository.updateBookTotalLines(bookId, lines.size)
@@ -324,7 +577,7 @@ class DatabaseGenerator(
      * @param bookId The ID of the book in the database
      * @param lines The lines of the book content
      */
-    private suspend fun processLinesWithTocEntries(bookId: Long, lines: List<String>) {
+    private suspend fun processLinesWithTocEntries(bookId: Long, bookTitle: String, categoryId: Long, lines: List<String>) {
         logger.d { "Processing lines and TOC entries together for book ID: $bookId" }
 
         // Structure pour stocker toutes les entrées TOC créées
@@ -389,8 +642,7 @@ class DatabaseGenerator(
                         id = currentLineId,
                         bookId = bookId,
                         lineIndex = lineIndex,
-                        content = line,
-                        plainText = plainText
+                        content = line
                     )
                 )
                 repository.updateTocEntryLineId(tocEntryId, lineId)
@@ -401,6 +653,30 @@ class DatabaseGenerator(
                     repository.bulkUpsertLineToc(lineTocBuffer)
                     lineTocBuffer.clear()
                 }
+                // Index heading line
+                runCatching {
+                    textIndex?.addLine(
+                        bookId = bookId,
+                        bookTitle = bookTitle,
+                        categoryId = categoryId,
+                        lineId = lineId,
+                        lineIndex = lineIndex,
+                        normalizedText = plainText,
+                        rawPlainText = plainText
+                    )
+                }.onFailure { e -> logger.w(e) { "Failed to index heading line $lineId in book $bookId" } }
+
+                // Index TOC for lookup
+                runCatching {
+                    lookupIndex?.addToc(
+                        tocId = tocEntryId,
+                        bookId = bookId,
+                        categoryId = categoryId,
+                        bookTitle = bookTitle,
+                        text = plainText,
+                        level = level
+                    )
+                }.onFailure { e -> logger.w(e) { "Failed to index TOC $tocEntryId for book $bookId" } }
             } else {
                 // Regular line
                 val currentLineId = nextLineId++
@@ -409,8 +685,7 @@ class DatabaseGenerator(
                         id = currentLineId,
                         bookId = bookId,
                         lineIndex = lineIndex,
-                        content = line,
-                        plainText = plainText
+                        content = line
                     )
                 )
                 // Buffer mapping for regular line if there is a current owner
@@ -421,10 +696,23 @@ class DatabaseGenerator(
                         lineTocBuffer.clear()
                     }
                 }
+                // Index regular line
+                runCatching {
+                    textIndex?.addLine(
+                        bookId = bookId,
+                        bookTitle = bookTitle,
+                        categoryId = categoryId,
+                        lineId = insertedLineId,
+                        lineIndex = lineIndex,
+                        normalizedText = plainText,
+                        rawPlainText = plainText
+                    )
+                }.onFailure { e -> logger.w(e) { "Failed to index line $insertedLineId in book $bookId" } }
             }
 
             if (lineIndex % 1000 == 0) {
-                logger.i { "Progress: $lineIndex/${lines.size} lines" }
+                val pct = if (lines.isNotEmpty()) (lineIndex * 100 / lines.size) else 0
+                logger.i { "Book $bookId '$bookTitle': $lineIndex/${lines.size} lines (${pct}%)" }
             }
         }
 
@@ -460,11 +748,11 @@ class DatabaseGenerator(
     }
 
     private fun cleanHtml(html: String): String {
-        return HebrewTextUtils.removeNikud(
-            Jsoup.clean(html, Safelist.none())
-                .trim()
-                .replace("\\s+".toRegex(), " ")
-        )
+        val cleaned = Jsoup.clean(html, Safelist.none())
+            .trim()
+            .replace("\\s+".toRegex(), " ")
+        val withoutMaqaf = HebrewTextUtils.replaceMaqaf(cleaned, " ")
+        return HebrewTextUtils.removeAllDiacritics(withoutMaqaf)
     }
 
 
@@ -480,11 +768,123 @@ class DatabaseGenerator(
         }
     }
 
+    // ===== Priority handling =====
+
+    /**
+     * Reads the priority list from resources and returns normalized relative paths under the library root.
+     */
+    private fun loadPriorityList(): List<String> {
+        return try {
+            val stream = this::class.java.classLoader.getResourceAsStream("priority.txt")
+                ?: return emptyList()
+            stream.bufferedReader(Charsets.UTF_8).use { reader ->
+                reader.lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() && !it.startsWith("#") }
+                    .map { raw ->
+                        // Normalize separators
+                        var s = raw.replace('\\', '/')
+                        // Remove BOM if present
+                        if (s.isNotEmpty() && s[0].code == 0xFEFF) s = s.substring(1)
+                        // Remove leading slash
+                        s = s.removePrefix("/")
+                        // Try to start from 'אוצריא' if present
+                        val idx = s.indexOf("אוצריא")
+                        if (idx >= 0) s = s.substring(idx + "אוצריא".length).removePrefix("/")
+                        s
+                    }
+                    .filter { it.endsWith(".txt", ignoreCase = true) }
+                    .toList()
+            }
+        } catch (e: Exception) {
+            logger.w(e) { "Unable to read priority.txt from resources" }
+            emptyList()
+        }
+    }
+
+    /**
+     * Processes books listed in priority.txt before the normal directory traversal.
+     * Ensures categories exist and records processed books to avoid duplicates.
+     */
+    private suspend fun processPriorityBooks(loadMetadata: () -> Map<String, BookMetadata>) {
+        val entries = loadPriorityList()
+        if (entries.isEmpty()) {
+            logger.i { "No priority entries found" }
+            return
+        }
+
+        logger.i { "Processing ${entries.size} priority entries first" }
+        val metadata = loadMetadata()
+
+        outer@ for ((idx, relative) in entries.withIndex()) {
+            // Build the absolute path under the library root
+            val parts = relative.split('/').filter { it.isNotEmpty() }
+            if (parts.isEmpty()) continue
+
+            // Last part is the book filename, everything before are categories
+            val categories = if (parts.size > 1) parts.dropLast(1) else emptyList()
+            val bookFileName = parts.last()
+
+            // Fold into actual filesystem path
+            var currentPath = libraryRoot
+            for (p in categories) currentPath = currentPath.resolve(p)
+            val bookPath = currentPath.resolve(bookFileName)
+
+            if (!Files.isRegularFile(bookPath)) {
+                logger.w { "Priority entry ${idx + 1}/${entries.size}: file not found: $bookPath" }
+                continue@outer
+            }
+
+            // Avoid processing duplicates listed multiple times
+            val key = toLibraryRelativeKey(bookPath)
+            if (processedPriorityBookKeys.contains(key)) {
+                logger.d { "Priority entry ${idx + 1}/${entries.size}: already processed (dup in list): $key" }
+                continue@outer
+            }
+
+            // Ensure categories exist and get the final parent category id
+            var parentId: Long? = null
+            var level = 0
+            var catPath = libraryRoot
+            for (cat in categories) {
+                catPath = catPath.resolve(cat)
+                parentId = createCategory(catPath, parentId, level)
+                level += 1
+            }
+
+            if (parentId == null) {
+                logger.w { "Priority entry ${idx + 1}/${entries.size}: missing parent category for $bookPath; skipping" }
+                continue@outer
+            }
+
+            logger.i { "⭐ Priority ${idx + 1}/${entries.size}: processing $bookFileName under categories ${categories.joinToString("/")}" }
+            createAndProcessBook(bookPath, parentId, metadata)
+
+            // Mark as processed to avoid double insertion during full traversal
+            processedPriorityBookKeys.add(key)
+        }
+    }
+
+    /**
+     * Compute a normalized key for a book file relative to the library root.
+     */
+    private fun toLibraryRelativeKey(file: Path): String {
+        return try {
+            val rel = libraryRoot.relativize(file).toString().replace('\\', '/')
+            rel
+        } catch (_: Exception) {
+            // Fallback to filename
+            file.fileName.toString()
+        }
+    }
+
     /**
      * Processes all link files in the links directory.
      * Links connect lines between different books.
      */
     private suspend fun processLinks() {
+        // Load caches once so most lookups stay in memory
+        ensureCachesLoaded()
         val linksDir = sourceDirectory.resolve("links")
         if (!linksDir.exists()) {
             logger.w { "Links directory not found" }
@@ -495,17 +895,30 @@ class DatabaseGenerator(
         val linksBefore = repository.countLinks()
         logger.d { "Links in database before processing: $linksBefore" }
 
-        logger.i { "Processing links..." }
-        var totalLinks = 0
-
-        Files.list(linksDir).use { stream ->
-            stream.filter { it.extension == "json" }.forEach { linkFile ->
-                runBlocking {
-                    val processedLinks = processLinkFile(linkFile)
-                    totalLinks += processedLinks
-                    logger.d { "Processed $processedLinks links from ${linkFile.fileName}, total so far: $totalLinks" }
+        logger.i { "Loading all link JSON files into RAM..." }
+        // Preload all links JSON into memory to minimize IO
+        val linkFiles = Files.list(linksDir).use { s -> s.filter { it.extension == "json" }.toList() }
+        val linksByBook = coroutineScope {
+            linkFiles.map { file ->
+                async {
+                    val bookTitle = file.nameWithoutExtension.removeSuffix("_links")
+                    val content = file.readText()
+                    val links = json.decodeFromString<List<LinkData>>(content)
+                    bookTitle to links
                 }
-            }
+            }.mapNotNull { deferred ->
+                runCatching { deferred.await() }
+                    .onFailure { e -> logger.w(e) { "Failed to preload links from file" } }
+                    .getOrNull()
+            }.toMap(mutableMapOf())
+        }
+
+        logger.i { "Processing links from RAM..." }
+        var totalLinks = 0
+        for ((bookTitle, links) in linksByBook) {
+            val processedLinks = processLinksForBook(bookTitle, links)
+            totalLinks += processedLinks
+            logger.d { "Processed $processedLinks links for $bookTitle, total so far: $totalLinks" }
         }
 
         // Count links after processing
@@ -529,8 +942,8 @@ class DatabaseGenerator(
         val bookTitle = linkFile.nameWithoutExtension.removeSuffix("_links")
         logger.d { "Processing link file for book: $bookTitle" }
 
-        // Find the source book
-        val sourceBook = repository.getBookByTitle(bookTitle)
+        // Find the source book (use RAM cache)
+        val sourceBook = booksByTitle[bookTitle]
 
         if (sourceBook == null) {
             logger.w { "Source book not found for links: $bookTitle" }
@@ -562,8 +975,8 @@ class DatabaseGenerator(
                     }
                     logger.d { "Link ${index + 1}/${links.size} - Target book title: $targetTitle" }
 
-                    // Try to find the target book
-                    val targetBook = repository.getBookByTitle(targetTitle)
+                    // Try to find the target book (use RAM cache)
+                    val targetBook = booksByTitle[targetTitle]
                     if (targetBook == null) {
                         // Enhanced logging for debugging
                         logger.i { "Link ${index + 1}/${links.size} - Target book not found: $targetTitle" }
@@ -579,29 +992,29 @@ class DatabaseGenerator(
 
                     logger.d { "Looking for source line at index: $sourceLineIndex (original: ${linkData.line_index_1}) in book ${sourceBook.id}" }
 
-                    // Try to find the source line
-                    val sourceLine = repository.getLineByIndex(sourceBook.id, sourceLineIndex)
-                    if (sourceLine == null) {
+                    // Try to find the source line (use RAM cache)
+                    val sourceLineId = getLineIdCached(sourceBook.id, sourceLineIndex)
+                    if (sourceLineId == null) {
                         logger.d { "Source line not found at index: $sourceLineIndex, skipping this link but continuing with others" }
                         continue
                     }
-                    logger.d { "Using source line with ID: ${sourceLine.id}" }
+                    logger.d { "Using source line with ID: $sourceLineId" }
 
                     logger.d { "Looking for target line at index: $targetLineIndex (original: ${linkData.line_index_2}) in book ${targetBook.id}" }
 
-                    // Try to find the target line
-                    val targetLine = repository.getLineByIndex(targetBook.id, targetLineIndex)
-                    if (targetLine == null) {
+                    // Try to find the target line (use RAM cache)
+                    val targetLineId = getLineIdCached(targetBook.id, targetLineIndex)
+                    if (targetLineId == null) {
                         logger.d { "Target line not found at index: $targetLineIndex, skipping this link but continuing with others" }
                         continue
                     }
-                    logger.d { "Using target line with ID: ${targetLine.id}" }
+                    logger.d { "Using target line with ID: $targetLineId" }
 
                     val link = Link(
                         sourceBookId = sourceBook.id,
                         targetBookId = targetBook.id,
-                        sourceLineId = sourceLine.id,
-                        targetLineId = targetLine.id,
+                        sourceLineId = sourceLineId,
+                        targetLineId = targetLineId,
                         connectionType = ConnectionType.fromString(linkData.connectionType)
                     )
 
@@ -626,6 +1039,59 @@ class DatabaseGenerator(
     }
 
     /**
+     * Processes links that were preloaded in memory for a given source book.
+     */
+    private suspend fun processLinksForBook(bookTitle: String, links: List<LinkData>): Int {
+        val sourceBook = booksByTitle[bookTitle]
+        if (sourceBook == null) {
+            logger.w { "Source book not found for links: $bookTitle" }
+            return 0
+        }
+        var processed = 0
+        for ((index, linkData) in links.withIndex()) {
+            try {
+                val path = linkData.path_2
+                val targetTitle = if (path.contains('\\')) {
+                    val lastComponent = path.split('\\').last()
+                    lastComponent.substringBeforeLast('.', lastComponent)
+                } else {
+                    val targetPath = Paths.get(path)
+                    targetPath.fileName.toString().substringBeforeLast('.')
+                }
+
+                val targetBook = booksByTitle[targetTitle]
+                if (targetBook == null) {
+                    logger.i { "Link ${index + 1}/${links.size} - Target book not found: $targetTitle" }
+                    logger.i { "Original path: ${linkData.path_2}" }
+                    continue
+                }
+
+                val sourceLineIndex = (linkData.line_index_1.toInt() - 1).coerceAtLeast(0)
+                val targetLineIndex = (linkData.line_index_2.toInt() - 1).coerceAtLeast(0)
+
+                val sourceLineId = getLineIdCached(sourceBook.id, sourceLineIndex)
+                if (sourceLineId == null) continue
+
+                val targetLineId = getLineIdCached(targetBook.id, targetLineIndex)
+                if (targetLineId == null) continue
+
+                val link = Link(
+                    sourceBookId = sourceBook.id,
+                    targetBookId = targetBook.id,
+                    sourceLineId = sourceLineId,
+                    targetLineId = targetLineId,
+                    connectionType = ConnectionType.fromString(linkData.connectionType)
+                )
+                repository.insertLink(link)
+                processed++
+            } catch (_: Exception) {
+                // Skip malformed entries but continue
+            }
+        }
+        return processed
+    }
+
+    /**
      * Extracts topics from the file path.
      * Topics are derived from the directory structure.
      *
@@ -640,6 +1106,58 @@ class DatabaseGenerator(
         return topicNames.map { name ->
             Topic(name = name)
         }
+    }
+
+    /**
+     * Fetch and sanitize acronym terms for a given book title from the Acronymizer DB.
+     */
+    private fun fetchAcronymsForTitle(title: String): List<String> {
+        val path = acronymDbPath ?: return emptyList()
+        try {
+            if (acronymDb == null) {
+                acronymDb = java.sql.DriverManager.getConnection("jdbc:sqlite:$path")
+            }
+            val conn = acronymDb ?: return emptyList()
+
+            conn.prepareStatement(
+                "SELECT terms FROM AcronymResults WHERE book_title = ? ORDER BY id DESC LIMIT 1"
+            ).use { ps ->
+                ps.setString(1, title)
+                ps.executeQuery().use { rs ->
+                    if (!rs.next()) return emptyList()
+                    val raw = rs.getString(1) ?: return emptyList()
+                    val parts = raw.split(',')
+                    val clean = parts
+                        .map { sanitizeAcronymTerm(it) }
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+
+                    // De-duplicate and drop items identical to the title after normalization
+                    val titleNormalized = sanitizeAcronymTerm(title)
+                    return clean
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .filter { !it.equals(title, ignoreCase = true) }
+                        .filter { !it.equals(titleNormalized, ignoreCase = true) }
+                        .distinct()
+                }
+            }
+        } catch (e: Exception) {
+            logger.w(e) { "Error reading acronyms for '$title' from $path" }
+            return emptyList()
+        }
+    }
+
+    // Clean an acronym using HebrewTextUtils and remove gershayim
+    private fun sanitizeAcronymTerm(raw: String): String {
+        var s = raw.trim()
+        if (s.isEmpty()) return ""
+        s = HebrewTextUtils.removeAllDiacritics(s)
+        s = HebrewTextUtils.replaceMaqaf(s, " ")
+        s = s.replace("\u05F4", "") // remove Hebrew gershayim (״)
+        s = s.replace("\u05F3", "") // remove Hebrew geresh (׳)
+        s = s.replace("\\s+".toRegex(), " ").trim()
+        return s
     }
 
     /**
@@ -660,15 +1178,7 @@ class DatabaseGenerator(
         repository.executeRawQuery("PRAGMA foreign_keys = ON")
     }
 
-    /**
-     * Rebuilds the FTS5 index for the line_search table.
-     * This should be called after all data has been inserted to ensure optimal search performance.
-     */
-    private suspend fun rebuildFts5Index() {
-        logger.d { "Rebuilding FTS5 index for line_search table" }
-        repository.rebuildFts5Index()
-        logger.i { "FTS5 index rebuilt successfully" }
-    }
+    // Removed: FTS rebuild is obsolete (Lucene index is committed in this run)
 
     /**
      * Updates the book_has_links table to indicate which books have source links, target links, or both.
@@ -677,70 +1187,64 @@ class DatabaseGenerator(
     private suspend fun updateBookHasLinksTable() {
         logger.i { "Updating book_has_links table with separate source and target link flags..." }
 
-        // Get all books
-        val books = repository.getAllBooks()
-        logger.d { "Found ${books.size} books to check for links" }
-
-        var booksWithSourceLinks = 0
-        var booksWithTargetLinks = 0
-        var booksWithAnyLinks = 0
-        var processedBooks = 0
-
-        // For each book, check if it has source links and/or target links
-        for (book in books) {
-            // Check if the book has any links as source
-            val hasSourceLinks = repository.countLinksBySourceBook(book.id) > 0
-
-            // Check if the book has any links as target
-            val hasTargetLinks = repository.countLinksByTargetBook(book.id) > 0
-
-            // Update the book_has_links table with separate flags for source and target links
-            repository.updateBookHasLinks(book.id, hasSourceLinks, hasTargetLinks)
-
-            // Additionally: compute per-connection-type flags across source and target, then update book row
-            val targumCount = repository.countLinksBySourceBookAndType(book.id, "TARGUM") +
-                    repository.countLinksByTargetBookAndType(book.id, "TARGUM")
-            val referenceCount = repository.countLinksBySourceBookAndType(book.id, "REFERENCE") +
-                    repository.countLinksByTargetBookAndType(book.id, "REFERENCE")
-            val commentaryCount = repository.countLinksBySourceBookAndType(book.id, "COMMENTARY") +
-                    repository.countLinksByTargetBookAndType(book.id, "COMMENTARY")
-            val otherCount = repository.countLinksBySourceBookAndType(book.id, "OTHER") +
-                    repository.countLinksByTargetBookAndType(book.id, "OTHER")
-
-            val hasTargum = targumCount > 0
-            val hasReference = referenceCount > 0
-            val hasCommentary = commentaryCount > 0
-            val hasOther = otherCount > 0
-
-            repository.updateBookConnectionFlags(book.id, hasTargum, hasReference, hasCommentary, hasOther)
-
-            // Update counters
-            if (hasSourceLinks) {
-                booksWithSourceLinks++
-            }
-            if (hasTargetLinks) {
-                booksWithTargetLinks++
-            }
-            if (hasSourceLinks || hasTargetLinks) {
-                booksWithAnyLinks++
-            }
-
-            processedBooks++
-
-            // Log progress every 100 books
-            if (processedBooks % 100 == 0) {
-                logger.d { "Processed $processedBooks/${books.size} books: " +
-                        "$booksWithSourceLinks with source links, " +
-                        "$booksWithTargetLinks with target links, " +
-                        "$booksWithAnyLinks with any links" }
-            }
+        // Ensure all books are present in book_has_links
+        runCatching {
+            repository.executeRawQuery(
+                "INSERT OR IGNORE INTO book_has_links(bookId, hasSourceLinks, hasTargetLinks) " +
+                        "SELECT id, 0, 0 FROM book"
+            )
         }
+
+        // Reset flags, then set from aggregated distinct sets
+        runCatching { repository.executeRawQuery("UPDATE book_has_links SET hasSourceLinks=0, hasTargetLinks=0") }
+        runCatching {
+            repository.executeRawQuery(
+                "UPDATE book_has_links SET hasSourceLinks=1 " +
+                        "WHERE bookId IN (SELECT DISTINCT sourceBookId FROM link)"
+            )
+        }
+        runCatching {
+            repository.executeRawQuery(
+                "UPDATE book_has_links SET hasTargetLinks=1 " +
+                        "WHERE bookId IN (SELECT DISTINCT targetBookId FROM link)"
+            )
+        }
+
+        // Reset book per-connection-type flags
+        runCatching {
+            repository.executeRawQuery(
+                "UPDATE book SET hasTargumConnection=0, hasReferenceConnection=0, hasCommentaryConnection=0, hasOtherConnection=0"
+            )
+        }
+
+        // Helper to set a type flag in one statement
+        suspend fun setConnFlag(typeName: String, column: String) {
+            val sql = "UPDATE book SET $column=1 WHERE id IN (" +
+                    "SELECT DISTINCT bId FROM (" +
+                    "SELECT sourceBookId AS bId FROM link l JOIN connection_type ct ON ct.id = l.connectionTypeId WHERE ct.name='$typeName' " +
+                    "UNION " +
+                    "SELECT targetBookId AS bId FROM link l JOIN connection_type ct ON ct.id = l.connectionTypeId WHERE ct.name='$typeName'" +
+                    ")" +
+                    ")"
+            repository.executeRawQuery(sql)
+        }
+
+        runCatching { setConnFlag("TARGUM", "hasTargumConnection") }
+        runCatching { setConnFlag("REFERENCE", "hasReferenceConnection") }
+        runCatching { setConnFlag("COMMENTARY", "hasCommentaryConnection") }
+        runCatching { setConnFlag("OTHER", "hasOtherConnection") }
+
+        // Quick summary counts (single queries)
+        val totalBooks = repository.getAllBooks().size
+        val booksWithSourceLinks = repository.countBooksWithSourceLinks().toInt()
+        val booksWithTargetLinks = repository.countBooksWithTargetLinks().toInt()
+        val booksWithAnyLinks = repository.countBooksWithAnyLinks().toInt()
 
         logger.i { "Book_has_links table updated. Found:" }
         logger.i { "- $booksWithSourceLinks books with source links" }
         logger.i { "- $booksWithTargetLinks books with target links" }
         logger.i { "- $booksWithAnyLinks books with any links (source or target)" }
-        logger.i { "- ${books.size} total books" }
+        logger.i { "- $totalBooks total books" }
     }
 
 

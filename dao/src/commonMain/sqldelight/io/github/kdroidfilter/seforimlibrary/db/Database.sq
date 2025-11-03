@@ -9,6 +9,18 @@ CREATE TABLE IF NOT EXISTS category (
 
 CREATE INDEX IF NOT EXISTS idx_category_parent ON category(parentId);
 
+-- Closure table for efficient descendant/ancestor lookups
+CREATE TABLE IF NOT EXISTS category_closure (
+    ancestorId INTEGER NOT NULL,
+    descendantId INTEGER NOT NULL,
+    PRIMARY KEY (ancestorId, descendantId),
+    FOREIGN KEY (ancestorId) REFERENCES category(id) ON DELETE CASCADE,
+    FOREIGN KEY (descendantId) REFERENCES category(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_category_closure_ancestor ON category_closure(ancestorId);
+CREATE INDEX IF NOT EXISTS idx_category_closure_descendant ON category_closure(descendantId);
+
 -- Authors table
 CREATE TABLE IF NOT EXISTS author (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,7 +126,6 @@ CREATE TABLE IF NOT EXISTS line (
     bookId INTEGER NOT NULL,
     lineIndex INTEGER NOT NULL,
     content TEXT NOT NULL,
-    plainText TEXT NOT NULL,
     tocEntryId INTEGER,
     FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
     FOREIGN KEY (tocEntryId) REFERENCES tocEntry(id) ON DELETE SET NULL
@@ -184,27 +195,7 @@ CREATE INDEX IF NOT EXISTS idx_link_target_book ON link(targetBookId);
 CREATE INDEX IF NOT EXISTS idx_link_target_line ON link(targetLineId);
 CREATE INDEX IF NOT EXISTS idx_link_type ON link(connectionTypeId);
 
--- View for FTS5 content source that includes book title
-CREATE VIEW IF NOT EXISTS line_with_book_title AS
-SELECT 
-    l.id,
-    l.bookId,
-    l.lineIndex,
-    b.title AS bookTitle,
-    l.plainText
-FROM line l
-JOIN book b ON l.bookId = b.id;
-
--- FTS5 virtual table for line search using external content
-CREATE VIRTUAL TABLE IF NOT EXISTS line_search USING fts5(
-    bookId INTEGER UNINDEXED,
-    id INTEGER UNINDEXED,
-    lineIndex INTEGER UNINDEXED,
-    bookTitle TEXT UNINDEXED,
-    plainText TEXT,
-    content='line_with_book_title',
-    content_rowid='id'
-);
+-- Removed legacy FTS view/table in favor of Lucene (10.x)
 
 -- Table to track whether books have links (as source or target)
 CREATE TABLE IF NOT EXISTS book_has_links (
@@ -228,3 +219,15 @@ CREATE TABLE IF NOT EXISTS line_toc (
 );
 
 CREATE INDEX IF NOT EXISTS idx_linetoc_toc ON line_toc(tocEntryId);
+
+-- Book acronyms table: stores alternate names/abbreviations per book
+-- One row per (bookId, term) pair for efficient lookup
+CREATE TABLE IF NOT EXISTS book_acronym (
+    bookId INTEGER NOT NULL,
+    term TEXT NOT NULL,
+    PRIMARY KEY (bookId, term),
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE
+);
+
+-- Index to quickly find books by acronym term
+CREATE INDEX IF NOT EXISTS idx_book_acronym_term ON book_acronym(term);

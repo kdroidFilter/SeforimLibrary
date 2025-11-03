@@ -2,6 +2,10 @@
 
 kotlin = "2.2.20"
 agp = "8.12.3"
+luceneCore = "10.3.1"
+luceneAnalysisCommon = "10.3.1"
+luceneQueryparser = "10.3.1"
+luceneHighlighter = "10.3.1"
 maven-publish = "0.34.0"
 kotlinx-coroutines = "1.10.2"
 kotlinx-serialization = "1.9.0"
@@ -20,6 +24,10 @@ kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-t
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
 kermit = { module = "co.touchlab:kermit", version.ref = "kermit" }
+lucene-highlighter = { module = "org.apache.lucene:lucene-highlighter", version.ref = "luceneHighlighter" }
+lucene-queryparser = { module = "org.apache.lucene:lucene-queryparser", version.ref = "luceneQueryparser" }
+lucene-analysis-common = { module = "org.apache.lucene:lucene-analysis-common", version.ref = "luceneAnalysisCommon" }
+lucene-core = { module = "org.apache.lucene:lucene-core", version.ref = "luceneCore" }
 sqlDelight-driver-sqlite = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqlDelight" }
 sqlDelight-driver-android = { module = "app.cash.sqldelight:android-driver", version.ref = "sqlDelight" }
 sqlDelight-driver-native = { module = "app.cash.sqldelight:native-driver", version.ref = "sqlDelight" }
