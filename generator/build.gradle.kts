@@ -131,7 +131,7 @@ tasks.register<JavaExec>("buildLuceneIndexDefault") {
     }
 
     jvmArgs = listOf(
-        "-Xmx48g",
+        "-Xmx10g",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200",
         "--enable-native-access=ALL-UNNAMED",
@@ -178,7 +178,7 @@ tasks.register<JavaExec>("generateLines") {
     }
 
     jvmArgs = listOf(
-        "-Xmx48g",
+        "-Xmx10g",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200",
         "--enable-native-access=ALL-UNNAMED",
@@ -219,7 +219,7 @@ tasks.register<JavaExec>("generateLinks") {
     }
 
     jvmArgs = listOf(
-        "-Xmx48g",
+        "-Xmx10g",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200",
         "--enable-native-access=ALL-UNNAMED",
