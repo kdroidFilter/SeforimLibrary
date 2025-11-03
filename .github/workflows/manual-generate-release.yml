@@ -10,6 +10,9 @@ jobs:
   build-and-release:
     name: Run generator tasks and publish release
     runs-on: macos-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Checkout
