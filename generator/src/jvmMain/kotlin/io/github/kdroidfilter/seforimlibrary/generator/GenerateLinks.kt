@@ -91,13 +91,12 @@ fun main(args: Array<String>) = runBlocking {
                 val outFile = java.io.File(persistDbPath)
                 outFile.parentFile?.mkdirs()
                 if (outFile.exists()) {
-                    val backup = java.io.File(persistDbPath + ".bak")
-                    if (backup.exists()) backup.delete()
-                    if (!outFile.renameTo(backup)) {
-                        // If rename fails, delete to allow VACUUM INTO
-                        outFile.delete()
+                    // No backup required: remove existing file to allow VACUUM INTO
+                    val deleted = runCatching { java.nio.file.Files.deleteIfExists(outFile.toPath()) }.getOrDefault(false)
+                    if (!deleted) {
+                        throw IllegalStateException("Cannot remove existing DB at ${outFile.absolutePath} before persisting")
                     }
-                    logger.i { "Existing DB moved to ${backup.absolutePath}" }
+                    logger.i { "Removed existing DB at ${outFile.absolutePath}" }
                 }
                 val escaped = persistDbPath.replace("'", "''")
                 logger.i { "Persisting in-memory DB to $persistDbPath via VACUUM INTO..." }

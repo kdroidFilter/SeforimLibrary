@@ -45,6 +45,14 @@ jobs:
       - name: generateLinks
         run: ./gradlew :generator:generateLinks --no-daemon --stacktrace
 
+      - name: Cleanup Otzaria source and zip
+        run: |
+          set -euo pipefail
+          echo "Cleaning up Otzaria artifacts..."
+          rm -f generator/build/otzaria/otzaria.zip || true
+          rm -rf generator/build/otzaria/source || true
+          echo "Cleanup complete."
+
       - name: buildLuceneIndexDefault
         run: ./gradlew :generator:buildLuceneIndexDefault --no-daemon --stacktrace
 
