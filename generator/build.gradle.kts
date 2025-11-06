@@ -139,6 +139,34 @@ tasks.register<JavaExec>("buildLuceneIndexDefault") {
     )
 }
 
+// Run Sefaria generator end-to-end (categories/books/lines + links)
+// Usage:
+//   ./gradlew :generator:generateSefaria \
+//     -PseforimDb=/path/to/seforim.db -PsefariaRoot=/path/to/generator/build/Sefaria
+tasks.register<JavaExec>("generateSefaria") {
+    group = "application"
+    description = "Generate DB from Sefaria exports and import links."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.sefaria.MainKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    val defaultDbPath = layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+    val defaultRoot = layout.buildDirectory.dir("Sefaria").get().asFile.absolutePath
+
+    val dbPath = if (project.hasProperty("seforimDb")) project.property("seforimDb") as String else defaultDbPath
+    val rootPath = if (project.hasProperty("sefariaRoot")) project.property("sefariaRoot") as String else defaultRoot
+
+    systemProperty("seforimDb", dbPath)
+    systemProperty("sefariaRoot", rootPath)
+
+    jvmArgs = listOf(
+        "-Xmx10g",
+        "-XX:+UseG1GC",
+        "-XX:MaxGCPauseMillis=200"
+    )
+}
+
 
 // Phase 1: generate categories/books/lines only
 // Usage:
