@@ -161,7 +161,7 @@ tasks.register<JavaExec>("generateSefaria") {
     systemProperty("sefariaRoot", rootPath)
 
     jvmArgs = listOf(
-        "-Xmx10g",
+        "-Xmx38g",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200"
     )

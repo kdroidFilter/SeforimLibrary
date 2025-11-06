@@ -47,6 +47,22 @@ class SefariaGenerator(
 
     // Cache for category paths we already created: key = joined path, value = id
     private val categoryPathCache = mutableMapOf<String, Long>()
+    // Library root used for relative keys under txt/
+    private lateinit var libraryRoot: Path
+    // Preloaded file contents (key = library-relative merged.txt path)
+    private val fileContentCache = mutableMapOf<String, List<String>>()
+    // Book content cache: bookId -> list of lines (for in-RAM link mapping)
+    private val bookContentCache = mutableMapOf<Long, List<String>>()
+    // For each book, an array mapping lineIndex -> inserted lineId
+    private val lineIdsByBook = mutableMapOf<Long, LongArray>()
+    // English title -> Hebrew title from Sefaria sources (TOC or schema)
+    private val heTitleByEnTitle = mutableMapOf<String, String>()
+    // English title -> Hebrew section names per level (from schema.heSectionNames)
+    private val heSectionNamesByTitle = mutableMapOf<String, List<String>>()
+    // English title -> Hebrew short description
+    private val heShortDescByEnTitle = mutableMapOf<String, String>()
+    // English category name -> Hebrew category name (from schema.heCategories)
+    private val heCategoryByEnCategory = mutableMapOf<String, String>()
 
     suspend fun generate() = coroutineScope {
         logger.i { "Starting Sefaria generation from $sefariaRoot" }
@@ -55,16 +71,21 @@ class SefariaGenerator(
         require(Files.isDirectory(txtRoot)) { "Missing txt folder at $txtRoot" }
 
         // SQLite perf toggles (same spirit as Otzaria generator)
-        runCatching { repository.executeRawQuery("PRAGMA foreign_keys = OFF") }
-        runCatching { repository.setSynchronousOff() }
-        runCatching { repository.setJournalModeOff() }
+        beginBulkMode()
 
         // Discover all merged.txt files for configured languages
-        val files = Files.walk(txtRoot).use { s ->
+        libraryRoot = txtRoot
+        val files = Files.walk(libraryRoot).use { s ->
             s.filter { Files.isRegularFile(it) && it.name == "merged.txt" }.toList()
         }
 
         logger.i { "Found ${files.size} Sefaria merged.txt files" }
+        // Preload all contents into RAM
+        preloadAllBookContents(files)
+
+        // Load Hebrew titles from TOC and schemas
+        loadHeTitlesFromToc()
+        loadSectionNamesFromSchemas()
 
         for ((index, file) in files.withIndex()) {
             val relative = txtRoot.relativize(file)
@@ -84,7 +105,12 @@ class SefariaGenerator(
 
             val categoryId = ensureCategoryPath(categorySegments)
 
-            val bookId = createBook(title, categoryId)
+            // Prefer Hebrew title from TOC/schema; fallback to merged.txt headers
+            val hebTitle = heTitleByEnTitle[title]
+                ?: extractHebrewTitle(file)
+                ?: title
+            val heShort = heShortDescByEnTitle[title]
+            val bookId = createBook(hebTitle, categoryId, heShort)
             processBookContents(bookId, title, file)
 
             if ((index + 1) % 50 == 0) {
@@ -181,6 +207,9 @@ class SefariaGenerator(
 
         // Update book_has_links and per-type flags (same logic as in Otzaria generator)
         runCatching { updateBookHasLinksTable() }
+
+        // Restore PRAGMAs and VACUUM at the end of the full run
+        endBulkModeAndVacuum()
     }
 
     private fun parseCsvLine(line: String): List<String> {
@@ -243,9 +272,15 @@ class SefariaGenerator(
         }
         if (lineIndex == null) return null
 
-        // Fetch line id for that index
-        val lines = repository.getLines(bookId, lineIndex, lineIndex)
-        return lines.firstOrNull()?.id
+        // Resolve from in-RAM mapping if available, otherwise fallback to DB
+        lineIdsByBook[bookId]?.let { arr ->
+            if (lineIndex in arr.indices) {
+                val id = arr[lineIndex]
+                if (id != 0L) return id
+            }
+        }
+        val single = repository.getLines(bookId, lineIndex, lineIndex)
+        return single.firstOrNull()?.id
     }
 
     // Extract ref numbers from a citation string. Supports forms like:
@@ -267,44 +302,63 @@ class SefariaGenerator(
 
     private suspend fun buildNavIndexForBook(bookId: Long): BookNavIndex? {
         navIndexCache[bookId]?.let { return it }
-        val book = repository.getBook(bookId) ?: return null
-        val total = book.totalLines
-        if (total <= 0) return null
-        val lines = repository.getLines(bookId, 0, total - 1)
 
         val idx = BookNavIndex()
         var currentChapter: Int? = null
         var lastWasBlank = true
 
+        val content = bookContentCache[bookId]
+        if (content != null) {
+            content.forEachIndexed { lineIdx, text ->
+                val t = text.trim()
+                val level = detectHeaderLevel(t)
+                if (level > 0) {
+                    val chapNum = extractLeadingNumber(t)
+                    if (chapNum != null) {
+                        currentChapter = chapNum
+                        idx.chapterHeadingStart[chapNum] = lineIdx
+                        idx.chapterToBlocks.getOrPut(chapNum) { mutableListOf() }
+                    }
+                    lastWasBlank = true
+                } else {
+                    val isBlank = t.isEmpty()
+                    if (!isBlank && lastWasBlank) {
+                        val chap = currentChapter
+                        if (chap != null) idx.chapterToBlocks.getOrPut(chap) { mutableListOf() }.add(lineIdx)
+                    }
+                    lastWasBlank = isBlank
+                }
+            }
+            navIndexCache[bookId] = idx
+            return idx
+        }
+
+        // Fallback to DB if no in-RAM content (e.g., links-only run)
+        val book = repository.getBook(bookId) ?: return null
+        val total = book.totalLines
+        if (total <= 0) return null
+        val lines = repository.getLines(bookId, 0, total - 1)
+
         for (ln in lines) {
             val t = ln.content.trim()
             val level = detectHeaderLevel(t)
             if (level > 0) {
-                // Try to extract a chapter-like integer from the heading
                 val chapNum = extractLeadingNumber(t)
                 if (chapNum != null) {
                     currentChapter = chapNum
                     idx.chapterHeadingStart[chapNum] = ln.lineIndex
-                    // Initialize block list for this chapter
                     idx.chapterToBlocks.getOrPut(chapNum) { mutableListOf() }
                 }
                 lastWasBlank = true
-                continue
-            }
-
-            // content line
-            val isBlank = t.isEmpty()
-            if (!isBlank && lastWasBlank) {
-                // New block starts here
-                val chap = currentChapter
-                if (chap != null) {
-                    val blocks = idx.chapterToBlocks.getOrPut(chap) { mutableListOf() }
-                    blocks.add(ln.lineIndex)
+            } else {
+                val isBlank = t.isEmpty()
+                if (!isBlank && lastWasBlank) {
+                    val chap = currentChapter
+                    if (chap != null) idx.chapterToBlocks.getOrPut(chap) { mutableListOf() }.add(ln.lineIndex)
                 }
+                lastWasBlank = isBlank
             }
-            lastWasBlank = isBlank
         }
-
         navIndexCache[bookId] = idx
         return idx
     }
@@ -367,7 +421,8 @@ class SefariaGenerator(
         parentId = ensureCategory(null, "Sefaria", level)
         level += 1
 
-        for (seg in segments) {
+        for (segEn in segments) {
+            val seg = heCategoryByEnCategory[segEn] ?: segEn
             keyParts.add(seg)
             val key = keyParts.joinToString("/")
             val cached = categoryPathCache[key]
@@ -389,13 +444,13 @@ class SefariaGenerator(
         return repository.insertCategory(cat)
     }
 
-    private suspend fun createBook(title: String, categoryId: Long): Long {
+    private suspend fun createBook(title: String, categoryId: Long, heShortDesc: String?): Long {
         val id = nextBookId++
         val book = Book(
             id = id,
             categoryId = categoryId,
             title = title,
-            heShortDesc = null,
+            heShortDesc = heShortDesc,
             order = 999f,
             totalLines = 0
         )
@@ -405,9 +460,14 @@ class SefariaGenerator(
 
     private suspend fun processBookContents(bookId: Long, title: String, file: Path) {
         logger.i { "Processing '$title' (bookId=$bookId)" }
-        val rawLines = file.readLines(Charsets.UTF_8)
+        val key = toLibraryRelativeKey(file)
+        val rawLines = fileContentCache[key] ?: file.readLines(Charsets.UTF_8)
         val start = guessContentStartIndex(rawLines)
         val lines = if (start in rawLines.indices) rawLines.drop(start) else rawLines
+
+        // Keep in RAM for link processing
+        bookContentCache[bookId] = lines
+        val lineIds = LongArray(lines.size) { 0L }
 
         var lineIndex = 0
         val parentStack = mutableMapOf<Int, Long>()
@@ -433,13 +493,15 @@ class SefariaGenerator(
                         content = trimmed
                     )
                 )
+                if (lineIndex < lineIds.size) lineIds[lineIndex] = headingLineId
 
                 // Insert TOC entry (temporary: no children/last flags yet)
+                val tocText = computeHebrewTocTextForLevel(title, level, trimmed)
                 val tocEntry = TocEntry(
                     id = tocId,
                     bookId = bookId,
                     parentId = parentId,
-                    text = headerText(trimmed),
+                    text = tocText,
                     level = level,
                     lineId = null,
                     isLastChild = false,
@@ -469,6 +531,7 @@ class SefariaGenerator(
                         content = l
                     )
                 )
+                if (lineIndex < lineIds.size) lineIds[lineIndex] = contentLineId
                 currentOwningTocId?.let { lineTocPairs.add(contentLineId to it) }
                 lineIndex += 1
             }
@@ -488,6 +551,8 @@ class SefariaGenerator(
 
         // Update book lines count
         repository.updateBookTotalLines(bookId, lineIndex)
+        // Store line ids mapping
+        lineIdsByBook[bookId] = lineIds
     }
 
     // Heuristics to skip the Sefaria merged.txt banner/header.
@@ -503,10 +568,17 @@ class SefariaGenerator(
     }
 
     // Extract the textual part to store in tocText (drop numbering keywords when possible).
-    private fun headerText(line: String): String {
-        val t = line.trim()
-        // Keep the full text; it’s safer across corpora. Can be refined per corpus if needed.
-        return t
+    // Compute Hebrew TOC text from schema section names when available
+    private fun computeHebrewTocTextForLevel(enTitle: String, level: Int, rawHeader: String): String {
+        val heNames = heSectionNamesByTitle[enTitle]
+        if (heNames != null && level in 1..heNames.size) {
+            val n = extractLeadingNumber(rawHeader)
+            val label = heNames[level - 1]
+            if (n != null) return "$label $n"
+            return label
+        }
+        // Fallback: return the raw header as-is
+        return rawHeader.trim()
     }
 
     // Detects heading levels for common Sefaria merged.txt patterns.
@@ -537,5 +609,128 @@ class SefariaGenerator(
             return 2
 
         return 0
+    }
+
+    // ===== Hebrew normalization =====
+
+    private fun containsHebrew(s: String): Boolean = s.any { ch -> ch.code in 0x0590..0x05FF }
+
+    private fun extractHebrewTitle(file: Path): String? {
+        val key = toLibraryRelativeKey(file)
+        val lines = fileContentCache[key] ?: return null
+        // Inspect the first ~8 lines to find a strong Hebrew title candidate
+        val head = lines.take(8)
+        var best: String? = null
+        var bestScore = -1
+        for (ln in head) {
+            val score = ln.count { it.code in 0x0590..0x05FF }
+            if (score > bestScore) {
+                bestScore = score
+                best = ln.trim()
+            }
+        }
+        // Filter out boilerplate markers
+        if (best != null && best!!.isNotBlank() && !best.equals("merged", ignoreCase = true) && !best.startsWith("http", true)) {
+            return best
+        }
+        return null
+    }
+
+    // ===== Load Hebrew metadata from Sefaria exports =====
+
+    private fun loadHeTitlesFromToc() {
+        val tocFile = sefariaRoot.resolve("export_toc").resolve("table_of_contents.json")
+        if (!Files.isRegularFile(tocFile)) return
+        runCatching {
+            val text = tocFile.readLines(Charsets.UTF_8).joinToString("\n")
+            val root = json.parseToJsonElement(text)
+            fun visit(node: kotlinx.serialization.json.JsonElement) {
+                val obj = node as? kotlinx.serialization.json.JsonObject ?: return
+                val title = obj["title"]?.toString()?.trim('"')
+                val he = obj["heTitle"]?.toString()?.trim('"')
+                val heShort = obj["heShortDesc"]?.toString()?.trim('"')
+                if (!title.isNullOrBlank() && !he.isNullOrBlank()) heTitleByEnTitle.putIfAbsent(title, he)
+                if (!title.isNullOrBlank() && !heShort.isNullOrBlank()) heShortDescByEnTitle.putIfAbsent(title, heShort)
+                val contents = obj["contents"] as? kotlinx.serialization.json.JsonArray
+                contents?.forEach { visit(it) }
+            }
+            when (root) {
+                is kotlinx.serialization.json.JsonArray -> root.forEach { visit(it) }
+                is kotlinx.serialization.json.JsonObject -> visit(root)
+                else -> { /* ignore */ }
+            }
+        }.onFailure { /* ignore */ }
+    }
+
+    private fun loadSectionNamesFromSchemas() {
+        val dir = sefariaRoot.resolve("export_schemas").resolve("schemas")
+        if (!Files.isDirectory(dir)) return
+        runCatching {
+            Files.list(dir).use { s ->
+                s.filter { Files.isRegularFile(it) && it.toString().endsWith(".json") }.forEach { p ->
+                    runCatching {
+                        val text = p.readLines(Charsets.UTF_8).joinToString("\n")
+                        val el = json.parseToJsonElement(text) as? kotlinx.serialization.json.JsonObject ?: return@runCatching
+                        val title = el["title"]?.toString()?.trim('"')
+                        val heTitle = el["heTitle"]?.toString()?.trim('"')
+                        val schema = el["schema"] as? kotlinx.serialization.json.JsonObject
+                        val heSec = schema?.get("heSectionNames") as? kotlinx.serialization.json.JsonArray
+                        val heList = heSec?.mapNotNull { it.toString().trim('"') } ?: emptyList()
+                        // heShortDesc at top-level schema
+                        val heShort = el["heShortDesc"]?.toString()?.trim('"')
+                        // categories and heCategories arrays for category mapping
+                        val catsEn = (el["categories"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { it.toString().trim('"') } ?: emptyList()
+                        val catsHe = (el["heCategories"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { it.toString().trim('"') } ?: emptyList()
+                        if (!title.isNullOrBlank()) {
+                            if (!heTitle.isNullOrBlank()) heTitleByEnTitle.putIfAbsent(title, heTitle)
+                            if (heList.isNotEmpty()) heSectionNamesByTitle.putIfAbsent(title, heList)
+                            if (!heShort.isNullOrBlank()) heShortDescByEnTitle.putIfAbsent(title, heShort)
+                        }
+                        if (catsEn.isNotEmpty() && catsEn.size == catsHe.size) {
+                            for (i in catsEn.indices) {
+                                val en = catsEn[i]
+                                val he = catsHe[i]
+                                if (en.isNotBlank() && he.isNotBlank()) heCategoryByEnCategory.putIfAbsent(en, he)
+                            }
+                        }
+                    }
+                }
+            }
+        }.onFailure { /* ignore */ }
+    }
+
+    // ===== Bulk mode & preload helpers =====
+
+    private suspend fun beginBulkMode() {
+        runCatching { repository.executeRawQuery("PRAGMA foreign_keys = OFF") }
+        runCatching { repository.setSynchronousOff() }
+        runCatching { repository.setJournalModeOff() }
+        runCatching { repository.executeRawQuery("PRAGMA cache_size=40000") }
+        runCatching { repository.executeRawQuery("PRAGMA temp_store=MEMORY") }
+    }
+
+    private suspend fun endBulkModeAndVacuum() {
+        runCatching { repository.setJournalModeWal() }
+        runCatching { repository.setSynchronousNormal() }
+        runCatching { repository.executeRawQuery("PRAGMA foreign_keys = ON") }
+        runCatching { repository.executeRawQuery("VACUUM") }
+    }
+
+    private fun toLibraryRelativeKey(file: Path): String = try {
+        libraryRoot.relativize(file).toString().replace('\\', '/')
+    } catch (_: Exception) {
+        file.fileName.toString()
+    }
+
+    private fun preloadAllBookContents(files: List<Path>) {
+        if (fileContentCache.isNotEmpty()) return
+        logger.i { "Preloading ${files.size} merged.txt files into RAM" }
+        for (p in files) {
+            runCatching {
+                val key = toLibraryRelativeKey(p)
+                fileContentCache[key] = p.readLines(Charsets.UTF_8)
+            }
+        }
+        logger.i { "Preloaded ${fileContentCache.size} files into RAM" }
     }
 }
