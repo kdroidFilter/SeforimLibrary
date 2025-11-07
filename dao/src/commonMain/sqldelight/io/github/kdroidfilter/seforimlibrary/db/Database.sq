@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS book (
     heShortDesc TEXT,
     orderIndex INTEGER NOT NULL DEFAULT 999,
     totalLines INTEGER NOT NULL DEFAULT 0,
+    isBaseBook INTEGER NOT NULL DEFAULT 0,
     hasTargumConnection INTEGER NOT NULL DEFAULT 0,
     hasReferenceConnection INTEGER NOT NULL DEFAULT 0,
     hasCommentaryConnection INTEGER NOT NULL DEFAULT 0,

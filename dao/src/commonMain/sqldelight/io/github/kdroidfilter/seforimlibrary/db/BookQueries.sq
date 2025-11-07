@@ -32,13 +32,17 @@ JOIN author a ON ba.authorId = a.id
 WHERE a.name LIKE ? 
 ORDER BY b.orderIndex, b.title;
 
+-- Base-books helpers
+selectBaseIds:
+SELECT id FROM book WHERE isBaseBook = 1 ORDER BY orderIndex, title;
+
 insert:
-INSERT INTO book (categoryId, title, heShortDesc, orderIndex, totalLines)
-VALUES (?, ?, ?, ?, ?);
+INSERT INTO book (categoryId, title, heShortDesc, orderIndex, totalLines, isBaseBook)
+VALUES (?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO book (id, categoryId, title, heShortDesc, orderIndex, totalLines)
-VALUES (?, ?, ?, ?, ?, ?);
+INSERT INTO book (id, categoryId, title, heShortDesc, orderIndex, totalLines, isBaseBook)
+VALUES (?, ?, ?, ?, ?, ?, ?);
 
 updateTotalLines:
 UPDATE book SET totalLines = ? WHERE id = ?;

@@ -45,6 +45,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
     }
 
+    
+
     // --- Line ⇄ TOC mapping ---
 
     /**
@@ -725,7 +727,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 title = book.title,
                 heShortDesc = book.heShortDesc,
                 orderIndex = book.order.toLong(),
-                totalLines = book.totalLines.toLong()
+                totalLines = book.totalLines.toLong(),
+                isBaseBook = if (book.isBaseBook) 1 else 0
             )
             logger.d{"Used insertWithId for book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}"}
 
@@ -775,7 +778,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 title = book.title,
                 heShortDesc = book.heShortDesc,
                 orderIndex = book.order.toLong(),
-                totalLines = book.totalLines.toLong()
+                totalLines = book.totalLines.toLong(),
+                isBaseBook = if (book.isBaseBook) 1 else 0
             )
             val id = database.bookQueriesQueries.lastInsertRowId().executeAsOne()
             logger.d{"Used insert for book '${book.title}', got ID: $id with categoryId: ${book.categoryId}"}
@@ -1613,6 +1617,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             val pubDates = getBookPubDates(bookData.id)
             bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
         }
+    }
+
+    /**
+     * Returns the IDs of all base books (isBaseBook = 1).
+     */
+    suspend fun getBaseBookIds(): List<Long> = withContext(Dispatchers.IO) {
+        database.bookQueriesQueries.selectBaseIds().executeAsList()
     }
 
     /**

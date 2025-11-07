@@ -425,7 +425,8 @@ class DatabaseGenerator(
     private suspend fun createAndProcessBook(
         path: Path,
         categoryId: Long,
-        metadata: Map<String, BookMetadata>
+        metadata: Map<String, BookMetadata>,
+        isBaseBook: Boolean = false
     ) {
         val filename = path.fileName.toString()
         val title = filename.substringBeforeLast('.')
@@ -461,7 +462,8 @@ class DatabaseGenerator(
             pubDates = pubDates,
             heShortDesc = meta?.heShortDesc,
             order = meta?.order ?: 999f,
-            topics = extractTopics(path)
+            topics = extractTopics(path),
+            isBaseBook = isBaseBook
         )
 
         logger.d { "Inserting book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}" }
@@ -858,7 +860,7 @@ class DatabaseGenerator(
             }
 
             logger.i { "⭐ Priority ${idx + 1}/${entries.size}: processing $bookFileName under categories ${categories.joinToString("/")}" }
-            createAndProcessBook(bookPath, parentId, metadata)
+            createAndProcessBook(bookPath, parentId, metadata, isBaseBook = true)
 
             // Mark as processed to avoid double insertion during full traversal
             processedPriorityBookKeys.add(key)
@@ -903,7 +905,7 @@ class DatabaseGenerator(
                 async {
                     val bookTitle = file.nameWithoutExtension.removeSuffix("_links")
                     val content = file.readText()
-                    val links = json.decodeFromString<List<LinkData>>(content)
+                    val links = parseLinksFromJson(content, bookTitle)
                     bookTitle to links
                 }
             }.mapNotNull { deferred ->
@@ -954,7 +956,7 @@ class DatabaseGenerator(
         try {
             val content = linkFile.readText()
             logger.d { "Link file content length: ${content.length}" }
-            val links = json.decodeFromString<List<LinkData>>(content)
+            val links = parseLinksFromJson(content, bookTitle)
             logger.d { "Decoded ${links.size} links from file" }
             var processed = 0
 
@@ -1249,6 +1251,31 @@ class DatabaseGenerator(
 
 
 
+    /**
+     * Parses links from JSON content, handling both Ben-YehudaToOtzaria and DictaToOtzaria formats
+     */
+    private fun parseLinksFromJson(content: String, bookTitle: String): List<LinkData> {
+        return try {
+            // First, try to parse as Ben-YehudaToOtzaria format (List<LinkData>)
+            json.decodeFromString<List<LinkData>>(content)
+        } catch (e: Exception) {
+            // If that fails, try to parse as DictaToOtzaria format (Map<String, List<DictaLinkData>>)
+            try {
+                val dictaLinksMap = json.decodeFromString<Map<String, List<DictaLinkData>>>(content)
+                logger.d { "Successfully parsed DictaToOtzaria format for $bookTitle with ${dictaLinksMap.size} line groups" }
+                
+                // Convert DictaToOtzaria format to LinkData format
+                // Note: DictaToOtzaria format doesn't map perfectly to LinkData structure
+                // We'll need to handle this conversion carefully or skip for now
+                logger.w { "DictaToOtzaria format conversion not yet implemented for $bookTitle" }
+                emptyList<LinkData>()
+            } catch (e2: Exception) {
+                logger.w(e2) { "Failed to parse links from file for $bookTitle in any known format" }
+                emptyList<LinkData>()
+            }
+        }
+    }
+
     // Internal classes
 
     /**
@@ -1264,4 +1291,15 @@ class DatabaseGenerator(
         @SerialName("Conection Type")
         val connectionType: String = ""
     )
+
+    /**
+     * Data class for DictaToOtzaria link format
+     */
+    @Serializable
+    private data class DictaLinkData(
+        val start: Int,
+        val end: Int,
+        val refs: Map<String, String>
+    )
+
 }

@@ -28,6 +28,7 @@ data class Book(
     val heShortDesc: String? = null,
     val order: Float = 999f,
     val totalLines: Int = 0,
+    val isBaseBook: Boolean = false,
     val hasTargumConnection: Boolean = false,
     val hasReferenceConnection: Boolean = false,
     val hasCommentaryConnection: Boolean = false,
