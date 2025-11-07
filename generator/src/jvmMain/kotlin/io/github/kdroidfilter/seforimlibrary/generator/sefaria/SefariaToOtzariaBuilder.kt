@@ -67,11 +67,13 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
     )
 
     suspend fun build(sefariaRoot: Path, outRoot: Path): Path = coroutineScope {
-        val parallelism = System.getProperty("sefariaParallelism")?.toIntOrNull()
+        val lowMem = (System.getProperty("sefariaLowMem") == "true") || (System.getenv("SEFARIA_LOW_MEM") == "true")
+        val parProp = System.getProperty("sefariaParallelism")?.toIntOrNull()
             ?: System.getenv("SEFARIA_PARALLELISM")?.toIntOrNull()
             ?: Runtime.getRuntime().availableProcessors()
+        val parallelism = if (lowMem) minOf(parProp, 4) else parProp
         val dispatcher = kotlinx.coroutines.Dispatchers.Default.limitedParallelism(parallelism)
-        logger.i { "Using parallelism=$parallelism for Sefaria→Otzaria build" }
+        logger.i { "Using parallelism=$parallelism for Sefaria→Otzaria build (lowMem=$lowMem)" }
         val toc = loadToc(sefariaRoot)
         val indexByTitle = indexTexts(sefariaRoot)
         val enToHe = toc.associate { normalizeTitle(it.enTitle) to (it.heTitle.ifBlank { it.enTitle }) }
@@ -90,27 +92,36 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
         }
         logger.i { "Planning to build ${toProcess.size} books from ToC" }
 
-        // Preload all schemas and texts into RAM
-        val allSchemaPaths = toProcess.mapNotNull { it.second.schemaPath }.distinct()
-        val schemaCache: Map<Path, JsonObject?> = coroutineScope {
-            allSchemaPaths.map { p -> async(dispatcher) { p to (runCatching { json.parseToJsonElement(p.readText()) }.getOrNull() as? JsonObject) } }
-                .awaitAll().toMap()
+        // Preload all schemas and texts into RAM unless lowMem
+        val schemaCache: Map<Path, JsonObject?>
+        val textCache: Map<Path, JsonElement>
+        if (!lowMem) {
+            val allSchemaPaths = toProcess.mapNotNull { it.second.schemaPath }.distinct()
+            schemaCache = coroutineScope {
+                allSchemaPaths.map { p -> async(dispatcher) { p to (runCatching { json.parseToJsonElement(p.readText()) }.getOrNull() as? JsonObject) } }
+                    .awaitAll().toMap()
+            }
+            val allTextPaths = toProcess.map { it.second.textPath }.distinct()
+            textCache = coroutineScope {
+                allTextPaths.map { p -> async(dispatcher) { p to (runCatching { json.parseToJsonElement(p.readText()) }.getOrNull()) } }
+                    .awaitAll().filter { it.second != null }.associate { it.first to it.second!! }
+            }
+            logger.i { "Preloaded ${schemaCache.size} schemas and ${textCache.size} texts into RAM" }
+        } else {
+            schemaCache = emptyMap()
+            textCache = emptyMap()
+            logger.i { "Low‑memory mode: no preload of schemas/texts" }
         }
-        val allTextPaths = toProcess.map { it.second.textPath }.distinct()
-        val textCache: Map<Path, JsonElement> = coroutineScope {
-            allTextPaths.map { p -> async(dispatcher) { p to (runCatching { json.parseToJsonElement(p.readText()) }.getOrNull()) } }
-                .awaitAll().filter { it.second != null }.associate { it.first to it.second!! }
-        }
-        logger.i { "Preloaded ${schemaCache.size} schemas and ${textCache.size} texts into RAM" }
 
-        // Pre-index all link CSVs into memory
-        val useCsvLinks = true
-        val linksByTitle = if (useCsvLinks) preindexLinks(linksRoot) else emptyMap()
-        logger.i { "Preindexed links for ${linksByTitle.size} titles" }
+        // Pre-index all link CSVs into memory unless lowMem or disabled
+        val useCsvLinks = (System.getProperty("sefariaCsvLinks")?.toBoolean()
+            ?: (System.getenv("SEFARIA_CSV_LINKS")?.toBoolean() ?: !lowMem))
+        val linksByTitle = if (useCsvLinks && !lowMem) preindexLinks(linksRoot) else emptyMap()
+        if (useCsvLinks && !lowMem) logger.i { "Preindexed links for ${linksByTitle.size} titles" } else logger.i { "CSV links preindex disabled (lowMem=$lowMem)" }
 
         // Thread-safe sink
         val metadataEntries = java.util.Collections.synchronizedList(mutableListOf<Map<String, Any?>>())
-        val filesToWrite = java.util.Collections.synchronizedList(mutableListOf<PendingFile>())
+        val filesToWrite = if (!lowMem) java.util.Collections.synchronizedList(mutableListOf<PendingFile>()) else null
         val enToOutTitle = java.util.concurrent.ConcurrentHashMap<String, String>()
         val heToOutTitle = java.util.concurrent.ConcurrentHashMap<String, String>()
         val outTitlesSet: MutableSet<String> = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
@@ -118,12 +129,16 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
         val allRefs = java.util.Collections.synchronizedList(mutableListOf<RefEntry>())
         
         // Process in parallel, in chunks to avoid oversubscription
-        toProcess.chunked(256).forEachIndexed { chunkIdx, chunk ->
-            logger.i { "Processing chunk ${chunkIdx + 1}/${(toProcess.size + 255) / 256}" }
+        val chunkSize = if (lowMem) 64 else 256
+        toProcess.chunked(chunkSize).forEachIndexed { chunkIdx, chunk ->
+            val totalChunks = (toProcess.size + chunkSize - 1) / chunkSize
+            logger.i { "Processing chunk ${chunkIdx + 1}/$totalChunks" }
             coroutineScope {
                 chunk.map { (book, idx) ->
                     async(dispatcher) {
-                        val schemaJson = idx.schemaPath?.let { schemaCache[it] }
+                        val schemaJson = if (!lowMem) idx.schemaPath?.let { schemaCache[it] } else idx.schemaPath?.let { p ->
+                            runCatching { json.parseToJsonElement(p.readText()) }.getOrNull() as? JsonObject
+                        }
                         val heTitle = book.heTitle.ifBlank { schemaJson?.get("heTitle")?.jsonPrimitive?.contentOrNull ?: book.enTitle }
                         val outTitle = sanitizeFilename(heTitle)
                         val bookRelDir = buildString {
@@ -134,17 +149,20 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
                             }
                         }
 
-                        val root = textCache[idx.textPath] ?: return@async
-                        val (content0, refs) = buildContentWithRefsFromCached(root, schemaJson)
+                        val root = if (!lowMem) textCache[idx.textPath] else runCatching { json.parseToJsonElement(idx.textPath.readText()) }.getOrNull()
+                            ?: return@async
+                        val (content0, refs) = buildContentWithRefsFromCached(root!!, schemaJson)
                         var content = content0
                         val (contentWithNotes, footnotes, footLinksJson) = extractFootnotesAndLinks(content, outTitle)
                         content = contentWithNotes
-                        filesToWrite.add(
-                            PendingFile(
-                                relPath = "$bookRelDir/${outTitle}.txt",
-                                content = content.joinToString(separator = "")
-                            )
-                        )
+                        val relMain = "$bookRelDir/${outTitle}.txt"
+                        if (filesToWrite != null) {
+                            filesToWrite.add(PendingFile(relPath = relMain, content = content.joinToString(separator = "")))
+                        } else {
+                            val abs = otzariaRoot.resolve(relMain)
+                            abs.parent?.let { Files.createDirectories(it) }
+                            Files.writeString(abs, content.joinToString(separator = ""))
+                        }
 
                         // Map EN base title -> output title used for file/DB
                         enToOutTitle[normalizeTitle(book.enTitle)] = outTitle
@@ -161,15 +179,16 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
                         metadataEntries.add(meta)
 
                         if (footnotes.isNotEmpty()) {
-                            filesToWrite.add(
-                                PendingFile(
-                                    relPath = "$bookRelDir/${"הערות על "+outTitle}.txt",
-                                    content = footnotes.joinToString("\n")
-                                )
-                            )
+                            val relNotes = "$bookRelDir/${"הערות על "+outTitle}.txt"
+                            if (filesToWrite != null) {
+                                filesToWrite.add(PendingFile(relPath = relNotes, content = footnotes.joinToString("\n")))
+                            } else {
+                                val abs = otzariaRoot.resolve(relNotes)
+                                abs.parent?.let { Files.createDirectories(it) }
+                                Files.writeString(abs, footnotes.joinToString("\n"))
+                            }
                         }
-                        val useCsvLinks = true
-                        val csvJson = if (useCsvLinks) exportLinksForBookIndexed(
+                        val csvJson = if (useCsvLinks && !lowMem) exportLinksForBookIndexed(
                             enTitle = book.enTitle,
                             heTitle = outTitle,
                             enToHe = enToHe,
@@ -180,7 +199,25 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
                         ) else null
                         val mergedLinks = mergeLinkJsonArrays(footLinksJson, csvJson)
                         if (mergedLinks != null && mergedLinks.isNotBlank()) {
-                            filesToWrite.add(PendingFile(relPath = "links/${outTitle}_links.json", content = mergedLinks))
+                            val rel = "links/${outTitle}_links.json"
+                            if (filesToWrite != null) {
+                                filesToWrite.add(PendingFile(relPath = rel, content = mergedLinks))
+                            } else {
+                                val abs = otzariaRoot.resolve(rel)
+                                abs.parent?.let { Files.createDirectories(it) }
+                                Files.writeString(abs, mergedLinks)
+                            }
+                        }
+                        // In lowMem mode with CSV-links enabled (rare), fallback to per-book scan
+                        if (csvJson == null && useCsvLinks && lowMem) {
+                            // This writes directly to disk
+                            exportLinksForBook(
+                                linksRoot = linksRoot,
+                                linksOut = otzariaRoot.resolve("links"),
+                                enTitle = book.enTitle,
+                                heTitle = outTitle,
+                                enToHe = enToHe,
+                            )
                         }
                     }
                 }.awaitAll()
@@ -196,21 +233,29 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
             }
             append("]")
         }
-        filesToWrite.add(PendingFile(relPath = "metadata.json", content = metaJson))
+        if (filesToWrite != null) {
+            filesToWrite.add(PendingFile(relPath = "metadata.json", content = metaJson))
+        } else {
+            val abs = otzariaRoot.resolve("metadata.json"); Files.writeString(abs, metaJson)
+        }
 
         // Flush all pending files to disk at the very end (parallelized)
-        filesToWrite.chunked(256).forEach { chunk ->
-            coroutineScope {
-                chunk.map { pf ->
-                    async(dispatcher) {
-                        val abs = otzariaRoot.resolve(pf.relPath)
-                        abs.parent?.let { Files.createDirectories(it) }
-                        Files.writeString(abs, pf.content)
-                    }
-                }.awaitAll()
+        if (filesToWrite != null) {
+            filesToWrite.chunked(256).forEach { chunk ->
+                coroutineScope {
+                    chunk.map { pf ->
+                        async(dispatcher) {
+                            val abs = otzariaRoot.resolve(pf.relPath)
+                            abs.parent?.let { Files.createDirectories(it) }
+                            Files.writeString(abs, pf.content)
+                        }
+                    }.awaitAll()
+                }
             }
+            logger.i { "Wrote ${filesToWrite.size} files to ${otzariaRoot.toAbsolutePath()} (metadata entries: ${metadataEntries.size})" }
+        } else {
+            logger.i { "Low‑memory mode: wrote files directly to ${otzariaRoot.toAbsolutePath()} (metadata entries: ${metadataEntries.size})" }
         }
-        logger.i { "Wrote ${filesToWrite.size} files to ${otzariaRoot.toAbsolutePath()} (metadata entries: ${metadataEntries.size})" }
 
         otzariaRoot
     }
@@ -770,44 +815,54 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
         val norm = normalizeTitle(enTitle)
         val entries = mutableListOf<String>()
         for (csv in csvFiles) {
-            val lines = runCatching { csv.readText() }.getOrDefault("").lines()
-            if (lines.isEmpty()) continue
-            val header = lines.first().split(',')
-            val idxText1 = header.indexOfFirst { it.trim().equals("Text 1", ignoreCase = true) }
-            val idxText2 = header.indexOfFirst { it.trim().equals("Text 2", ignoreCase = true) }
-            val idxConn = header.indexOfFirst { it.contains("Conection", ignoreCase = true) }
-            val idxCit1 = header.indexOfFirst { it.trim().startsWith("Citation 1") }
-            val idxCit2 = header.indexOfFirst { it.trim().startsWith("Citation 2") }
-            if (idxText1 < 0 || idxText2 < 0 || idxConn < 0 || idxCit1 < 0 || idxCit2 < 0) continue
-            for (row in lines.drop(1)) {
-                if (row.isBlank()) continue
-                val cols = splitCsvRow(row)
-                if (cols.size <= max(idxText1, idxText2)) continue
-                val t1 = cols[idxText1].trim('"')
-                val t2 = cols[idxText2].trim('"')
-                val who = when {
-                    normalizeTitle(t1) == norm -> 1
-                    normalizeTitle(t2) == norm -> 2
-                    else -> 0
+            runCatching {
+                Files.newBufferedReader(csv).use { br ->
+                    val headerLine = br.readLine() ?: return@use
+                    val header = headerLine.split(',')
+                    val idxText1 = header.indexOfFirst { it.trim().equals("Text 1", ignoreCase = true) }
+                    val idxText2 = header.indexOfFirst { it.trim().equals("Text 2", ignoreCase = true) }
+                    val idxConn = header.indexOfFirst { it.contains("Conection", ignoreCase = true) }
+                    val idxCit1 = header.indexOfFirst { it.trim().startsWith("Citation 1") }
+                    val idxCit2 = header.indexOfFirst { it.trim().startsWith("Citation 2") }
+                    if (idxText1 < 0 || idxText2 < 0 || idxConn < 0 || idxCit1 < 0 || idxCit2 < 0) return@use
+                    var row: String? = br.readLine()
+                    while (row != null) {
+                        if (row.isNotBlank()) {
+                            val cols = splitCsvRow(row)
+                            if (cols.size > max(idxText1, idxText2)) {
+                                val t1 = cols[idxText1].trim('"')
+                                val t2 = cols[idxText2].trim('"')
+                                val who = when {
+                                    normalizeTitle(t1) == norm -> 1
+                                    normalizeTitle(t2) == norm -> 2
+                                    else -> 0
+                                }
+                                if (who != 0) {
+                                    val cit1 = cols.getOrNull(idxCit1)?.trim('"')
+                                    val cit2 = cols.getOrNull(idxCit2)?.trim('"')
+                                    val conn = cols.getOrNull(idxConn)?.trim('"') ?: "other"
+                                    if (cit1 != null && cit2 != null) {
+                                        val lineIdx1 = extractLineIndex(cit1)
+                                        val lineIdx2 = extractLineIndex(cit2)
+                                        if (lineIdx1 != null && lineIdx2 != null) {
+                                            val path2TitleEn = if (who == 1) t2 else t1
+                                            val heTarget = enToHe[normalizeTitle(path2TitleEn)] ?: path2TitleEn
+                                            val item = mapOf(
+                                                "line_index_1" to lineIdx1,
+                                                "heRef_2" to heTarget,
+                                                "path_2" to "$heTarget.txt",
+                                                "line_index_2" to lineIdx2,
+                                                "Conection Type" to conn
+                                            )
+                                            entries += mapToJson(item)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        row = br.readLine()
+                    }
                 }
-                if (who == 0) continue
-                val cit1 = cols.getOrNull(idxCit1)?.trim('"') ?: continue
-                val cit2 = cols.getOrNull(idxCit2)?.trim('"') ?: continue
-                val conn = cols.getOrNull(idxConn)?.trim('"') ?: "other"
-                // We don’t have exact line indices here; make best-effort: skip unless simple digit
-                val lineIdx1 = extractLineIndex(cit1) ?: continue
-                val lineIdx2 = extractLineIndex(cit2) ?: continue
-                val path2TitleEn = if (who == 1) t2 else t1
-                val heTarget = enToHe[normalizeTitle(path2TitleEn)] ?: path2TitleEn
-                val item = mapOf(
-                    "line_index_1" to lineIdx1,
-                    "heRef_2" to heTarget,
-                    // DatabaseGenerator extracts the target title from file name; ensure Hebrew title + .txt
-                    "path_2" to "$heTarget.txt",
-                    "line_index_2" to lineIdx2,
-                    "Conection Type" to conn
-                )
-                entries += mapToJson(item)
             }
         }
         if (entries.isNotEmpty()) {

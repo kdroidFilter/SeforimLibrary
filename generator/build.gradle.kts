@@ -221,7 +221,7 @@ tasks.register<JavaExec>("generateLines") {
     }
 
     jvmArgs = listOf(
-        "-Xmx15g",
+        "-Xmx20g",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200",
         "--enable-native-access=ALL-UNNAMED",
