@@ -78,6 +78,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json, authors: L
         pubPlaces = pubPlaces,
         pubDates = pubDates,
         heShortDesc = heShortDesc,
+        notesContent = notesContent,
         order = orderIndex.toFloat(),
         totalLines = totalLines.toInt(),
         isBaseBook = isBaseBook == 1L,

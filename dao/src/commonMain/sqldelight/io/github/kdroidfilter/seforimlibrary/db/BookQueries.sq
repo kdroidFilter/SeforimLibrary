@@ -37,12 +37,12 @@ selectBaseIds:
 SELECT id FROM book WHERE isBaseBook = 1 ORDER BY orderIndex, title;
 
 insert:
-INSERT INTO book (categoryId, title, heShortDesc, orderIndex, totalLines, isBaseBook)
-VALUES (?, ?, ?, ?, ?, ?);
+INSERT INTO book (categoryId, title, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook)
+VALUES (?, ?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO book (id, categoryId, title, heShortDesc, orderIndex, totalLines, isBaseBook)
-VALUES (?, ?, ?, ?, ?, ?, ?);
+INSERT INTO book (id, categoryId, title, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 updateTotalLines:
 UPDATE book SET totalLines = ? WHERE id = ?;

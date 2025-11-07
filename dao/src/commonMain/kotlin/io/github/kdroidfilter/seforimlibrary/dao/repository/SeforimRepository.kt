@@ -28,7 +28,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     init {
 
         logger.d{"Initializing SeforimRepository"}
-        // Create the database schema if it doesn't exist
+        // Create the database schema (fresh builds only; no runtime migrations needed)
         SeforimDb.Schema.create(driver)
         // SQLite optimizations
         driver.execute(null, "PRAGMA journal_mode=WAL", 0)
@@ -726,6 +726,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 categoryId = book.categoryId,
                 title = book.title,
                 heShortDesc = book.heShortDesc,
+                notesContent = book.notesContent,
                 orderIndex = book.order.toLong(),
                 totalLines = book.totalLines.toLong(),
                 isBaseBook = if (book.isBaseBook) 1 else 0
@@ -777,6 +778,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 categoryId = book.categoryId,
                 title = book.title,
                 heShortDesc = book.heShortDesc,
+                notesContent = book.notesContent,
                 orderIndex = book.order.toLong(),
                 totalLines = book.totalLines.toLong(),
                 isBaseBook = if (book.isBaseBook) 1 else 0

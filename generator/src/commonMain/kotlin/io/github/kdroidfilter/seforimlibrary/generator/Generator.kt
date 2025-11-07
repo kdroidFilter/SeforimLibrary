@@ -109,7 +109,10 @@ class DatabaseGenerator(
                 // Estimate total number of books (txt files) for progress tracking
                 totalBooksToProcess = try {
                     Files.walk(libraryRoot).use { s ->
-                        s.filter { Files.isRegularFile(it) && it.extension == "txt" }.count().toInt()
+                        s.filter { Files.isRegularFile(it) && it.extension == "txt" }
+                            .filter { !it.fileName.toString().substringBeforeLast('.')
+                                .startsWith("הערות על ") }
+                            .count().toInt()
                     }
                 } catch (_: Exception) { 0 }
                 logger.i { "Planned to process approximately $totalBooksToProcess books" }
@@ -190,7 +193,10 @@ class DatabaseGenerator(
 
                 totalBooksToProcess = try {
                     Files.walk(libraryRoot).use { s ->
-                        s.filter { Files.isRegularFile(it) && it.extension == "txt" }.count().toInt()
+                        s.filter { Files.isRegularFile(it) && it.extension == "txt" }
+                            .filter { !it.fileName.toString().substringBeforeLast('.')
+                                .startsWith("הערות על ") }
+                            .count().toInt()
                     }
                 } catch (_: Exception) { 0 }
                 logger.i { "Planned to process approximately $totalBooksToProcess books (phase 1)" }
@@ -360,6 +366,13 @@ class DatabaseGenerator(
                             logger.i { "⏭️ Skipping already-processed priority book: $key" }
                             continue
                         }
+                        // Skip companion notes files named 'הערות על <title>.txt'.
+                        val fname = entry.fileName.toString()
+                        val titleNoExt = fname.substringBeforeLast('.')
+                        if (titleNoExt.startsWith("הערות על ")) {
+                            logger.i { "📝 Skipping notes file '$fname' (will be attached to base book if present)" }
+                            continue
+                        }
                         if (parentCategoryId == null) {
                             logger.w { "❌ Book found without category: $entry" }
                             continue
@@ -453,6 +466,19 @@ class DatabaseGenerator(
             listOf(PubDate(date = pubDateValue))
         } ?: emptyList()
 
+        // Detect companion notes file named 'הערות על <title>.txt' in the same directory
+        val notesContent: String? = runCatching {
+            val dir = path.parent
+            val notesTitle = "הערות על $title"
+            val candidate = dir.resolve("$notesTitle.txt")
+            if (Files.isRegularFile(candidate)) {
+                // Prefer preloaded cache if available
+                val key = toLibraryRelativeKey(candidate)
+                val lines = bookContentCache[key]
+                if (lines != null) lines.joinToString("\n") else candidate.readText(Charsets.UTF_8)
+            } else null
+        }.getOrNull()
+
         val book = Book(
             id = currentBookId,
             categoryId = categoryId,
@@ -461,6 +487,7 @@ class DatabaseGenerator(
             pubPlaces = pubPlaces,
             pubDates = pubDates,
             heShortDesc = meta?.heShortDesc,
+            notesContent = notesContent,
             order = meta?.order ?: 999f,
             topics = extractTopics(path),
             isBaseBook = isBaseBook
@@ -826,6 +853,11 @@ class DatabaseGenerator(
             // Last part is the book filename, everything before are categories
             val categories = if (parts.size > 1) parts.dropLast(1) else emptyList()
             val bookFileName = parts.last()
+            // Skip notes-only entries from priority list
+            if (bookFileName.substringBeforeLast('.').startsWith("הערות על ")) {
+                logger.i { "⏭️ Skipping notes file in priority list: $bookFileName" }
+                continue@outer
+            }
 
             // Fold into actual filesystem path
             var currentPath = libraryRoot
