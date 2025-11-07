@@ -38,6 +38,8 @@ kotlin {
             // (No external Hebrew morphology module required)
             implementation("com.github.luben:zstd-jni:1.5.7-6")
             implementation("org.apache.commons:commons-compress:1.26.2")
+            // In-memory filesystem for fully RAM-based build + import
+            implementation("com.google.jimfs:jimfs:1.3.0")
         }
 
     }
@@ -161,10 +163,23 @@ tasks.register<JavaExec>("generateSefaria") {
     systemProperty("sefariaRoot", rootPath)
 
     jvmArgs = listOf(
-        "-Xmx38g",
+        "-Xmx10g",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200"
     )
+}
+
+// Ad-hoc runner to validate object-wrapped Sefaria texts (single book check)
+tasks.register<JavaExec>("runSefariaSingleCheck") {
+    group = "verification"
+    description = "Run a small check that flattens a single Sefaria book (Chayei Moharan)."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.sefaria.TestSingleKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    // Modest heap for quick check
+    jvmArgs = listOf("-Xmx1g")
 }
 
 
@@ -206,7 +221,7 @@ tasks.register<JavaExec>("generateLines") {
     }
 
     jvmArgs = listOf(
-        "-Xmx10g",
+        "-Xmx15g",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200",
         "--enable-native-access=ALL-UNNAMED",

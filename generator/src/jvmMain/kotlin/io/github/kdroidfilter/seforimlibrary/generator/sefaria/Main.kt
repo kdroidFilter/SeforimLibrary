@@ -7,6 +7,8 @@ import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import io.github.kdroidfilter.seforimlibrary.generator.DatabaseGenerator
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
@@ -46,26 +48,34 @@ fun main() = runBlocking {
             }
             error(msg)
         }
+    logger.i { "Resolved Sefaria root at ${sefariaRoot.toAbsolutePath()}" }
     val outRoot = Paths.get("build", "otzaria", "from-sefaria").toAbsolutePath()
+    logger.i { "Will flush Otzaria source to ${outRoot.toAbsolutePath()}" }
 
     // Prepare DB
     val dbPath = System.getProperty("seforimDb")
         ?: System.getenv("SEFORIM_DB")
         ?: Paths.get("build", "seforim.db").toString()
-    val useMemoryDb = (System.getProperty("inMemoryDb") == "true") || dbPath == ":memory:"
+    // Default to in-memory DB for fully RAM-based generation unless explicitly disabled
+    val useMemoryDb = if (System.getProperty("inMemoryDb") == "false") false else true
     val persistDbPath = System.getProperty("persistDb")
         ?: System.getenv("SEFORIM_DB_OUT")
-        ?: Paths.get("build", "seforim.db").toString()
+        ?: (if (dbPath == ":memory:") Paths.get("build", "seforim.db").toString() else dbPath)
+    logger.i { "DB target: ${if (useMemoryDb) ":memory:" else dbPath} (persist to: $persistDbPath)" }
 
     if (!Files.isDirectory(sefariaRoot)) {
         error("Sefaria root not found at: ${sefariaRoot.toAbsolutePath()}")
     }
-    Files.createDirectories(outRoot)
-
-    // Build Otzaria-like source tree from Sefaria exports
+    // Build Otzaria-like source tree fully in RAM (Jimfs), then import to DB
     val builder = SefariaToOtzariaBuilder(logger)
-    val builtRoot = builder.build(sefariaRoot = sefariaRoot, outRoot = outRoot)
-    logger.i { "Sefaria → Otzaria source built at: ${builtRoot.toAbsolutePath()}" }
+    val tBuildStart = System.nanoTime()
+    val buildMem = builder.buildToMemoryFs(sefariaRoot = sefariaRoot)
+    val tBuildEnd = System.nanoTime()
+    val builtRoot = buildMem.fsRoot
+    logger.i {
+        val durMs = (tBuildEnd - tBuildStart) / 1_000_000
+        "Sefaria → Otzaria source built in RAM: files=${buildMem.filesCount}, metadata=${buildMem.metadataCount}, duration=${durMs}ms"
+    }
 
     // Rotate DB if writing directly to disk
     if (!useMemoryDb) {
@@ -84,6 +94,8 @@ fun main() = runBlocking {
     val repository = SeforimRepository(dbPath, driver)
 
     try {
+        val tGenStart = System.nanoTime()
+        logger.i { "Initializing DatabaseGenerator and starting import…" }
         val generator = DatabaseGenerator(
             sourceDirectory = builtRoot,
             repository = repository,
@@ -93,6 +105,8 @@ fun main() = runBlocking {
         )
         // Full generation (categories/books/lines + links)
         generator.generate()
+        val tGenEnd = System.nanoTime()
+        logger.i { "DB generation completed in ${(tGenEnd - tGenStart) / 1_000_000}ms" }
         if (useMemoryDb) {
             // Persist in-memory DB to disk using VACUUM INTO (target must not exist)
             runCatching {
@@ -105,15 +119,45 @@ fun main() = runBlocking {
                     logger.i { "Existing DB moved to ${backup.absolutePath}" }
                 }
                 val escaped = persistDbPath.replace("'", "''")
-                logger.i { "Persisting in-memory DB to $persistDbPath via VACUUM INTO..." }
+                val tVacStart = System.nanoTime()
+                logger.i { "Persisting in-memory DB to $persistDbPath via VACUUM INTO…" }
                 repository.executeRawQuery("VACUUM INTO '$escaped'")
-                logger.i { "In-memory DB persisted to $persistDbPath" }
+                val tVacEnd = System.nanoTime()
+                logger.i { "In-memory DB persisted to $persistDbPath in ${(tVacEnd - tVacStart) / 1_000_000}ms" }
             }.onFailure { e ->
                 logger.e(e) { "Failed to persist in-memory DB to $persistDbPath" }
                 throw e
             }
         }
-        logger.i { "Sefaria generation completed. DB at ${if (useMemoryDb) persistDbPath else dbPath}" }
+        // After DB is done, flush the RAM-built Otzaria tree to disk (outRoot) in parallel
+        Files.createDirectories(outRoot)
+        val parallelism = System.getProperty("sefariaParallelism")?.toIntOrNull()
+            ?: System.getenv("SEFARIA_PARALLELISM")?.toIntOrNull()
+            ?: Runtime.getRuntime().availableProcessors()
+        val dispatcher = kotlinx.coroutines.Dispatchers.IO.limitedParallelism(parallelism)
+        kotlinx.coroutines.runBlocking {
+            val tFlushStart = System.nanoTime()
+            val paths = mutableListOf<Path>()
+            Files.walk(builtRoot).use { s -> s.forEach { paths.add(it) } }
+            // Create directories first
+            for (p in paths) if (Files.isDirectory(p)) Files.createDirectories(outRoot.resolve(builtRoot.relativize(p).toString()))
+            // Copy files in parallel
+            kotlinx.coroutines.coroutineScope {
+                val files = paths.filter { Files.isRegularFile(it) }
+                logger.i { "Copying ${files.size} files to ${outRoot.toAbsolutePath()} using parallelism=$parallelism" }
+                files.map { src ->
+                    async(dispatcher) {
+                        val rel = builtRoot.relativize(src)
+                        val dst = outRoot.resolve(rel.toString())
+                        Files.createDirectories(dst.parent)
+                        Files.copy(src, dst, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    }
+                }.forEach { it.await() }
+            }
+            val tFlushEnd = System.nanoTime()
+            logger.i { "Flushed source to disk in ${(tFlushEnd - tFlushStart) / 1_000_000}ms" }
+        }
+        logger.i { "Sefaria generation completed. Source flushed to ${outRoot.toAbsolutePath()} | DB at ${if (useMemoryDb) persistDbPath else dbPath}" }
     } finally {
         repository.close()
     }
