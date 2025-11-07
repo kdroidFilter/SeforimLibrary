@@ -1,6 +1,9 @@
 package io.github.kdroidfilter.seforimlibrary.generator.sefaria
 
 import co.touchlab.kermit.Logger
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -39,12 +42,10 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
         val schemaPath: Path?   // export_schemas/schemas/<Normalized>.json (if found)
     )
 
-    fun build(sefariaRoot: Path, outRoot: Path): Path {
+    suspend fun build(sefariaRoot: Path, outRoot: Path): Path = coroutineScope {
         val toc = loadToc(sefariaRoot)
         val indexByTitle = indexTexts(sefariaRoot)
-        // enTitle (normalized) -> heTitle
         val enToHe = toc.associate { normalizeTitle(it.enTitle) to (it.heTitle.ifBlank { it.enTitle }) }
-        val schemasRoot = sefariaRoot.resolve("export_schemas").resolve("schemas")
         val linksRoot = sefariaRoot.resolve("export_links").resolve("links")
 
         val otzariaRoot = outRoot
@@ -54,45 +55,76 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
         Files.createDirectories(libRoot)
         Files.createDirectories(linksOut)
 
-        // Collect metadata entries as we write books
-        val metadataEntries = mutableListOf<Map<String, Any?>>()
+        // Reduce to only books with available text
+        val toProcess = toc.mapNotNull { book ->
+            val idx = indexByTitle[normalizeTitle(book.enTitle)] ?: return@mapNotNull null
+            book to idx
+        }
+        logger.i { "Planning to build ${toProcess.size} books from ToC" }
 
-        var written = 0
-        for (book in toc) {
-            val idx = indexByTitle[normalizeTitle(book.enTitle)] ?: continue
-            // Load schema JSON to pull descriptive fields
-            val schemaJson = idx.schemaPath?.let { runCatching { json.parseToJsonElement(it.readText()) }.getOrNull() } as? JsonObject
-            val heTitle = book.heTitle.ifBlank { schemaJson?.get("heTitle")?.jsonPrimitive?.contentOrNull ?: book.enTitle }
-            val outDir = libRoot
-                .resolve(book.hePath.joinToString("/") { sanitizeFilename(it) })
-                .resolve(sanitizeFilename(heTitle))
-            outDir.createDirectories()
+        // Preload all schemas and texts into RAM
+        val allSchemaPaths = toProcess.mapNotNull { it.second.schemaPath }.distinct()
+        val schemaCache: Map<Path, JsonObject?> = coroutineScope {
+            allSchemaPaths.map { p -> async { p to (runCatching { json.parseToJsonElement(p.readText()) }.getOrNull() as? JsonObject) } }
+                .awaitAll().toMap()
+        }
+        val allTextPaths = toProcess.map { it.second.textPath }.distinct()
+        val textCache: Map<Path, JsonElement> = coroutineScope {
+            allTextPaths.map { p -> async { p to (runCatching { json.parseToJsonElement(p.readText()) }.getOrNull()) } }
+                .awaitAll().filter { it.second != null }.associate { it.first to it.second!! }
+        }
+        logger.i { "Preloaded ${schemaCache.size} schemas and ${textCache.size} texts into RAM" }
 
-            // Build content lines from Sefaria JSON and schema
-            val content = buildContent(idx.textPath, schemaJson)
-            val outTxt = outDir.resolve("${sanitizeFilename(heTitle)}.txt")
-            Files.writeString(outTxt, content.joinToString(separator = ""))
+        // Pre-index all link CSVs into memory
+        val linksByTitle = preindexLinks(linksRoot)
+        logger.i { "Preindexed links for ${linksByTitle.size} titles" }
 
-            // Minimal metadata row compatible with DatabaseGenerator.BookMetadata
-            val meta = mutableMapOf<String, Any?>()
-            meta["title"] = heTitle
-            meta["author"] = (schemaJson?.get("authors") as? JsonArray)
-                ?.firstOrNull()?.jsonObject?.get("he")?.jsonPrimitive?.contentOrNull
-            meta["heShortDesc"] = asString(schemaJson?.get("heShortDesc"))
-            meta["pubDate"] = asString(schemaJson?.get("pubDate"))
-            meta["pubPlace"] = asString(schemaJson?.get("pubPlace"))
-            metadataEntries.add(meta)
+        // Thread-safe sink
+        val metadataEntries = java.util.Collections.synchronizedList(mutableListOf<Map<String, Any?>>())
 
-            // Try to produce per-book links from Sefaria CSVs (best-effort)
-            // Strategy: pick rows where Text 1 == enTitle or Text 2 == enTitle and write a book-specific JSON
-            runCatching { exportLinksForBook(linksRoot, linksOut, book.enTitle, heTitle, enToHe) }
-                .onFailure { e -> logger.w(e) { "Failed to build links for ${book.enTitle}" } }
+        // Process in parallel, in chunks to avoid oversubscription
+        toProcess.chunked(256).forEachIndexed { chunkIdx, chunk ->
+            logger.i { "Processing chunk ${chunkIdx + 1}/${(toProcess.size + 255) / 256}" }
+            coroutineScope {
+                chunk.map { (book, idx) ->
+                    async {
+                        val schemaJson = idx.schemaPath?.let { schemaCache[it] }
+                        val heTitle = book.heTitle.ifBlank { schemaJson?.get("heTitle")?.jsonPrimitive?.contentOrNull ?: book.enTitle }
+                        val outDir = libRoot
+                            .resolve(book.hePath.joinToString("/") { sanitizeFilename(it) })
+                            .resolve(sanitizeFilename(heTitle))
+                        outDir.createDirectories()
 
-            written += 1
-            if (written % 100 == 0) logger.i { "Built $written books so far" }
+                        val root = textCache[idx.textPath] ?: return@async
+                        val content = buildContentFromCached(root, schemaJson)
+                        val outTxt = outDir.resolve("${sanitizeFilename(heTitle)}.txt")
+                        Files.writeString(outTxt, content.joinToString(separator = ""))
+
+                        val meta = mutableMapOf<String, Any?>()
+                        meta["title"] = heTitle
+                        meta["author"] = (schemaJson?.get("authors") as? JsonArray)
+                            ?.firstOrNull()?.jsonObject?.get("he")?.jsonPrimitive?.contentOrNull
+                        meta["heShortDesc"] = asString(schemaJson?.get("heShortDesc"))
+                        meta["pubDate"] = asString(schemaJson?.get("pubDate"))
+                        meta["pubPlace"] = asString(schemaJson?.get("pubPlace"))
+                        metadataEntries.add(meta)
+
+                        // Links
+                        runCatching {
+                            exportLinksForBookIndexed(
+                                linksOut = linksOut,
+                                enTitle = book.enTitle,
+                                heTitle = heTitle,
+                                enToHe = enToHe,
+                                linksByTitle = linksByTitle,
+                            )
+                        }
+                    }
+                }.awaitAll()
+            }
         }
 
-        // Write metadata.json (as a list)
+        // Write metadata
         val metaJson = buildString {
             append("[")
             metadataEntries.forEachIndexed { i, m ->
@@ -104,7 +136,7 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
         Files.writeString(metadataOut, metaJson)
         logger.i { "Wrote metadata with ${metadataEntries.size} entries" }
 
-        return otzariaRoot
+        otzariaRoot
     }
 
     private fun loadToc(sefariaRoot: Path): List<TocBook> {
@@ -209,6 +241,47 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
         return lines
     }
 
+    private fun buildContentFromCached(root: JsonElement, schema: JsonObject?): List<String> {
+        val rootObj = (root as? JsonObject)
+        val text: JsonElement = if (rootObj != null) {
+            when (val t = rootObj["text"]) {
+                null -> {
+                    val versionsEl = rootObj["versions"]
+                    if (versionsEl is JsonArray) {
+                        val v0 = versionsEl.firstOrNull()
+                        when (v0) {
+                            is JsonObject -> v0["text"] ?: return emptyList()
+                            null -> return emptyList()
+                            else -> v0
+                        }
+                    } else return emptyList()
+                }
+                else -> t
+            }
+        } else root
+
+        val depth = schema?.get("schema")?.jsonObject?.get("depth")?.jsonPrimitive?.content?.toIntOrNull()
+        val heSectionNames = schema?.get("schema")?.jsonObject?.get("heSectionNames") as? JsonArray
+        val sectionNames = heSectionNames?.mapNotNull { it.jsonPrimitive.contentOrNull }
+
+        val lines = mutableListOf<String>()
+        val heTitle = schema?.get("heTitle")?.jsonPrimitive?.contentOrNull
+        heTitle?.let { addHeading(lines, 1, it) }
+        val authors = ((schema?.get("authors") as? JsonArray)
+            ?.mapNotNull { it.jsonObject["he"]?.jsonPrimitive?.contentOrNull }
+            ?: emptyList())
+        lines += ((authors.joinToString(", ") ) + "\n")
+
+        recursiveSections(
+            lines = lines,
+            sectionNames = sectionNames,
+            node = text,
+            depth = depth ?: inferDepth(text),
+            level = 2,
+        )
+        return lines
+    }
+
     private fun inferDepth(el: JsonElement): Int {
         return when (el) {
             is JsonArray -> if (el.isEmpty()) 0 else 1 + inferDepth(el.first())
@@ -233,9 +306,15 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
                 }
             }
         } else if (node is JsonArray) {
-            if (depth == 1 && node.size == 1 && node.firstOrNull()?.jsonPrimitive?.isString == true) {
-                recursiveSections(lines, sectionNames, node.first(), depth - 1, level)
-            } else {
+            if (depth == 1) {
+                val first = node.firstOrNull()
+                if (first is JsonPrimitive && first.isString) {
+                    recursiveSections(lines, sectionNames, first, depth - 1, level)
+                    return
+                }
+            }
+            if (node.isNotEmpty()) {
+                // Iterate children
                 for ((i, child) in node.withIndex()) {
                     if (!hasValue(child)) continue
                     val label = if (!sectionNames.isNullOrEmpty()) {
@@ -251,6 +330,8 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
                     if (label != null) lines += label
                     recursiveSections(lines, sectionNames, child, depth - 1, level + 1)
                 }
+            } else {
+                // Empty array → nothing
             }
         }
     }
@@ -262,9 +343,19 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
     }
 
     private fun hasValue(node: JsonElement): Boolean {
-        if (node is JsonArray) return node.any { hasValue(it) }
-        val s = node.jsonPrimitive.contentOrNull
-        return s != null && s.isNotBlank()
+        return when (node) {
+            is JsonArray -> node.any { hasValue(it) }
+            is JsonObject -> false
+            else -> {
+                val prim = try { node.jsonPrimitive } catch (e: Exception) { return false }
+                if (prim.isString) {
+                    prim.contentOrNull?.isNotBlank() == true
+                } else {
+                    val c = prim.contentOrNull?.lowercase()
+                    c != null && c != "false"
+                }
+            }
+        }
     }
 
     // Create footnote-like daf label as in Python to_daf
@@ -395,6 +486,85 @@ class SefariaToOtzariaBuilder(private val logger: Logger) {
         // Very rough: pull last number token in citation (e.g. "Book 12:3" -> 3)
         val m = Regex("(\\d+)([^0-9]*)$").find(citation.trim()) ?: return null
         return m.groupValues[1].toIntOrNull()
+    }
+
+    private data class LinkRow(
+        val citation1: String,
+        val citation2: String,
+        val connectionType: String,
+        val text1: String,
+        val text2: String,
+    )
+
+    private fun preindexLinks(linksRoot: Path): Map<String, List<LinkRow>> {
+        if (!linksRoot.exists()) return emptyMap()
+        val csvFiles = Files.list(linksRoot).use { it.filter { p -> p.isRegularFile() && p.name.endsWith(".csv") }.toList() }
+        if (csvFiles.isEmpty()) return emptyMap()
+        val acc = mutableMapOf<String, MutableList<LinkRow>>()
+        for (csv in csvFiles) {
+            val lines = runCatching { csv.readText() }.getOrDefault("").lines()
+            if (lines.isEmpty()) continue
+            val header = lines.first().split(',')
+            val idxText1 = header.indexOfFirst { it.trim().equals("Text 1", ignoreCase = true) }
+            val idxText2 = header.indexOfFirst { it.trim().equals("Text 2", ignoreCase = true) }
+            val idxConn = header.indexOfFirst { it.contains("Conection", ignoreCase = true) }
+            val idxCit1 = header.indexOfFirst { it.trim().startsWith("Citation 1") }
+            val idxCit2 = header.indexOfFirst { it.trim().startsWith("Citation 2") }
+            if (idxText1 < 0 || idxText2 < 0 || idxConn < 0 || idxCit1 < 0 || idxCit2 < 0) continue
+            for (row in lines.drop(1)) {
+                if (row.isBlank()) continue
+                val cols = splitCsvRow(row)
+                if (cols.size <= max(idxText1, idxText2)) continue
+                val r = LinkRow(
+                    citation1 = cols.getOrNull(idxCit1)?.trim('"') ?: continue,
+                    citation2 = cols.getOrNull(idxCit2)?.trim('"') ?: continue,
+                    connectionType = cols.getOrNull(idxConn)?.trim('"') ?: "other",
+                    text1 = cols[idxText1].trim('"'),
+                    text2 = cols[idxText2].trim('"'),
+                )
+                val k1 = normalizeTitle(r.text1)
+                val k2 = normalizeTitle(r.text2)
+                acc.getOrPut(k1) { mutableListOf() }.add(r)
+                acc.getOrPut(k2) { mutableListOf() }.add(r)
+            }
+        }
+        return acc
+    }
+
+    private fun exportLinksForBookIndexed(
+        linksOut: Path,
+        enTitle: String,
+        heTitle: String,
+        enToHe: Map<String, String>,
+        linksByTitle: Map<String, List<LinkRow>>,
+    ) {
+        val norm = normalizeTitle(enTitle)
+        val rows = linksByTitle[norm] ?: return
+        val entries = mutableListOf<String>()
+        for (r in rows) {
+            val who = when {
+                normalizeTitle(r.text1) == norm -> 1
+                normalizeTitle(r.text2) == norm -> 2
+                else -> 0
+            }
+            if (who == 0) continue
+            val lineIdx1 = extractLineIndex(r.citation1) ?: continue
+            val lineIdx2 = extractLineIndex(r.citation2) ?: continue
+            val path2TitleEn = if (who == 1) r.text2 else r.text1
+            val heTarget = enToHe[normalizeTitle(path2TitleEn)] ?: path2TitleEn
+            val item = mapOf(
+                "line_index_1" to lineIdx1,
+                "heRef_2" to heTarget,
+                "path_2" to "$heTarget.txt",
+                "line_index_2" to lineIdx2,
+                "Conection Type" to r.connectionType
+            )
+            entries += mapToJson(item)
+        }
+        if (entries.isNotEmpty()) {
+            val out = linksOut.resolve("${sanitizeFilename(heTitle)}_links.json")
+            Files.writeString(out, "[" + entries.joinToString(",") + "]")
+        }
     }
 
     private fun mapToJson(map: Map<*, *>): String {
