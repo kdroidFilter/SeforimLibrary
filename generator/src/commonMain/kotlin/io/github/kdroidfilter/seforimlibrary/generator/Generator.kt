@@ -55,6 +55,11 @@ class DatabaseGenerator(
     // Library root used for relative path normalization
     private lateinit var libraryRoot: Path
 
+    // Map from library-relative book key (e.g. "תנ"ך/בראשית.txt") to source name (e.g. "sefariaToOtzaria")
+    private val manifestSourcesByRel = mutableMapOf<String, String>()
+    // Cache of source name -> id from DB
+    private val sourceNameToId = mutableMapOf<String, Long>()
+
     // In-memory caches to accelerate link processing using available RAM
     private var booksByTitle: Map<String, Book> = emptyMap()
     private var booksById: Map<Long, Book> = emptyMap()
@@ -96,6 +101,10 @@ class DatabaseGenerator(
                 // Load metadata
                 val metadata = loadMetadata()
                 logger.i { "Metadata loaded: ${metadata.size} entries" }
+
+                // Load sources from files_manifest.json and upsert source table
+                loadSourcesFromManifest()
+                precreateSourceEntries()
 
                 // Process hierarchy
                 val libraryPath = sourceDirectory.resolve("אוצריא")
@@ -185,6 +194,9 @@ class DatabaseGenerator(
 
             repository.runInTransaction {
                 val metadata = loadMetadata()
+                // Load sources and create entries upfront
+                loadSourcesFromManifest()
+                precreateSourceEntries()
                 val libraryPath = sourceDirectory.resolve("אוצריא")
                 if (!libraryPath.exists()) {
                     throw IllegalStateException("The directory אוצריא does not exist in $sourceDirectory")
@@ -324,6 +336,68 @@ class DatabaseGenerator(
             logger.w { "Metadata file metadata.json not found" }
             emptyMap()
         }
+    }
+
+    @Serializable
+    private data class ManifestEntry(
+        val hash: String? = null
+    )
+
+    /**
+     * Loads `files_manifest.json` and builds a mapping from library-relative path
+     * (under אוצריא) to a source name (top-level directory of the manifest entry).
+     */
+    private suspend fun loadSourcesFromManifest() {
+        manifestSourcesByRel.clear()
+        // Prefer manifest in the provided source directory; fallback to repo path if present
+        val primary = sourceDirectory.resolve("files_manifest.json")
+        val fallback = Paths.get("otzaria-library/files_manifest.json")
+        val manifestPath = when {
+            primary.exists() -> primary
+            fallback.exists() -> fallback
+            else -> null
+        }
+        if (manifestPath == null) {
+            logger.w { "files_manifest.json not found; assigning source 'Unknown' to all books" }
+            return
+        }
+        runCatching {
+            val content = manifestPath.readText()
+            val map = json.decodeFromString<Map<String, ManifestEntry>>(content)
+            // For every manifest key, if it contains "/אוצריא/", index the subpath after it
+            for ((path, _) in map) {
+                val parts = path.split('/')
+                if (parts.isEmpty()) continue
+                val sourceName = parts.first()
+                val idx = parts.indexOf("אוצריא")
+                if (idx < 0 || idx == parts.size - 1) continue
+                val rel = parts.drop(idx + 1).joinToString("/")
+                // Keep first assignment, warn on duplicates
+                val prev = manifestSourcesByRel.putIfAbsent(rel, sourceName)
+                if (prev != null && prev != sourceName) {
+                    logger.w { "Duplicate source mapping for '$rel': existing=$prev new=$sourceName; keeping existing" }
+                }
+            }
+            logger.i { "Loaded ${manifestSourcesByRel.size} book→source mappings from manifest" }
+        }.onFailure { e ->
+            logger.w(e) { "Failed to parse files_manifest.json; sources will be 'Unknown'" }
+        }
+    }
+
+    /**
+     * Ensure all known source names from manifest are present in DB, including 'Unknown'.
+     */
+    private suspend fun precreateSourceEntries() {
+        // Always ensure 'Unknown' exists
+        val unknownId = repository.insertSource("Unknown")
+        sourceNameToId["Unknown"] = unknownId
+        // Insert all discovered sources
+        val uniqueSources = manifestSourcesByRel.values.toSet()
+        for (name in uniqueSources) {
+            val id = repository.insertSource(name)
+            sourceNameToId[name] = id
+        }
+        logger.i { "Prepared ${sourceNameToId.size} sources in DB" }
     }
 
 
@@ -479,9 +553,11 @@ class DatabaseGenerator(
             } else null
         }.getOrNull()
 
+        val sourceId = resolveSourceIdFor(path)
         val book = Book(
             id = currentBookId,
             categoryId = categoryId,
+            sourceId = sourceId,
             title = title,
             authors = authors,
             pubPlaces = pubPlaces,
@@ -910,6 +986,17 @@ class DatabaseGenerator(
             // Fallback to filename
             file.fileName.toString()
         }
+    }
+
+    // Resolve a source id for a book file using the manifest mapping
+    private suspend fun resolveSourceIdFor(file: Path): Long {
+        val rel = toLibraryRelativeKey(file)
+        val sourceName = manifestSourcesByRel[rel] ?: "Unknown"
+        val cached = sourceNameToId[sourceName]
+        if (cached != null) return cached
+        val id = repository.insertSource(sourceName)
+        sourceNameToId[sourceName] = id
+        return id
     }
 
     /**
