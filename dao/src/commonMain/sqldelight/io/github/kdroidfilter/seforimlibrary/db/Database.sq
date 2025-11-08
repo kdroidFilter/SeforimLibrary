@@ -53,10 +53,19 @@ CREATE TABLE IF NOT EXISTS pub_date (
 
 CREATE INDEX IF NOT EXISTS idx_pub_date_date ON pub_date(date);
 
+-- Sources table (origin of each book)
+CREATE TABLE IF NOT EXISTS source (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_name ON source(name);
+
 -- Books table
 CREATE TABLE IF NOT EXISTS book (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     categoryId INTEGER NOT NULL,
+    sourceId INTEGER NOT NULL,
     title TEXT NOT NULL,
     heShortDesc TEXT,
     -- Optional raw notes attached to the base book (when a companion file 'הערות על <title>' exists)
@@ -68,12 +77,14 @@ CREATE TABLE IF NOT EXISTS book (
     hasReferenceConnection INTEGER NOT NULL DEFAULT 0,
     hasCommentaryConnection INTEGER NOT NULL DEFAULT 0,
     hasOtherConnection INTEGER NOT NULL DEFAULT 0,
-    FOREIGN KEY (categoryId) REFERENCES category(id) ON DELETE CASCADE
+    FOREIGN KEY (categoryId) REFERENCES category(id) ON DELETE CASCADE,
+    FOREIGN KEY (sourceId) REFERENCES source(id) ON DELETE RESTRICT
 );
 
 CREATE INDEX IF NOT EXISTS idx_book_category ON book(categoryId);
 CREATE INDEX IF NOT EXISTS idx_book_title ON book(title);
 CREATE INDEX IF NOT EXISTS idx_book_order ON book(orderIndex);
+CREATE INDEX IF NOT EXISTS idx_book_source ON book(sourceId);
 
 -- Book-publication place junction table
 CREATE TABLE IF NOT EXISTS book_pub_place (

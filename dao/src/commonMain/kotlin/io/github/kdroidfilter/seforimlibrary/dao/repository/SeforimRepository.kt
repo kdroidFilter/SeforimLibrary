@@ -724,6 +724,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             database.bookQueriesQueries.insertWithId(
                 id = book.id,
                 categoryId = book.categoryId,
+                sourceId = book.sourceId,
                 title = book.title,
                 heShortDesc = book.heShortDesc,
                 notesContent = book.notesContent,
@@ -776,6 +777,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             // Fall back to auto-generated ID if book.id is 0
             database.bookQueriesQueries.insert(
                 categoryId = book.categoryId,
+                sourceId = book.sourceId,
                 title = book.title,
                 heShortDesc = book.heShortDesc,
                 notesContent = book.notesContent,
@@ -828,6 +830,34 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
             return@withContext id
         }
+    }
+
+    // --- Sources ---
+
+    /**
+     * Returns a Source by name, or null if not found.
+     */
+    suspend fun getSourceByName(name: String): Source? = withContext(Dispatchers.IO) {
+        database.sourceQueriesQueries.selectByName(name).executeAsOneOrNull()?.toModel()
+    }
+
+    /**
+     * Inserts a source if missing and returns its id.
+     */
+    suspend fun insertSource(name: String): Long = withContext(Dispatchers.IO) {
+        // Check existing
+        val existing = database.sourceQueriesQueries.selectByName(name).executeAsOneOrNull()
+        if (existing != null) return@withContext existing.id
+
+        database.sourceQueriesQueries.insert(name)
+        val id = database.sourceQueriesQueries.lastInsertRowId().executeAsOne()
+        if (id == 0L) {
+            // Try to read back just in case
+            val again = database.sourceQueriesQueries.selectByName(name).executeAsOneOrNull()
+            if (again != null) return@withContext again.id
+            throw RuntimeException("Failed to insert source '$name'")
+        }
+        id
     }
 
     suspend fun updateBookTotalLines(bookId: Long, totalLines: Int) = withContext(Dispatchers.IO) {

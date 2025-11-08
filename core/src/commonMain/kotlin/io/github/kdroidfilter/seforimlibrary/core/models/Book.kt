@@ -8,6 +8,7 @@ import kotlinx.serialization.Serializable
  * @property id The unique identifier of the book
  * @property categoryId The identifier of the category this book belongs to
  * @property title The title of the book
+ * @property sourceId The identifier of the source this book originates from
  * @property authors The list of authors of this book
  * @property topics The list of topics associated with this book
  * @property pubPlaces The list of publication places for this book
@@ -20,6 +21,7 @@ import kotlinx.serialization.Serializable
 data class Book(
     val id: Long = 0,
     val categoryId: Long,
+    val sourceId: Long,
     val title: String,
     val authors: List<Author> = emptyList(),
     val topics: List<Topic> = emptyList(),
