@@ -26,8 +26,12 @@ data class Book(
     val pubPlaces: List<PubPlace> = emptyList(),
     val pubDates: List<PubDate> = emptyList(),
     val heShortDesc: String? = null,
+    // Optional notes content: when a companion file named "הערות על <title>" exists,
+    // its content is attached here instead of being inserted as a separate book.
+    val notesContent: String? = null,
     val order: Float = 999f,
     val totalLines: Int = 0,
+    val isBaseBook: Boolean = false,
     val hasTargumConnection: Boolean = false,
     val hasReferenceConnection: Boolean = false,
     val hasCommentaryConnection: Boolean = false,

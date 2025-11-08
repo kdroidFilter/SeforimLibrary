@@ -28,7 +28,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     init {
 
         logger.d{"Initializing SeforimRepository"}
-        // Create the database schema if it doesn't exist
+        // Create the database schema (fresh builds only; no runtime migrations needed)
         SeforimDb.Schema.create(driver)
         // SQLite optimizations
         driver.execute(null, "PRAGMA journal_mode=WAL", 0)
@@ -44,6 +44,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             logger.d{"Error counting books: ${e.message}"}
         }
     }
+
+    
 
     // --- Line ⇄ TOC mapping ---
 
@@ -724,8 +726,10 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 categoryId = book.categoryId,
                 title = book.title,
                 heShortDesc = book.heShortDesc,
+                notesContent = book.notesContent,
                 orderIndex = book.order.toLong(),
-                totalLines = book.totalLines.toLong()
+                totalLines = book.totalLines.toLong(),
+                isBaseBook = if (book.isBaseBook) 1 else 0
             )
             logger.d{"Used insertWithId for book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}"}
 
@@ -774,8 +778,10 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 categoryId = book.categoryId,
                 title = book.title,
                 heShortDesc = book.heShortDesc,
+                notesContent = book.notesContent,
                 orderIndex = book.order.toLong(),
-                totalLines = book.totalLines.toLong()
+                totalLines = book.totalLines.toLong(),
+                isBaseBook = if (book.isBaseBook) 1 else 0
             )
             val id = database.bookQueriesQueries.lastInsertRowId().executeAsOne()
             logger.d{"Used insert for book '${book.title}', got ID: $id with categoryId: ${book.categoryId}"}
@@ -1613,6 +1619,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             val pubDates = getBookPubDates(bookData.id)
             bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
         }
+    }
+
+    /**
+     * Returns the IDs of all base books (isBaseBook = 1).
+     */
+    suspend fun getBaseBookIds(): List<Long> = withContext(Dispatchers.IO) {
+        database.bookQueriesQueries.selectBaseIds().executeAsList()
     }
 
     /**
