@@ -167,17 +167,46 @@ object OtzariaFetcher {
     }
 
     private fun removeUnwantedFolder(root: Path, logger: Logger) {
-        val unwanted = root.resolve("אוצריא").resolve("אודות התוכנה")
-        if (Files.exists(unwanted)) {
-            runCatching {
-                // Delete directory recursively
-                Files.walk(unwanted)
-                    .sorted(Comparator.reverseOrder())
-                    .forEach { Files.deleteIfExists(it) }
-                logger.i { "Removed unwanted folder: ${unwanted.toAbsolutePath()}" }
-            }.onFailure { e ->
-                logger.w(e) { "Failed removing unwanted folder at ${unwanted.toAbsolutePath()}" }
+        val base = root.resolve("אוצריא")
+        val namesToRemove = loadOtzariaFoldersToRemove(logger)
+        for (name in namesToRemove) {
+            val trimmed = name.trim()
+            if (trimmed.isEmpty()) continue
+            val dir = base.resolve(trimmed)
+            if (Files.exists(dir)) {
+                runCatching {
+                    Files.walk(dir)
+                        .sorted(Comparator.reverseOrder())
+                        .forEach { Files.deleteIfExists(it) }
+                    logger.i { "Removed unwanted folder: ${dir.toAbsolutePath()}" }
+                }.onFailure { e ->
+                    logger.w(e) { "Failed removing unwanted folder at ${dir.toAbsolutePath()}" }
+                }
             }
+        }
+    }
+
+    private fun loadOtzariaFoldersToRemove(logger: Logger): List<String> {
+        // Use only the resource file (no hardcoded fallback)
+        return try {
+            val resourceNames = listOf("otzaria-folder-to-remove.txt", "/otzaria-folder-to-remove.txt")
+            val cl = Thread.currentThread().contextClassLoader
+            val stream = resourceNames.asSequence()
+                .mapNotNull { name -> cl?.getResourceAsStream(name) ?: this::class.java.getResourceAsStream(name) }
+                .firstOrNull()
+            if (stream == null) {
+                logger.i { "No otzaria-folder-to-remove.txt resource found; no folders will be removed" }
+                return emptyList()
+            }
+            stream.bufferedReader(Charsets.UTF_8).use { br ->
+                br.lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() && !it.startsWith("#") }
+                    .toList()
+            }
+        } catch (e: Exception) {
+            logger.w(e) { "Failed to load otzaria-folder-to-remove.txt; no folders will be removed" }
+            emptyList()
         }
     }
 }
