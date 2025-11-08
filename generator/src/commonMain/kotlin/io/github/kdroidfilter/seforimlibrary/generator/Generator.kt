@@ -60,6 +60,9 @@ class DatabaseGenerator(
     // Cache of source name -> id from DB
     private val sourceNameToId = mutableMapOf<String, Long>()
 
+    // Source blacklist loaded from resources (fallback to default)
+    private val sourceBlacklist: Set<String> = loadSourceBlacklistFromResources()
+
     // In-memory caches to accelerate link processing using available RAM
     private var booksByTitle: Map<String, Book> = emptyMap()
     private var booksById: Map<Long, Book> = emptyMap()
@@ -291,7 +294,21 @@ class DatabaseGenerator(
         if (bookContentCache.isNotEmpty()) return
         logger.i { "Preloading book contents into RAM from $libraryPath ..." }
         val files = Files.walk(libraryPath).use { s ->
-            s.filter { Files.isRegularFile(it) && it.extension == "txt" }.toList()
+            s.filter { Files.isRegularFile(it) && it.extension == "txt" }
+                .filter { p ->
+                    // Skip notes files
+                    val name = p.fileName.toString().substringBeforeLast('.')
+                    if (name.startsWith("הערות על ")) return@filter false
+                    // Skip blacklisted sources when known
+                    val rel = runCatching { toLibraryRelativeKey(p) }.getOrElse { p.fileName.toString() }
+                    val src = manifestSourcesByRel[rel] ?: "Unknown"
+                    if (sourceBlacklist.contains(src)) {
+                        logger.d { "Skipping preload for blacklisted source '$src': $rel" }
+                        return@filter false
+                    }
+                    true
+                }
+                .toList()
         }
         // Parallelize reads
         val loaded = coroutineScope {
@@ -520,6 +537,16 @@ class DatabaseGenerator(
         val meta = metadata[title]
 
         logger.i { "Processing book: $title with categoryId: $categoryId" }
+
+        // Apply source blacklist
+        val srcName = getSourceNameFor(path)
+        if (sourceBlacklist.contains(srcName)) {
+            logger.i { "⛔ Skipping '$title' from blacklisted source '$srcName'" }
+            processedBooksCount += 1
+            val pct = if (totalBooksToProcess > 0) (processedBooksCount * 100 / totalBooksToProcess) else 0
+            logger.i { "Books progress: $processedBooksCount/$totalBooksToProcess (${pct}%)" }
+            return
+        }
 
         // Assign a unique ID to this book
         val currentBookId = nextBookId++
@@ -997,6 +1024,34 @@ class DatabaseGenerator(
         val id = repository.insertSource(sourceName)
         sourceNameToId[sourceName] = id
         return id
+    }
+
+    private fun getSourceNameFor(file: Path): String {
+        val rel = toLibraryRelativeKey(file)
+        return manifestSourcesByRel[rel] ?: "Unknown"
+    }
+
+    private fun loadSourceBlacklistFromResources(): Set<String> {
+        val fallback = setOf("wiki_jewish_books")
+        return try {
+            val resourceNames = listOf("source-blacklist.txt", "/source-blacklist.txt")
+            val cl = Thread.currentThread().contextClassLoader
+            val stream = resourceNames.asSequence()
+                .mapNotNull { name ->
+                    cl?.getResourceAsStream(name) ?: DatabaseGenerator::class.java.getResourceAsStream(name)
+                }
+                .firstOrNull()
+            if (stream == null) return fallback
+            stream.bufferedReader(Charsets.UTF_8).use { br ->
+                br.lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() && !it.startsWith("#") }
+                    .toSet()
+            }.ifEmpty { fallback }
+        } catch (e: Exception) {
+            Logger.withTag("DatabaseGenerator").w(e) { "Failed to load source-blacklist.txt; using fallback" }
+            fallback
+        }
     }
 
     /**
