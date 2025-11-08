@@ -1,0 +1,6 @@
+# One folder per line (under אוצריא/)
+# These folders will be removed after extraction of the Otzaria source
+אודות התוכנה
+אודות על התוכנה
+הודעה חשובה
+
