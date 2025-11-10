@@ -1,5 +1,8 @@
+@file:OptIn(ExperimentalSerializationApi::class)
+
 package io.github.kdroidfilter.seforimlibrary.core.models
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.protobuf.ProtoNumber
 
@@ -42,5 +45,9 @@ data class CatalogBook(
     @ProtoNumber(4) val order: Float = 999f,
     @ProtoNumber(5) val authors: List<String> = emptyList(),
     @ProtoNumber(6) val totalLines: Int = 0,
-    @ProtoNumber(7) val isBaseBook: Boolean = false
+    @ProtoNumber(7) val isBaseBook: Boolean = false,
+    @ProtoNumber(8) val hasTargumConnection: Boolean = false,
+    @ProtoNumber(9) val hasReferenceConnection: Boolean = false,
+    @ProtoNumber(10) val hasCommentaryConnection: Boolean = false,
+    @ProtoNumber(11) val hasOtherConnection: Boolean = false
 )

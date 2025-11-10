@@ -5,10 +5,10 @@ import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import io.github.kdroidfilter.seforimlibrary.generator.utils.HebrewTextUtils
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.coroutineScope
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -31,6 +31,7 @@ import kotlin.io.path.readText
  * @property sourceDirectory The path to the source directory containing the data files
  * @property repository The repository used to store the generated data
  */
+@OptIn(ExperimentalSerializationApi::class)
 class DatabaseGenerator(
     private val sourceDirectory: Path,
     private val repository: SeforimRepository,
@@ -339,7 +340,7 @@ class DatabaseGenerator(
      *
      * @return A map of book titles to their metadata
      */
-    private suspend fun loadMetadata(): Map<String, BookMetadata> {
+    private fun loadMetadata(): Map<String, BookMetadata> {
         val metadataFile = sourceDirectory.resolve("metadata.json")
         return if (metadataFile.exists()) {
             val content = metadataFile.readText()
@@ -373,7 +374,7 @@ class DatabaseGenerator(
      * Loads `files_manifest.json` and builds a mapping from library-relative path
      * (under אוצריא) to a source name (top-level directory of the manifest entry).
      */
-    private suspend fun loadSourcesFromManifest() {
+    private fun loadSourcesFromManifest() {
         manifestSourcesByRel.clear()
         // Prefer manifest in the provided source directory; fallback to repo path if present
         val primary = sourceDirectory.resolve("files_manifest.json")
@@ -1127,7 +1128,11 @@ class DatabaseGenerator(
                 order = book.order,
                 authors = book.authors.map { it.name },
                 totalLines = book.totalLines,
-                isBaseBook = book.isBaseBook
+                isBaseBook = book.isBaseBook,
+                hasTargumConnection = book.hasTargumConnection,
+                hasReferenceConnection = book.hasReferenceConnection,
+                hasCommentaryConnection = book.hasCommentaryConnection,
+                hasOtherConnection = book.hasOtherConnection
             )
         }?.sortedBy { it.order } ?: emptyList()
 

@@ -75,7 +75,11 @@ fun CatalogBook.toBook(): Book {
         order = order,
         topics = emptyList(),
         totalLines = totalLines,
-        isBaseBook = isBaseBook
+        isBaseBook = isBaseBook,
+        hasTargumConnection = hasTargumConnection,
+        hasReferenceConnection = hasReferenceConnection,
+        hasCommentaryConnection = hasCommentaryConnection,
+        hasOtherConnection = hasOtherConnection
     )
 }
 
