@@ -5,13 +5,14 @@ import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import io.github.kdroidfilter.seforimlibrary.generator.utils.HebrewTextUtils
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.coroutineScope
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.protobuf.ProtoBuf
 import org.jsoup.Jsoup
 import org.jsoup.safety.Safelist
 import java.io.File
@@ -30,6 +31,7 @@ import kotlin.io.path.readText
  * @property sourceDirectory The path to the source directory containing the data files
  * @property repository The repository used to store the generated data
  */
+@OptIn(ExperimentalSerializationApi::class)
 class DatabaseGenerator(
     private val sourceDirectory: Path,
     private val repository: SeforimRepository,
@@ -148,6 +150,10 @@ class DatabaseGenerator(
                 logger.i { "Building category_closure (ancestor-descendant) table..." }
                 repository.rebuildCategoryClosure()
 
+                // Build and save precomputed catalog tree
+                logger.i { "Building and saving precomputed catalog..." }
+                buildAndSaveCatalog()
+
                 // Finalize Lucene index if present
                 runCatching { textIndex?.commit() }
                     .onSuccess { logger.i { "Lucene index commit completed" } }
@@ -225,6 +231,10 @@ class DatabaseGenerator(
                 // Build category closure after categories insertion
                 logger.i { "Building category_closure table (phase 1)..." }
                 repository.rebuildCategoryClosure()
+
+                // Build and save precomputed catalog tree
+                logger.i { "Building and saving precomputed catalog (phase 1)..." }
+                buildAndSaveCatalog()
             }
         } finally {
             runCatching { enableForeignKeys() }
@@ -330,7 +340,7 @@ class DatabaseGenerator(
      *
      * @return A map of book titles to their metadata
      */
-    private suspend fun loadMetadata(): Map<String, BookMetadata> {
+    private fun loadMetadata(): Map<String, BookMetadata> {
         val metadataFile = sourceDirectory.resolve("metadata.json")
         return if (metadataFile.exists()) {
             val content = metadataFile.readText()
@@ -364,7 +374,7 @@ class DatabaseGenerator(
      * Loads `files_manifest.json` and builds a mapping from library-relative path
      * (under אוצריא) to a source name (top-level directory of the manifest entry).
      */
-    private suspend fun loadSourcesFromManifest() {
+    private fun loadSourcesFromManifest() {
         manifestSourcesByRel.clear()
         // Prefer manifest in the provided source directory; fallback to repo path if present
         val primary = sourceDirectory.resolve("files_manifest.json")
@@ -1052,6 +1062,109 @@ class DatabaseGenerator(
             Logger.withTag("DatabaseGenerator").w(e) { "Failed to load source-blacklist.txt; using fallback" }
             fallback
         }
+    }
+
+    /**
+     * Builds and serializes the precomputed catalog tree to a binary file.
+     * This creates a catalog.pb file next to the database that can be loaded instantly at startup.
+     */
+    suspend fun buildAndSaveCatalog() {
+        logger.i { "Building precomputed catalog tree..." }
+
+        val catalog = buildCatalogTree()
+
+        logger.i { "Built catalog with ${catalog.totalCategories} categories and ${catalog.totalBooks} books" }
+
+        // Save to file next to the database
+        val catalogFile = sourceDirectory.resolve("catalog.pb")
+        saveCatalog(catalog, catalogFile)
+
+        logger.i { "Saved precomputed catalog to: $catalogFile" }
+        logger.i { "File size: ${catalogFile.toFile().length() / 1024} KB" }
+    }
+
+    /**
+     * Builds the catalog tree structure from the database.
+     */
+    private suspend fun buildCatalogTree(): PrecomputedCatalog {
+        val allBooks = repository.getAllBooks()
+        val booksByCategory = allBooks.groupBy { it.categoryId }
+
+        logger.i { "Building catalog from ${allBooks.size} books" }
+
+        // Start from root categories and build recursively
+        val rootCategories = repository.getRootCategories()
+        var totalCategories = 0
+
+        val catalogRoots = rootCategories.map { rootCategory ->
+            buildCatalogCategoryRecursive(rootCategory, booksByCategory).also {
+                totalCategories += countCategories(it)
+            }
+        }
+
+        logger.i { "Built catalog with $totalCategories categories and ${allBooks.size} books" }
+
+        return PrecomputedCatalog(
+            rootCategories = catalogRoots,
+            version = 1,
+            totalBooks = allBooks.size,
+            totalCategories = totalCategories
+        )
+    }
+
+    /**
+     * Recursively builds a catalog category with its subcategories and books.
+     */
+    private suspend fun buildCatalogCategoryRecursive(
+        category: Category,
+        booksByCategory: Map<Long, List<Book>>
+    ): CatalogCategory {
+        // Get books in this category
+        val books = booksByCategory[category.id]?.map { book ->
+            CatalogBook(
+                id = book.id,
+                title = book.title,
+                categoryId = book.categoryId,
+                order = book.order,
+                authors = book.authors.map { it.name },
+                totalLines = book.totalLines,
+                isBaseBook = book.isBaseBook,
+                hasTargumConnection = book.hasTargumConnection,
+                hasReferenceConnection = book.hasReferenceConnection,
+                hasCommentaryConnection = book.hasCommentaryConnection,
+                hasOtherConnection = book.hasOtherConnection
+            )
+        }?.sortedBy { it.order } ?: emptyList()
+
+        // Get subcategories and build them recursively
+        val children = repository.getCategoryChildren(category.id)
+        val subcategories = children.map { child ->
+            buildCatalogCategoryRecursive(child, booksByCategory)
+        }
+
+        return CatalogCategory(
+            id = category.id,
+            title = category.title,
+            level = category.level,
+            parentId = category.parentId,
+            books = books,
+            subcategories = subcategories
+        )
+    }
+
+    /**
+     * Counts the total number of categories in the tree.
+     */
+    private fun countCategories(category: CatalogCategory): Int {
+        return 1 + category.subcategories.sumOf { countCategories(it) }
+    }
+
+    /**
+     * Saves the catalog to a binary file using ProtoBuf serialization.
+     */
+    private fun saveCatalog(catalog: PrecomputedCatalog, outputPath: Path) {
+        val bytes = ProtoBuf.encodeToByteArray(PrecomputedCatalog.serializer(), catalog)
+        Files.write(outputPath, bytes)
     }
 
     /**

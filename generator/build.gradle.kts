@@ -17,6 +17,7 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlinx.serialization.json)
+            implementation(libs.kotlinx.serialization.protobuf)
             implementation(libs.kotlinx.datetime)
             implementation(libs.kermit)
             implementation("org.jsoup:jsoup:1.17.2")
@@ -225,4 +226,31 @@ tasks.register<JavaExec>("generateLinks") {
         "--enable-native-access=ALL-UNNAMED",
         "--add-modules=jdk.incubator.vector"
     )
+}
+
+// Build only the precomputed catalog (catalog.pb) from an existing database
+// Usage:
+//   ./gradlew :generator:buildCatalog -PseforimDb=/path/to/seforim.db
+//   ./gradlew :generator:buildCatalog  # Uses default build/seforim.db
+tasks.register<JavaExec>("buildCatalog") {
+    group = "application"
+    description = "Build precomputed catalog (catalog.pb) from an existing database."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.BuildCatalogKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    // Default DB path in build/
+    val defaultDbPath = layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+
+    // Allow override via -PseforimDb
+    val dbPath = if (project.hasProperty("seforimDb")) {
+        project.property("seforimDb") as String
+    } else {
+        defaultDbPath
+    }
+
+    args(dbPath)
+
+    jvmArgs = listOf("-Xmx2g")
 }

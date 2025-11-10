@@ -18,24 +18,28 @@ import kotlin.system.exitProcess
 
 /**
  * Package artifacts with Zstandard (zstd):
- *  - Compress the SQLite DB (seforim.db) directly to a single .zst file (no tar)
- *  - Archive Lucene indexes into a .tar and compress it with zstd (.tar.zst)
+ *  - SQLite DB (seforim.db)
+ *  - Precomputed catalog (catalog.pb)
+ *  - Lucene indexes (text and lookup)
+ *  All packaged into a single .tar.zst bundle
  *
  * Usage:
  *   ./gradlew -p SeforimLibrary :generator:packageArtifacts \
  *     -PseforimDb=/path/to/seforim.db \
- *     [-PdbOutput=/path/to/seforim.db.zst] \
- *     [-PindexesOutput=/path/to/lucene_indexes.tar.zst] \
- *     [-PzstdLevel=19]
+ *     [-PbundleOutput=/path/to/seforim_bundle.tar.zst] \
+ *     [-PzstdLevel=22] \
+ *     [-PzstdWorkers=0] \
+ *     [-PsplitPartBytes=2040109465]
  *
  * Env alternatives:
- *   SEFORIM_DB, OUTPUT_DB_ZST, OUTPUT_INDEXES_TAR_ZST, ZSTD_LEVEL, ZSTD_WORKERS
- *   (legacy: OUTPUT_TAR_ZST or -Poutput maps to indexesOutput for compatibility)
+ *   SEFORIM_DB, OUTPUT_BUNDLE_TAR_ZST, ZSTD_LEVEL, ZSTD_WORKERS, SPLIT_PART_BYTES
+ *   (legacy: OUTPUT_TAR_ZST or -Poutput maps to bundleOutput for compatibility)
  *
  * Defaults:
  *   DB path from -PseforimDb, env SEFORIM_DB, or generator/build/seforim.db
- *   DB .zst to generator/build/package/seforim.db.zst
- *   Indexes .tar.zst to generator/build/package/lucene_indexes.tar.zst
+ *   Bundle output to generator/build/package/seforim_bundle.tar.zst
+ *   Catalog expected at same location as DB (catalog.pb)
+ *   Indexes expected next to DB (.lucene, .lookup.lucene)
  */
 fun main(args: Array<String>) {
     Logger.setMinSeverity(Severity.Info)
@@ -56,11 +60,17 @@ fun main(args: Array<String>) {
     val textIndexDir: Path = if (dbPathStr.endsWith(".db")) Paths.get("$dbPathStr.lucene") else Paths.get("$dbPathStr.luceneindex")
     val lookupIndexDir: Path = if (dbPathStr.endsWith(".db")) Paths.get("$dbPathStr.lookup.lucene") else Paths.get("$dbPathStr.lookupindex")
 
+    // Resolve precomputed catalog next to the DB
+    val catalogPath: Path = dbPath.resolveSibling("catalog.pb")
+
     if (!textIndexDir.toFile().isDirectory) {
         logger.w { "Lucene text index directory missing: $textIndexDir (will skip)" }
     }
     if (!lookupIndexDir.toFile().isDirectory) {
         logger.w { "Lucene lookup index directory missing: $lookupIndexDir (will skip)" }
+    }
+    if (!catalogPath.exists()) {
+        logger.w { "Precomputed catalog missing: $catalogPath (will skip)" }
     }
 
     // Output: single bundle tar.zst
@@ -98,6 +108,7 @@ fun main(args: Array<String>) {
     logger.i {
         "Packaging into single bundle:\n" +
             " - DB: $dbPath\n" +
+            " - Catalog: $catalogPath\n" +
             " - Text index: $textIndexDir\n" +
             " - Lookup index: $lookupIndexDir\n" +
             " -> Bundle .tar.zst: $bundleOutputPath\n" +
@@ -117,6 +128,7 @@ fun main(args: Array<String>) {
 
                         val haveText = textIndexDir.toFile().isDirectory
                         val haveLookup = lookupIndexDir.toFile().isDirectory
+                        val haveCatalog = catalogPath.exists()
 
                         if (haveLookup) {
                             addDirectoryToTar(tar, lookupIndexDir, lookupIndexDir.fileName.toString(), logger)
@@ -131,6 +143,15 @@ fun main(args: Array<String>) {
 
                         // Add the database file itself
                         addFileToTar(tar, dbPath, dbPath.fileName.toString(), logger)
+
+                        // Add the precomputed catalog if available
+                        if (haveCatalog) {
+                            addFileToTar(tar, catalogPath, catalogPath.fileName.toString(), logger)
+                            logger.i { "Added precomputed catalog to bundle" }
+                        } else {
+                            logger.w { "Precomputed catalog missing: $catalogPath (skipped)" }
+                        }
+
                         tar.finish()
                     }
                 }
