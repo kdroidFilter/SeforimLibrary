@@ -56,6 +56,17 @@ jobs:
       - name: buildLuceneIndexDefault
         run: ./gradlew :generator:buildLuceneIndexDefault --no-daemon --stacktrace
 
+      - name: Compute tag name (UTC) for release info
+        id: release_meta
+        shell: bash
+        run: |
+          TAG=$(date -u +"%Y%m%d%H%M%S")
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Computed release tag: ${TAG}"
+
+      - name: writeReleaseInfo
+        run: ./gradlew :generator:writeReleaseInfo -PreleaseName=${{ steps.release_meta.outputs.release_tag }} --no-daemon --stacktrace
+
       - name: packageArtifacts
         run: ./gradlew :generator:packageArtifacts --no-daemon --stacktrace
 
@@ -76,19 +87,11 @@ jobs:
           echo "Found ${#PARTS[@]} part file(s):"
           ls -lh "${PARTS[@]}"
 
-      - name: Compute tag name (UTC)
-        id: meta
-        shell: bash
-        run: |
-          TAG=$(date -u +"%Y%m%d%H%M%S")
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Computed tag: ${TAG}"
-
       - name: Create GitHub Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: ${{ steps.meta.outputs.tag }}
+          tag_name: ${{ steps.release_meta.outputs.release_tag }}
+          name: ${{ steps.release_meta.outputs.release_tag }}
           draft: false
           prerelease: false
           files: |

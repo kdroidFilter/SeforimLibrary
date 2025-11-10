@@ -62,6 +62,9 @@ fun main(args: Array<String>) {
 
     // Resolve precomputed catalog next to the DB
     val catalogPath: Path = dbPath.resolveSibling("catalog.pb")
+    
+    // Resolve release info file in build directory
+    val releaseInfoPath: Path = Paths.get("build", "release_info.txt")
 
     if (!textIndexDir.toFile().isDirectory) {
         logger.w { "Lucene text index directory missing: $textIndexDir (will skip)" }
@@ -71,6 +74,9 @@ fun main(args: Array<String>) {
     }
     if (!catalogPath.exists()) {
         logger.w { "Precomputed catalog missing: $catalogPath (will skip)" }
+    }
+    if (!releaseInfoPath.exists()) {
+        logger.w { "Release info file missing: $releaseInfoPath (will skip)" }
     }
 
     // Output: single bundle tar.zst
@@ -109,6 +115,7 @@ fun main(args: Array<String>) {
         "Packaging into single bundle:\n" +
             " - DB: $dbPath\n" +
             " - Catalog: $catalogPath\n" +
+            " - Release info: $releaseInfoPath\n" +
             " - Text index: $textIndexDir\n" +
             " - Lookup index: $lookupIndexDir\n" +
             " -> Bundle .tar.zst: $bundleOutputPath\n" +
@@ -129,6 +136,7 @@ fun main(args: Array<String>) {
                         val haveText = textIndexDir.toFile().isDirectory
                         val haveLookup = lookupIndexDir.toFile().isDirectory
                         val haveCatalog = catalogPath.exists()
+                        val haveReleaseInfo = releaseInfoPath.exists()
 
                         if (haveLookup) {
                             addDirectoryToTar(tar, lookupIndexDir, lookupIndexDir.fileName.toString(), logger)
@@ -150,6 +158,14 @@ fun main(args: Array<String>) {
                             logger.i { "Added precomputed catalog to bundle" }
                         } else {
                             logger.w { "Precomputed catalog missing: $catalogPath (skipped)" }
+                        }
+                        
+                        // Add the release info file if available
+                        if (haveReleaseInfo) {
+                            addFileToTar(tar, releaseInfoPath, releaseInfoPath.fileName.toString(), logger)
+                            logger.i { "Added release info to bundle" }
+                        } else {
+                            logger.w { "Release info file missing: $releaseInfoPath (skipped)" }
                         }
 
                         tar.finish()

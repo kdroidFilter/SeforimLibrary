@@ -72,9 +72,9 @@ tasks.register<JavaExec>("downloadOtzaria") {
 // Package DB + Lucene indexes into single tar.zst and split
 tasks.register<JavaExec>("packageArtifacts") {
     group = "application"
-    description = "Create seforim_bundle.tar.zst (DB + indexes) with zstd and split into ~1.9GiB parts."
+    description = "Create seforim_bundle.tar.zst (DB + indexes + release info) with zstd and split into ~1.9GiB parts."
 
-    dependsOn("jvmJar")
+    dependsOn("jvmJar", "writeReleaseInfo")
     mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.PackageArtifactsKt")
     classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
 
@@ -253,4 +253,24 @@ tasks.register<JavaExec>("buildCatalog") {
     args(dbPath)
 
     jvmArgs = listOf("-Xmx2g")
+}
+
+// Write release information to release_info.txt file
+// Usage:
+//   ./gradlew :generator:writeReleaseInfo
+//   ./gradlew :generator:writeReleaseInfo -PreleaseName=20251108195010
+tasks.register<JavaExec>("writeReleaseInfo") {
+    group = "application"
+    description = "Write release information (timestamp) to release_info.txt file."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.WriteReleaseInfoKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    // Pass release name if provided
+    if (project.hasProperty("releaseName")) {
+        systemProperty("releaseName", project.property("releaseName") as String)
+    }
+
+    jvmArgs = listOf("-Xmx256m")
 }
