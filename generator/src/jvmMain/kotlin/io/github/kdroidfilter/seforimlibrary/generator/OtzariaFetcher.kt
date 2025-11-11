@@ -15,7 +15,7 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 
 object OtzariaFetcher {
-    private const val LATEST_API = "https://api.github.com/repos/Y-PLONI/otzaria-library/releases/latest"
+    private const val LATEST_API = "https://api.github.com/repos/zevisvei/otzaria-library/releases/latest"
 
     /** Ensure otzaria source is available locally under build/otzaria/source (relative to CWD). */
     fun ensureLocalSource(logger: Logger): Path {
