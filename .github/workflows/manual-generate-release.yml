@@ -56,6 +56,9 @@ jobs:
       - name: buildLuceneIndexDefault
         run: ./gradlew :generator:buildLuceneIndexDefault --no-daemon --stacktrace
 
+      - name: buildCatalog
+        run: ./gradlew :generator:buildCatalog --no-daemon --stacktrace
+
       - name: Compute tag name (UTC) for release info
         id: release_meta
         shell: bash
