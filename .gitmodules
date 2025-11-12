@@ -1,3 +1,6 @@
 [submodule "HebMorph"]
 	path = HebMorph
 	url = https://github.com/kdroidFilter/HebMorph.git
+[submodule "SeforimMagicIndexer"]
+	path = SeforimMagicIndexer
+	url = https://github.com/kdroidFilter/SeforimMagicIndexer
