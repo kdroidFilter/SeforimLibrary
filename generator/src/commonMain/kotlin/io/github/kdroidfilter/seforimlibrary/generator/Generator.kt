@@ -65,6 +65,9 @@ class DatabaseGenerator(
     // Source blacklist loaded from resources (fallback to default)
     private val sourceBlacklist: Set<String> = loadSourceBlacklistFromResources()
 
+    // File name blacklist loaded from resources; entries are plain filenames such as "book.txt"
+    private val fileNameBlacklist: Set<String> = loadFileNameBlacklistFromResources()
+
     // In-memory caches to accelerate link processing using available RAM
     private var booksByTitle: Map<String, Book> = emptyMap()
     private var booksById: Map<Long, Book> = emptyMap()
@@ -306,9 +309,15 @@ class DatabaseGenerator(
         val files = Files.walk(libraryPath).use { s ->
             s.filter { Files.isRegularFile(it) && it.extension == "txt" }
                 .filter { p ->
+                    val fileName = p.fileName.toString()
                     // Skip notes files
-                    val name = p.fileName.toString().substringBeforeLast('.')
-                    if (name.startsWith("הערות על ")) return@filter false
+                    val titleNoExt = fileName.substringBeforeLast('.')
+                    if (titleNoExt.startsWith("הערות על ")) return@filter false
+                    // Skip files explicitly blacklisted by name
+                    if (fileNameBlacklist.contains(fileName)) {
+                        logger.d { "Skipping preload for blacklisted file '$fileName'" }
+                        return@filter false
+                    }
                     // Skip blacklisted sources when known
                     val rel = runCatching { toLibraryRelativeKey(p) }.getOrElse { p.fileName.toString() }
                     val src = manifestSourcesByRel[rel] ?: "Unknown"
@@ -474,6 +483,11 @@ class DatabaseGenerator(
                             logger.i { "📝 Skipping notes file '$fname' (will be attached to base book if present)" }
                             continue
                         }
+                        // Skip files explicitly blacklisted by name
+                        if (fileNameBlacklist.contains(fname)) {
+                            logger.i { "⛔ Skipping blacklisted file '$fname' by name" }
+                            continue
+                        }
                         if (parentCategoryId == null) {
                             logger.w { "❌ Book found without category: $entry" }
                             continue
@@ -582,6 +596,11 @@ class DatabaseGenerator(
             val dir = path.parent
             val notesTitle = "הערות על $title"
             val candidate = dir.resolve("$notesTitle.txt")
+            // Skip notes file completely if it is explicitly blacklisted by name
+            if (fileNameBlacklist.contains(candidate.fileName.toString())) {
+                logger.i { "📝 Notes file '${candidate.fileName}' is blacklisted by name; skipping attachment" }
+                return@runCatching null
+            }
             if (Files.isRegularFile(candidate)) {
                 // Prefer preloaded cache if available
                 val key = toLibraryRelativeKey(candidate)
@@ -971,6 +990,11 @@ class DatabaseGenerator(
                 logger.i { "⏭️ Skipping notes file in priority list: $bookFileName" }
                 continue@outer
             }
+            // Skip files explicitly blacklisted by name
+            if (fileNameBlacklist.contains(bookFileName)) {
+                logger.i { "⛔ Skipping blacklisted file in priority list: $bookFileName" }
+                continue@outer
+            }
 
             // Fold into actual filesystem path
             var currentPath = libraryRoot
@@ -1061,6 +1085,28 @@ class DatabaseGenerator(
         } catch (e: Exception) {
             Logger.withTag("DatabaseGenerator").w(e) { "Failed to load source-blacklist.txt; using fallback" }
             fallback
+        }
+    }
+
+    private fun loadFileNameBlacklistFromResources(): Set<String> {
+        return try {
+            val resourceNames = listOf("files-blacklist.txt", "/files-blacklist.txt")
+            val cl = Thread.currentThread().contextClassLoader
+            val stream = resourceNames.asSequence()
+                .mapNotNull { name ->
+                    cl?.getResourceAsStream(name) ?: DatabaseGenerator::class.java.getResourceAsStream(name)
+                }
+                .firstOrNull()
+                ?: return emptySet()
+            stream.bufferedReader(Charsets.UTF_8).use { br ->
+                br.lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() && !it.startsWith("#") }
+                    .toSet()
+            }
+        } catch (e: Exception) {
+            Logger.withTag("DatabaseGenerator").w(e) { "Failed to load files-blacklist.txt; ignoring file-name blacklist" }
+            emptySet()
         }
     }
 
