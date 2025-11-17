@@ -1,7 +1,7 @@
 
 plugins {
     alias(libs.plugins.multiplatform)
-    alias(libs.plugins.android.library)
+    alias(libs.plugins.android.kotlin.multiplatform.library)
     alias(libs.plugins.maven.publish)
     alias(libs.plugins.kotlinx.serialization)
     alias(libs.plugins.sqlDelight)
@@ -13,7 +13,11 @@ group = "io.github.kdroidfilter.seforimlibrary"
 kotlin {
     jvmToolchain(21)
 
-    androidTarget { publishLibraryVariants("release") }
+    androidLibrary {
+        namespace = "io.github.kdroidfilter.seforimlibrary"
+        compileSdk = 35
+        minSdk = 21
+    }
     jvm()
 
     sourceSets {
@@ -43,15 +47,6 @@ kotlin {
 
     }
 
-}
-
-android {
-    namespace = "io.github.kdroidfilter.seforimlibrary"
-    compileSdk = 35
-
-    defaultConfig {
-        minSdk = 21
-    }
 }
 
 
