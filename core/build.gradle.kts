@@ -9,7 +9,7 @@ plugins {
 group = "io.github.kdroidfilter.seforimlibrary"
 
 kotlin {
-    jvmToolchain(21)
+    jvmToolchain(libs.versions.jvmToolchain.get().toInt())
 
     androidTarget { publishLibraryVariants("release") }
     jvm()
@@ -77,4 +77,3 @@ mavenPublishing {
     }
     if (project.hasProperty("signing.keyId")) signAllPublications()
 }
-

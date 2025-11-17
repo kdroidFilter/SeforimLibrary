@@ -2,6 +2,7 @@
 
 kotlin = "2.2.21"
 agp = "8.12.3"
+jvmToolchain = "21"
 luceneCore = "10.3.2"
 luceneAnalysisCommon = "10.3.2"
 luceneQueryparser = "10.3.2"
