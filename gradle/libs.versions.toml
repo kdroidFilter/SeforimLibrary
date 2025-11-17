@@ -1,18 +1,18 @@
 [versions]
 
-kotlin = "2.2.20"
+kotlin = "2.2.21"
 agp = "8.12.3"
-luceneCore = "10.3.1"
-luceneAnalysisCommon = "10.3.1"
-luceneQueryparser = "10.3.1"
-luceneHighlighter = "10.3.1"
+luceneCore = "10.3.2"
+luceneAnalysisCommon = "10.3.2"
+luceneQueryparser = "10.3.2"
+luceneHighlighter = "10.3.2"
 maven-publish = "0.34.0"
 kotlinx-coroutines = "1.10.2"
 kotlinx-serialization = "1.9.0"
 kotlinx-datetime = "0.7.1"
 kermit = "2.0.8"
-sqlDelight = "2.1.0"
-compose = "1.9.1"
+sqlDelight = "2.2.1"
+compose = "1.9.3"
 androidx-activityCompose = "1.11.0"
 
 [libraries]
