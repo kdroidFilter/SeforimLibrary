@@ -11,7 +11,6 @@ group = "io.github.kdroidfilter.seforimlibrary"
 
 
 kotlin {
-    jvmToolchain(21)
 
     androidLibrary {
         namespace = "io.github.kdroidfilter.seforimlibrary"
