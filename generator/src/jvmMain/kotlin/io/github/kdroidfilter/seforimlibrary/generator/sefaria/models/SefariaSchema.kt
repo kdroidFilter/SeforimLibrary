@@ -42,6 +42,7 @@ data class SchemaNode(
     val depth: Int? = null,
     val addressTypes: List<String>? = null,
     val sectionNames: List<String>? = null,
+    val heSectionNames: List<String>? = null,
     val lengths: List<Int>? = null,
     val titles: List<Title>? = null,
     val nodes: List<SchemaNode>? = null,

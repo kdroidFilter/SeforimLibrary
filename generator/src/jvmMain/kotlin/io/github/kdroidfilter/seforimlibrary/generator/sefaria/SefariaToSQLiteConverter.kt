@@ -296,8 +296,11 @@ class SefariaToSQLiteConverter(
 
     private suspend fun parseAndInsertText(bookId: Long, mergedText: SefariaMergedText) {
         try {
+            // Get schema for this book
+            val schema = schemaCache[mergedText.title]
+
             // Parse the text using the text parser
-            val parsed = textParser.parse(bookId, mergedText)
+            val parsed = textParser.parse(bookId, mergedText, schema)
 
             // Initialize cache for this book
             val bookCache = mutableMapOf<Int, Long>()
@@ -311,8 +314,15 @@ class SefariaToSQLiteConverter(
 
             // Insert TOC entries
             // TocText will be created automatically by the repository
+            val insertedTocIds = mutableListOf<Long>()
             parsed.tocEntries.forEach { tocEntry ->
-                repository.insertTocEntry(tocEntry)
+                val tocId = repository.insertTocEntry(tocEntry)
+                insertedTocIds.add(tocId)
+            }
+
+            // Second pass: update hasChildren and isLastChild flags
+            if (insertedTocIds.isNotEmpty()) {
+                updateTocEntryFlags(bookId, parsed.tocEntries)
             }
 
             // Update book's total lines
@@ -324,6 +334,40 @@ class SefariaToSQLiteConverter(
             logger.info("Inserted ${parsed.lines.size} lines and ${parsed.tocEntries.size} TOC entries for book ID: $bookId")
         } catch (e: Exception) {
             logger.error("Error parsing and inserting text for book ID: $bookId", e)
+        }
+    }
+
+    /**
+     * Second pass: update hasChildren and isLastChild flags for TOC entries
+     * Inspired by Otzaria generator approach
+     */
+    private suspend fun updateTocEntryFlags(bookId: Long, tocEntries: List<TocEntry>) {
+        try {
+            // Group entries by parentId to find children
+            val entriesByParent = tocEntries.groupBy { it.parentId }
+
+            // Create a set of IDs that have children
+            val parentIds = tocEntries.mapNotNull { it.parentId }.toSet()
+
+            // Update hasChildren flag for all entries that are parents
+            for (entry in tocEntries) {
+                if (entry.id in parentIds) {
+                    repository.updateTocEntryHasChildren(entry.id, true)
+                }
+            }
+
+            // Update isLastChild flag for the last child of each parent
+            for ((parentId, children) in entriesByParent) {
+                if (children.isNotEmpty()) {
+                    // The last child in the list is the last child
+                    val lastChildId = children.last().id
+                    repository.updateTocEntryIsLastChild(lastChildId, true)
+                }
+            }
+
+            logger.debug("Updated TOC entry flags for ${tocEntries.size} entries in book $bookId")
+        } catch (e: Exception) {
+            logger.error("Error updating TOC entry flags for book $bookId", e)
         }
     }
 
