@@ -28,7 +28,9 @@ selectByLineId:
 SELECT t.*, tt.text
 FROM tocEntry t
 JOIN tocText tt ON t.textId = tt.id
-WHERE t.lineId = ?;
+WHERE t.lineId = ?
+ORDER BY t.level DESC, t.id DESC
+LIMIT 1;
 
 insert:
 INSERT INTO tocEntry (bookId, parentId, textId, level, lineId, isLastChild, hasChildren)

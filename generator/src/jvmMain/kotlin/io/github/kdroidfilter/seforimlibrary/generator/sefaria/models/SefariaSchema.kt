@@ -39,6 +39,7 @@ data class SefariaSchema(
 @Serializable
 data class SchemaNode(
     val nodeType: String? = null,
+    val title: String? = null,
     val depth: Int? = null,
     val addressTypes: List<String>? = null,
     val sectionNames: List<String>? = null,

@@ -71,6 +71,47 @@ class SefariaToSQLiteConverter(
 
     private val stats = ConversionStats()
 
+    private data class PreloadedSefariaData(
+        val schemas: Map<File, SefariaSchema>,
+        val mergedTexts: Map<File, SefariaMergedText>,
+        val linkLines: Map<File, List<String>>
+    )
+
+    private var preloadedData: PreloadedSefariaData? = null
+
+    internal companion object {
+        /**
+         * Build a list of English aliases for a sectioned book (base title + ", " + section title).
+         * This lets links like "Tur, Orach Chayim 1:1" resolve to the same book ID as "Tur".
+         */
+        internal fun collectEnglishSectionAliases(baseTitle: String, rootNode: SchemaNode?): List<String> {
+            if (rootNode == null) return emptyList()
+            val sections = rootNode.nodes ?: return emptyList()
+            val seen = LinkedHashSet<String>()
+
+            sections.forEach { node ->
+                val title = englishTitleForNode(node)
+                if (!title.isNullOrBlank()) {
+                    val alias = "$baseTitle, $title"
+                    seen.add(alias)
+                }
+            }
+
+            return seen.toList()
+        }
+
+        private fun englishTitleForNode(node: SchemaNode): String? {
+            val fromTitles = node.titles
+                ?.firstOrNull { it.lang.equals("en", ignoreCase = true) && (it.primary == true) }
+                ?: node.titles?.firstOrNull { it.lang.equals("en", ignoreCase = true) }
+
+            return node.enTitle
+                ?: node.title
+                ?: fromTitles?.text
+                ?: node.key?.takeIf { it.isNotBlank() && it != "default" }
+        }
+    }
+
     suspend fun initialize() {
         // Initialize source for Sefaria
         val sefariaSourceId = repository.insertSource("Sefaria")
@@ -84,23 +125,89 @@ class SefariaToSQLiteConverter(
         logger.info("Starting Sefaria to SQLite conversion...")
 
         withContext(Dispatchers.IO) {
+            // Load all assets into memory to minimize disk I/O during conversion
+            val preload = preloadedData ?: preloadAllSefariaData()
+            preloadedData = preload
+
             // Step 1: Process schemas to create categories and books
-            logger.info("Processing schemas...")
-            processSchemas()
+            logger.info("Processing schemas (preloaded=${preload.schemas.size})...")
+            processSchemas(preload.schemas)
 
             // Step 2: Process merged.json files to create lines and TOC
-            logger.info("Processing texts...")
-            processTexts()
+            logger.info("Processing texts (preloaded=${preload.mergedTexts.size})...")
+            processTexts(preload.mergedTexts)
 
             // Step 3: Process links
-            logger.info("Processing links...")
-            processLinks()
+            logger.info("Processing links (preloaded=${preload.linkLines.size})...")
+            processLinks(preload.linkLines)
 
             // Print statistics
             printStatistics()
 
             logger.info("Conversion complete!")
         }
+    }
+
+    /**
+     * Preload schemas, merged.json files and link CSVs into memory to reduce disk access.
+     */
+    private fun preloadAllSefariaData(): PreloadedSefariaData {
+        logger.info("Preloading Sefaria assets into memory...")
+
+        val schemasDir = File(sefariaBaseDir, "schemas")
+        val schemaFiles = schemasDir.listFiles { file -> file.extension == "json" }.orEmpty()
+        val schemas = mutableMapOf<File, SefariaSchema>()
+        schemaFiles.forEach { file ->
+            val text = file.readText()
+            if (text.isBlank()) {
+                logger.warn("Skipping empty schema file: ${file.name}")
+                return@forEach
+            }
+            runCatching { json.decodeFromString<SefariaSchema>(text) }
+                .onSuccess { schemas[file] = it }
+                .onFailure { e ->
+                    logger.warn("Skipping schema file ${file.name}: ${e.message}")
+                }
+        }
+        logger.info("  - Schemas loaded: ${schemas.size} (of ${schemaFiles.size})")
+
+        val mergedFiles = findMergedJsonFiles(File(sefariaBaseDir, "json"))
+        val mergedTexts = mutableMapOf<File, SefariaMergedText>()
+        mergedFiles.forEach { file ->
+            val text = file.readText()
+            if (text.isBlank()) {
+                logger.warn("Skipping empty merged.json: ${file.absolutePath}")
+                return@forEach
+            }
+            runCatching { json.decodeFromString<SefariaMergedText>(text) }
+                .onSuccess { mergedTexts[file] = it }
+                .onFailure { e ->
+                    logger.warn("Skipping merged.json ${file.absolutePath}: ${e.message}")
+                }
+        }
+        logger.info("  - merged.json loaded: ${mergedTexts.size} (of ${mergedFiles.size})")
+
+        val linksDir = File(sefariaBaseDir, "links")
+        val linkFiles = linksDir.listFiles { file ->
+            file.name.startsWith("links") &&
+                file.name.endsWith(".csv") &&
+                !file.name.contains("by_book")
+        }.orEmpty()
+        val linkLines = mutableMapOf<File, List<String>>()
+        linkFiles.forEach { file ->
+            runCatching { file.readLines() }
+                .onSuccess { linkLines[file] = it }
+                .onFailure { e ->
+                    logger.warn("Skipping link CSV ${file.name}: ${e.message}")
+                }
+        }
+        logger.info("  - Link CSVs loaded: ${linkLines.size} (of ${linkFiles.size})")
+
+        return PreloadedSefariaData(
+            schemas = schemas,
+            mergedTexts = mergedTexts,
+            linkLines = linkLines
+        )
     }
 
     private fun printStatistics() {
@@ -127,19 +234,25 @@ class SefariaToSQLiteConverter(
             .getOrNull()
     }
 
-    private suspend fun processSchemas() {
+    private suspend fun processSchemas(preloadedSchemas: Map<File, SefariaSchema>? = null) {
         val schemasDir = File(sefariaBaseDir, "schemas")
         if (!schemasDir.exists()) {
             logger.error("Schemas directory not found: ${schemasDir.absolutePath}")
             return
         }
 
-        val schemaFiles = schemasDir.listFiles { file -> file.extension == "json" }
-        logger.info("Found ${schemaFiles?.size ?: 0} schema files")
+        val schemaEntries: List<Pair<File, SefariaSchema?>> = when {
+            preloadedSchemas != null -> preloadedSchemas.entries.map { it.key to it.value }
+            else -> {
+                val files = schemasDir.listFiles { file -> file.extension == "json" }.orEmpty()
+                logger.info("Found ${files.size} schema files")
+                files.map { it to null }
+            }
+        }
 
-        schemaFiles?.forEach { schemaFile ->
+        schemaEntries.forEach { (schemaFile, schema) ->
             try {
-                processSchemaFile(schemaFile)
+                processSchemaFile(schemaFile, schema)
                 stats.schemasProcessed++
             } catch (e: Exception) {
                 logger.error("Error processing schema file ${schemaFile.name}", e)
@@ -148,15 +261,16 @@ class SefariaToSQLiteConverter(
         }
     }
 
-    private suspend fun processSchemaFile(file: File) {
-        // Read and validate file content
-        val content = file.readText().trim()
-        if (content.isEmpty()) {
-            logger.warn("Skipping empty schema file: ${file.name}")
-            return
+    private suspend fun processSchemaFile(file: File, preloadedSchema: SefariaSchema? = null) {
+        val schema = preloadedSchema ?: run {
+            // Read and validate file content
+            val content = file.readText().trim()
+            if (content.isEmpty()) {
+                logger.warn("Skipping empty schema file: ${file.name}")
+                return
+            }
+            json.decodeFromString<SefariaSchema>(content)
         }
-
-        val schema = json.decodeFromString<SefariaSchema>(content)
 
         // Cache schema for later use
         schemaCache[schema.title] = schema
@@ -213,6 +327,14 @@ class SefariaToSQLiteConverter(
         bookMapByEnglish[schema.title] = bookId
         stats.booksCreated++
 
+        // Register aliases for sectioned books (e.g., "Tur, Orach Chayim") so links resolve correctly
+        collectEnglishSectionAliases(schema.title, schema.schema).forEach { alias ->
+            if (!bookMapByEnglish.containsKey(alias)) {
+                bookMapByEnglish[alias] = bookId
+                logger.debug("Registered section alias '$alias' for book ${schema.title} -> $bookId")
+            }
+        }
+
         // TODO: Associate authors, publication places and dates with books
         // The repository doesn't currently have insertBookAuthor, insertBookPubPlace methods
         // These would need to be added to the repository or handled differently
@@ -264,22 +386,29 @@ class SefariaToSQLiteConverter(
         return parentId!!
     }
 
-    private suspend fun processTexts() {
+    private suspend fun processTexts(preloadedMergedTexts: Map<File, SefariaMergedText>? = null) {
         val jsonDir = File(sefariaBaseDir, "json")
         if (!jsonDir.exists()) {
             logger.error("JSON directory not found: ${jsonDir.absolutePath}")
             return
         }
 
-        // Recursively find all merged.json files
-        val mergedFiles = findMergedJsonFiles(jsonDir)
-        logger.info("Found ${mergedFiles.size} merged.json files")
+        val mergedEntries: List<Pair<File, SefariaMergedText?>> = when {
+            preloadedMergedTexts != null -> preloadedMergedTexts.entries.map { it.key to it.value }
+            else -> {
+                val mergedFiles = findMergedJsonFiles(jsonDir)
+                logger.info("Found ${mergedFiles.size} merged.json files")
+                mergedFiles.map { it to null }
+            }
+        }
 
-        mergedFiles.forEach { file ->
+        mergedEntries.forEach { (file, mergedText) ->
             try {
-                processTextFile(file)
+                processTextFile(file, mergedText)
+                stats.textsProcessed++
             } catch (e: Exception) {
                 logger.error("Error processing text file ${file.absolutePath}", e)
+                stats.textErrors++
             }
         }
     }
@@ -297,24 +426,20 @@ class SefariaToSQLiteConverter(
         return result
     }
 
-    private suspend fun processTextFile(file: File) {
-        try {
-            val mergedText = json.decodeFromString<SefariaMergedText>(file.readText())
+    private suspend fun processTextFile(file: File, preloadedText: SefariaMergedText? = null) {
+        val mergedText = preloadedText ?: json.decodeFromString<SefariaMergedText>(file.readText())
 
-            // Find book by English title
-            val bookId = bookMapByEnglish[mergedText.title]
-            if (bookId == null) {
-                logger.warn("Could not find book for title: ${mergedText.title}")
-                return
-            }
-
-            // Parse the text structure and create lines and TOC
-            parseAndInsertText(bookId, mergedText)
-
-            logger.debug("Processed text for book: ${mergedText.title} (ID: $bookId)")
-        } catch (e: Exception) {
-            logger.error("Error processing text file ${file.absolutePath}", e)
+        // Find book by English title
+        val bookId = bookMapByEnglish[mergedText.title]
+        if (bookId == null) {
+            logger.warn("Could not find book for title: ${mergedText.title}")
+            return
         }
+
+        // Parse the text structure and create lines and TOC
+        parseAndInsertText(bookId, mergedText)
+
+        logger.debug("Processed text for book: ${mergedText.title} (ID: $bookId)")
     }
 
     private suspend fun parseAndInsertText(bookId: Long, mergedText: SefariaMergedText) {
@@ -490,28 +615,29 @@ class SefariaToSQLiteConverter(
         }
     }
 
-    private suspend fun processLinks() {
+    private suspend fun processLinks(preloadedLinkLines: Map<File, List<String>>? = null) {
         val linksDir = File(sefariaBaseDir, "links")
         if (!linksDir.exists()) {
             logger.error("Links directory not found: ${linksDir.absolutePath}")
             return
         }
 
-        // Process all links*.csv files
-        val linkFiles = linksDir.listFiles { file ->
+        // Process all links*.csv files (preloaded if available)
+        val linkFiles = preloadedLinkLines?.keys?.toList() ?: linksDir.listFiles { file ->
             file.name.startsWith("links") &&
             file.name.endsWith(".csv") &&
             !file.name.contains("by_book")
-        }
+        }?.toList().orEmpty()
 
-        logger.info("Found ${linkFiles?.size ?: 0} link CSV files")
+        logger.info("Found ${linkFiles.size} link CSV files")
 
         var totalLinksProcessed = 0
         var totalLinksCreated = 0
 
-        linkFiles?.forEach { file ->
+        linkFiles.forEach { file ->
             try {
-                val stats = processLinkFile(file)
+                val lines = preloadedLinkLines?.get(file)
+                val stats = processLinkFile(file, lines)
                 totalLinksProcessed += stats.first
                 totalLinksCreated += stats.second
                 logger.info("Processed ${stats.first} links from ${file.name}, created ${stats.second} links")
@@ -521,6 +647,8 @@ class SefariaToSQLiteConverter(
         }
 
         logger.info("Total links processed: $totalLinksProcessed, created: $totalLinksCreated")
+        stats.linksProcessed += totalLinksProcessed
+        stats.linksCreated += totalLinksCreated
 
         // After all links are inserted, update per-book link flags
         if (totalLinksCreated > 0) {
@@ -531,33 +659,32 @@ class SefariaToSQLiteConverter(
         }
     }
 
-    private suspend fun processLinkFile(file: File): Pair<Int, Int> {
+    private suspend fun processLinkFile(file: File, preloadedLines: List<String>? = null): Pair<Int, Int> {
         var processed = 0
         var created = 0
 
-        file.useLines { lines ->
-            lines.drop(1).forEach { line -> // Skip header
-                try {
-                    val parts = parseCsvLine(line)
-                    if (parts.size >= 7) {
-                        processed++
-                        val link = SefariaLink(
-                            citation1 = parts[0],
-                            citation2 = parts[1],
-                            connectionType = parts[2],
-                            text1 = parts[3],
-                            text2 = parts[4],
-                            category1 = parts[5],
-                            category2 = parts[6]
-                        )
-                        // Process link
-                        if (processLink(link)) {
-                            created++
-                        }
+        val linesSeq = preloadedLines?.asSequence() ?: file.useLines { sequence -> sequence.toList().asSequence() }
+        linesSeq.drop(1).forEach { line -> // Skip header
+            try {
+                val parts = parseCsvLine(line)
+                if (parts.size >= 7) {
+                    processed++
+                    val link = SefariaLink(
+                        citation1 = parts[0],
+                        citation2 = parts[1],
+                        connectionType = parts[2],
+                        text1 = parts[3],
+                        text2 = parts[4],
+                        category1 = parts[5],
+                        category2 = parts[6]
+                    )
+                    // Process link
+                    if (processLink(link)) {
+                        created++
                     }
-                } catch (e: Exception) {
-                    logger.debug("Error parsing CSV line: $line", e)
                 }
+            } catch (e: Exception) {
+                logger.debug("Error parsing CSV line: $line", e)
             }
         }
 
@@ -774,6 +901,7 @@ class SefariaToSQLiteConverter(
         } else {
             citation.bookTitle
         }
+        val baseBookTitle = citation.bookTitle
 
         // 0) Try precise seif-based index using merged.json structure when we have a section and at least Siman/Seif
         val section = citation.section
@@ -781,13 +909,14 @@ class SefariaToSQLiteConverter(
             val siman = citation.references[0]
             val seif = citation.references[1]
             val fromSeifIndex = getLineIndexFromSeifIndex(fullBookTitle, section, siman, seif)
+                ?: getLineIndexFromSeifIndex(baseBookTitle, section, siman, seif)
             if (fromSeifIndex != null && fromSeifIndex in 0 until maxLines) {
                 return fromSeifIndex
             }
         }
 
         // 1) Try schema-based structure if available
-        val structure = bookStructures[fullBookTitle]
+        val structure = bookStructures[fullBookTitle] ?: bookStructures[baseBookTitle]
         if (structure != null) {
             val idx = citationParser.calculateLineIndex(citation, structure)
             if (idx in 0 until maxLines) {
@@ -847,12 +976,24 @@ class SefariaToSQLiteConverter(
      */
     private fun ensureSeifIndexForBook(bookTitle: String) {
         if (seifIndexCache.containsKey(bookTitle)) return
+        // For sectioned titles like "Tur, Orach Chayim", also try the base title "Tur"
+        val baseTitle = bookTitle.substringBefore(",").trim()
+        if (seifIndexCache.containsKey(baseTitle)) {
+            // Mirror existing index under the full title key for faster subsequent lookups
+            seifIndexCache[bookTitle] = seifIndexCache[baseTitle]!!
+            return
+        }
+
         ensureMergedJsonIndex()
-        val file = mergedJsonFileByTitle[bookTitle] ?: return
+        val file = mergedJsonFileByTitle[bookTitle] ?: mergedJsonFileByTitle[baseTitle] ?: return
         runCatching {
-            val merged = json.decodeFromString<SefariaMergedText>(file.readText())
+            val merged = preloadedData?.mergedTexts?.get(file)
+                ?: json.decodeFromString<SefariaMergedText>(file.readText())
             val index = buildSeifIndexFromMerged(merged)
             seifIndexCache[bookTitle] = index
+            if (bookTitle != baseTitle) {
+                seifIndexCache[baseTitle] = index
+            }
         }
     }
 
@@ -954,6 +1095,12 @@ class SefariaToSQLiteConverter(
      * Build an index of merged.json files under sefariaBaseDir/json keyed by mergedText.title.
      */
     private fun ensureMergedJsonIndex() {
+        if (mergedJsonFileByTitle.isNotEmpty()) return
+        preloadedData?.mergedTexts?.forEach { (file, merged) ->
+            if (merged.title.isNotBlank()) {
+                mergedJsonFileByTitle[merged.title] = file
+            }
+        }
         if (mergedJsonFileByTitle.isNotEmpty()) return
         val jsonRoot = File(sefariaBaseDir, "json")
         if (!jsonRoot.exists()) return
