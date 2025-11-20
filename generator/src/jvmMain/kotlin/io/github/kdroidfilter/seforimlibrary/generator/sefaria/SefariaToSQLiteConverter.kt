@@ -596,11 +596,23 @@ class SefariaToSQLiteConverter(
             }
 
             // Find books by title (English title from schema / merged.json)
-            val bookId1 = bookMapByEnglish[citation1.bookTitle]
-            val bookId2 = bookMapByEnglish[citation2.bookTitle]
+            // For books with sections (e.g., "Shulchan Arukh, Orach Chayim"), reconstruct full title
+            val fullTitle1 = if (citation1.section != null) {
+                "${citation1.bookTitle}, ${citation1.section}"
+            } else {
+                citation1.bookTitle
+            }
+            val fullTitle2 = if (citation2.section != null) {
+                "${citation2.bookTitle}, ${citation2.section}"
+            } else {
+                citation2.bookTitle
+            }
+
+            val bookId1 = bookMapByEnglish[fullTitle1]
+            val bookId2 = bookMapByEnglish[fullTitle2]
 
             if (bookId1 == null || bookId2 == null) {
-                logger.debug("Could not find books for link: ${citation1.bookTitle} -> ${citation2.bookTitle}")
+                logger.debug("Could not find books for link: $fullTitle1 -> $fullTitle2 (from citations: ${link.citation1} -> ${link.citation2})")
                 return false
             }
 
@@ -609,7 +621,7 @@ class SefariaToSQLiteConverter(
             val maxLines2 = bookLineOffsets[bookId2] ?: 0
 
             if (maxLines1 <= 0 || maxLines2 <= 0) {
-                logger.debug("No lines for books in link: ${citation1.bookTitle} (lines=$maxLines1), ${citation2.bookTitle} (lines=$maxLines2)")
+                logger.debug("No lines for books in link: $fullTitle1 (lines=$maxLines1), $fullTitle2 (lines=$maxLines2)")
                 return false
             }
 
@@ -636,8 +648,9 @@ class SefariaToSQLiteConverter(
                 return false
             }
 
-            val schema1 = schemaCache[citation1.bookTitle]
-            val schema2 = schemaCache[citation2.bookTitle]
+            // Look up schemas using full titles (same as bookMapByEnglish)
+            val schema1 = schemaCache[fullTitle1]
+            val schema2 = schemaCache[fullTitle2]
 
             fun isDependent(schema: SefariaSchema?): Boolean {
                 val dep = schema?.dependence ?: return false
@@ -755,19 +768,26 @@ class SefariaToSQLiteConverter(
     ): Int {
         if (maxLines <= 0) return -1
 
+        // Reconstruct full book title for lookups (same logic as in processLink)
+        val fullBookTitle = if (citation.section != null) {
+            "${citation.bookTitle}, ${citation.section}"
+        } else {
+            citation.bookTitle
+        }
+
         // 0) Try precise seif-based index using merged.json structure when we have a section and at least Siman/Seif
         val section = citation.section
         if (section != null && citation.references.size >= 2) {
             val siman = citation.references[0]
             val seif = citation.references[1]
-            val fromSeifIndex = getLineIndexFromSeifIndex(citation.bookTitle, section, siman, seif)
+            val fromSeifIndex = getLineIndexFromSeifIndex(fullBookTitle, section, siman, seif)
             if (fromSeifIndex != null && fromSeifIndex in 0 until maxLines) {
                 return fromSeifIndex
             }
         }
 
         // 1) Try schema-based structure if available
-        val structure = bookStructures[citation.bookTitle]
+        val structure = bookStructures[fullBookTitle]
         if (structure != null) {
             val idx = citationParser.calculateLineIndex(citation, structure)
             if (idx in 0 until maxLines) {

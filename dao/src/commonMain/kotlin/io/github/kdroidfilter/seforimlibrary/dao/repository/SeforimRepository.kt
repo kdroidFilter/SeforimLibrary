@@ -1759,6 +1759,33 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     fun close() {
         driver.close()
     }
+
+    // --- Additional helper methods for diagnostics ---
+
+    /**
+     * Counts all links in the database.
+     */
+    suspend fun countAllLinks(): Long = withContext(Dispatchers.IO) {
+        database.linkQueriesQueries.countAllLinks().executeAsOne()
+    }
+
+    /**
+     * Gets links where the given book is the source.
+     */
+    suspend fun getLinksBySourceBook(bookId: Long): List<Link> = withContext(Dispatchers.IO) {
+        database.linkQueriesQueries.selectLinksBySourceBook(bookId).executeAsList().map { it.toModel() }
+    }
+
+    /**
+     * Counts links between two books (in either direction).
+     */
+    suspend fun countLinksBetweenBooks(bookId1: Long, bookId2: Long): Long = withContext(Dispatchers.IO) {
+        val count1 = database.linkQueriesQueries.countLinksBySourceBook(bookId1).executeAsOne()
+        val count2 = database.linkQueriesQueries.countLinksByTargetBook(bookId2).executeAsOne()
+        val count3 = database.linkQueriesQueries.countLinksBySourceBook(bookId2).executeAsOne()
+        val count4 = database.linkQueriesQueries.countLinksByTargetBook(bookId1).executeAsOne()
+        count1 + count2 + count3 + count4
+    }
 }
 
 // Data classes for enriched results

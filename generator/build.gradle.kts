@@ -274,3 +274,30 @@ tasks.register<JavaExec>("writeReleaseInfo") {
 
     jvmArgs = listOf("-Xmx256m")
 }
+
+// Diagnose Sefaria database links
+// Usage:
+//   ./gradlew :generator:diagnoseSefariaLinks -PseforimDb=/path/to/sefaria.db
+//   ./gradlew :generator:diagnoseSefariaLinks  # Uses default build/sefaria.db
+tasks.register<JavaExec>("diagnoseSefariaLinks") {
+    group = "application"
+    description = "Diagnose links in Sefaria database for Shulchan Aruch."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.sefaria.DiagnoseSefariaLinksKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    // Default DB path in build/
+    val defaultDbPath = layout.buildDirectory.file("sefaria.db").get().asFile.absolutePath
+
+    // Allow override via -PseforimDb
+    val dbPath = if (project.hasProperty("seforimDb")) {
+        project.property("seforimDb") as String
+    } else {
+        defaultDbPath
+    }
+
+    args(dbPath)
+
+    jvmArgs = listOf("-Xmx1g")
+}
