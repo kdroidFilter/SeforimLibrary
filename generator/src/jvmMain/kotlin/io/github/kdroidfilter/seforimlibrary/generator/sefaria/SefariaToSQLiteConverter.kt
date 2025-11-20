@@ -449,6 +449,7 @@ class SefariaToSQLiteConverter(
 
             // Parse the text using the text parser
             val parsed = textParser.parse(bookId, mergedText, schema)
+            val (collapsedTocEntries, collapsedLineIndices) = collapseSingleChildToc(parsed.tocEntries, parsed.tocLineIndices)
 
             // Initialize cache for this book
             val bookCache = mutableMapOf<Int, Long>()
@@ -464,9 +465,9 @@ class SefariaToSQLiteConverter(
             // Map temporary parser IDs to real database-generated IDs
             val tempIdToRealId = mutableMapOf<Long, Long>()
 
-            parsed.tocEntries.forEach { tocEntry ->
+            collapsedTocEntries.forEach { tocEntry ->
                 // Get the line index for this TOC entry
-                val lineIndex = parsed.tocLineIndices[tocEntry.id]
+                val lineIndex = collapsedLineIndices[tocEntry.id]
                 val lineId = if (lineIndex != null && lineIndex < parsed.lines.size) {
                     bookCache[lineIndex]
                 } else null
@@ -496,8 +497,8 @@ class SefariaToSQLiteConverter(
             }
 
             // Second pass: update hasChildren and isLastChild flags
-            if (parsed.tocEntries.isNotEmpty()) {
-                updateTocEntryFlags(bookId, parsed.tocEntries, tempIdToRealId)
+            if (collapsedTocEntries.isNotEmpty()) {
+                updateTocEntryFlags(bookId, collapsedTocEntries, tempIdToRealId)
             }
 
             // Build line→TOC ownership so features relying on line_toc (breadcrumbs, filters)
@@ -510,10 +511,63 @@ class SefariaToSQLiteConverter(
             // Store line count for this book (for link processing)
             bookLineOffsets[bookId] = parsed.lines.size
 
-            logger.info("Inserted ${parsed.lines.size} lines and ${parsed.tocEntries.size} TOC entries for book ID: $bookId")
+            logger.info("Inserted ${parsed.lines.size} lines and ${collapsedTocEntries.size} TOC entries for book ID: $bookId")
         } catch (e: Exception) {
             logger.error("Error parsing and inserting text for book ID: $bookId", e)
         }
+    }
+
+    /**
+     * Collapse single-child TOC chains (a>b>c -> a) to reduce depth and improve performance.
+     * Preserves ordering and keeps the first available line index along the collapsed chain.
+     */
+    private fun collapseSingleChildToc(
+        tocEntries: List<TocEntry>,
+        tocLineIndices: Map<Long, Int>
+    ): Pair<List<TocEntry>, Map<Long, Int>> {
+        if (tocEntries.isEmpty()) return tocEntries to tocLineIndices
+
+        val childrenByParent = mutableMapOf<Long?, MutableList<TocEntry>>()
+        tocEntries.forEach { entry ->
+            val key = entry.parentId
+            childrenByParent.getOrPut(key) { mutableListOf() }.add(entry)
+        }
+
+        var nextId = 1L
+        val newEntries = mutableListOf<TocEntry>()
+        val newLineIndices = mutableMapOf<Long, Int>()
+
+        fun emit(entry: TocEntry, parentId: Long?, level: Int) {
+            var current = entry
+            var lineIdx = tocLineIndices[current.id]
+            var childList = childrenByParent[current.id].orEmpty()
+
+            // Collapse chains of single children
+            while (childList.size == 1) {
+                val child = childList.first()
+                if (lineIdx == null) {
+                    lineIdx = tocLineIndices[child.id]
+                }
+                current = current.copy() // keep current text/metadata
+                childList = childrenByParent[child.id].orEmpty()
+            }
+
+            val newId = nextId++
+            val newEntry = current.copy(id = newId, parentId = parentId, level = level)
+            newEntries += newEntry
+            lineIdx?.let { newLineIndices[newId] = it }
+
+            childList.forEachIndexed { _, child ->
+                emit(child, newId, level + 1)
+            }
+        }
+
+        val roots = childrenByParent[null].orEmpty()
+        roots.forEach { root ->
+            emit(root, null, 0)
+        }
+
+        return newEntries to newLineIndices
     }
 
     /**
@@ -756,13 +810,13 @@ class SefariaToSQLiteConverter(
             val lineIndex1 = calculateLineIndexForBook(citation1, bookId1, maxLines1)
             val lineIndex2 = calculateLineIndexForBook(citation2, bookId2, maxLines2)
 
-            if (lineIndex1 < 0 || lineIndex1 >= maxLines1) {
-                logger.debug("Line index for first citation out of range: $lineIndex1 (max: $maxLines1) for ${link.citation1}")
+            if (lineIndex1 == null || lineIndex1 < 0 || lineIndex1 >= maxLines1) {
+                logger.debug("Line index for first citation out of range or null: $lineIndex1 (max: $maxLines1) for ${link.citation1}")
                 return false
             }
 
-            if (lineIndex2 < 0 || lineIndex2 >= maxLines2) {
-                logger.debug("Line index for second citation out of range: $lineIndex2 (max: $maxLines2) for ${link.citation2}")
+            if (lineIndex2 == null || lineIndex2 < 0 || lineIndex2 >= maxLines2) {
+                logger.debug("Line index for second citation out of range or null: $lineIndex2 (max: $maxLines2) for ${link.citation2}")
                 return false
             }
 
@@ -892,8 +946,8 @@ class SefariaToSQLiteConverter(
         citation: SefariaCitationParser.Citation,
         bookId: Long,
         maxLines: Int
-    ): Int {
-        if (maxLines <= 0) return -1
+    ): Int? {
+        if (maxLines <= 0) return null
 
         // Reconstruct full book title for lookups (same logic as in processLink)
         val fullBookTitle = if (citation.section != null) {
@@ -915,41 +969,110 @@ class SefariaToSQLiteConverter(
             }
         }
 
-        // 1) Try schema-based structure if available
-        val structure = bookStructures[fullBookTitle] ?: bookStructures[baseBookTitle]
-        if (structure != null) {
-            val idx = citationParser.calculateLineIndex(citation, structure)
-            if (idx in 0 until maxLines) {
-                return idx
-            }
+        // 0b) Use merged.json to map citation references directly to line index (no heuristics)
+        val mergedIndex = calculateLineIndexFromMerged(fullBookTitle, citation)
+            ?: calculateLineIndexFromMerged(baseBookTitle, citation)
+        if (mergedIndex != null && mergedIndex in 0 until maxLines) {
+            return mergedIndex
         }
 
-        // 2) Fallback heuristic based only on reference numbers
-        val refs = citation.references
-        if (refs.isEmpty()) {
-            return 0
+        // If we cannot map using merged.json, do not guess.
+        return null
+    }
+
+    /**
+     * Map a citation directly to the line index by traversing the merged.json content in the
+     * same order as parsing, avoiding heuristics.
+     */
+    private fun calculateLineIndexFromMerged(
+        bookTitle: String,
+        citation: SefariaCitationParser.Citation
+    ): Int? {
+        ensureMergedJsonIndex()
+        val file = mergedJsonFileByTitle[bookTitle] ?: return null
+        val merged = preloadedData?.mergedTexts?.get(file)
+            ?: runCatching { json.decodeFromString<SefariaMergedText>(file.readText()) }.getOrNull()
+            ?: return null
+
+        val root = merged.text
+        val sectionElement = if (citation.section != null && root is JsonObject) {
+            root[citation.section] ?: return null
+        } else {
+            root
         }
+        val (targetArray, introLines) = unwrapSectionElement(sectionElement) ?: return null
+        val idx = lineIndexInArray(targetArray, citation.references) ?: return null
+        return introLines + idx
+    }
 
-        fun Int.safe() = if (this <= 0) 1 else this
-
-        val idx = when (refs.size) {
-            1 -> refs[0].safe() - 1
-            2 -> {
-                // Treat first ref as a coarse "chapter"/"siman" index and the second as a finer index
-                val level1 = refs[0].safe() - 1
-                val level2 = refs[1].safe() - 1
-                level1 * 50 + level2
+    /**
+     * If the section element contains a default "" array, return that array plus the number of
+     * lines contributed by non-default keys (Introductions) that precede it.
+     */
+    private fun unwrapSectionElement(element: JsonElement): Pair<JsonArray, Int>? {
+        return when (element) {
+            is JsonArray -> element to 0
+            is JsonObject -> {
+                if (element.containsKey("")) {
+                    val introLines = element
+                        .filterKeys { it.isNotEmpty() }
+                        .values
+                        .sumOf { countLinesInElement(it) }
+                    val defaultVal = element[""] as? JsonArray ?: return null
+                    defaultVal to introLines
+                } else {
+                    null
+                }
             }
-            else -> {
-                // Three-level address (e.g., Siman:Seif:Paragraph) – spread more coarsely
-                val level1 = refs[0].safe() - 1
-                val level2 = refs[1].safe() - 1
-                val level3 = refs[2].safe() - 1
-                level1 * 200 + level2 * 10 + level3
-            }
+            else -> null
         }
+    }
 
-        return idx.coerceIn(0, maxLines - 1)
+    /**
+     * Recursively compute the line index inside a JsonArray using 1-based references list.
+     */
+    private fun lineIndexInArray(array: JsonArray, refs: List<Int>): Int? {
+        if (refs.isEmpty()) return 0
+        val targetIdx = refs.first() - 1
+        if (targetIdx !in array.indices) return null
+        val prefix = array.take(targetIdx).sumOf { countLinesInElement(it) }
+        val child = array[targetIdx]
+        if (refs.size == 1) {
+            return prefix
+        }
+        return when (child) {
+            is JsonArray -> {
+                val inner = lineIndexInArray(child, refs.drop(1)) ?: return null
+                prefix + inner
+            }
+            is JsonObject -> {
+                val (innerArray, introLines) = unwrapSectionElement(child) ?: return null
+                val inner = lineIndexInArray(innerArray, refs.drop(1)) ?: return null
+                prefix + introLines + inner
+            }
+            else -> null
+        }
+    }
+
+    /**
+     * Count how many lines (strings) are inside this JsonElement, following the same traversal
+     * order as text parsing: introduction keys before default "" when present.
+     */
+    private fun countLinesInElement(element: JsonElement): Int {
+        return when (element) {
+            is JsonPrimitive -> if (element.isString && element.content.isNotBlank()) 1 else 0
+            is JsonArray -> element.sumOf { countLinesInElement(it) }
+            is JsonObject -> {
+                if (element.containsKey("")) {
+                    val intro = element.filterKeys { it.isNotEmpty() }.values.sumOf { countLinesInElement(it) }
+                    val defaultLines = element[""]?.let { countLinesInElement(it) } ?: 0
+                    intro + defaultLines
+                } else {
+                    element.values.sumOf { countLinesInElement(it) }
+                }
+            }
+            else -> 0
+        }
     }
 
     /**
@@ -1138,18 +1261,16 @@ class SefariaToSQLiteConverter(
             repository.updateBookHasLinks(bookId, hasSourceLinks, hasTargetLinks)
 
             // Per-connection-type flags (TARGUM, REFERENCE, COMMENTARY, OTHER)
+            // Only consider the book as a *source* for per-book connection flags used by the UI.
+            // This avoids marking commentary books as if they have commentaries on themselves.
             val hasTargum =
-                repository.countLinksBySourceBookAndType(bookId, ConnectionType.TARGUM.name) +
-                        repository.countLinksByTargetBookAndType(bookId, ConnectionType.TARGUM.name) > 0
+                repository.countLinksBySourceBookAndType(bookId, ConnectionType.TARGUM.name) > 0
             val hasReference =
-                repository.countLinksBySourceBookAndType(bookId, ConnectionType.REFERENCE.name) +
-                        repository.countLinksByTargetBookAndType(bookId, ConnectionType.REFERENCE.name) > 0
+                repository.countLinksBySourceBookAndType(bookId, ConnectionType.REFERENCE.name) > 0
             val hasCommentary =
-                repository.countLinksBySourceBookAndType(bookId, ConnectionType.COMMENTARY.name) +
-                        repository.countLinksByTargetBookAndType(bookId, ConnectionType.COMMENTARY.name) > 0
+                repository.countLinksBySourceBookAndType(bookId, ConnectionType.COMMENTARY.name) > 0
             val hasOther =
-                repository.countLinksBySourceBookAndType(bookId, ConnectionType.OTHER.name) +
-                        repository.countLinksByTargetBookAndType(bookId, ConnectionType.OTHER.name) > 0
+                repository.countLinksBySourceBookAndType(bookId, ConnectionType.OTHER.name) > 0
 
             repository.updateBookConnectionFlags(
                 bookId = bookId,
