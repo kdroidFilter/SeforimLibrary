@@ -375,6 +375,10 @@ class SefariaToSQLiteConverter(
                 updateTocEntryFlags(bookId, parsed.tocEntries, tempIdToRealId)
             }
 
+            // Build line→TOC ownership so features relying on line_toc (breadcrumbs, filters)
+            // behave like the main Otzaria generator.
+            repository.rebuildLineTocForBook(bookId)
+
             // Update book's total lines
             repository.updateBookTotalLines(bookId, parsed.lines.size)
 
@@ -641,16 +645,23 @@ class SefariaToSQLiteConverter(
             }
 
             // Decide link orientation:
-            // For COMMENTARY/TARGUM we want base text as sourceBook and dependent text as targetBook,
-            // so that commentators/targumim appear correctly for the base book.
-            var sourceBookId = bookId1
-            var sourceLineId = lineId1
-            var targetBookId = bookId2
-            var targetLineId = lineId2
+            // For COMMENTARY/TARGUM, CSV semantics (see LINKS_GUIDE) are Text1 = commentary on Text2.
+            // We want base text as sourceBook/sourceLine so UI can fetch commentaries from base lines.
+            // Use schema.dependence when available, otherwise keep the CSV convention.
+            val sourceBookId: Long
+            val sourceLineId: Long
+            val targetBookId: Long
+            val targetLineId: Long
 
             if (connectionType == io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType.COMMENTARY ||
                 connectionType == io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType.TARGUM
             ) {
+                // Default: Text2 is base, Text1 is commentary (per LINKS_GUIDE)
+                var srcBook = bookId2
+                var srcLine = lineId2
+                var tgtBook = bookId1
+                var tgtLine = lineId1
+
                 val schema1 = schemaCache[citation1.bookTitle]
                 val schema2 = schemaCache[citation2.bookTitle]
 
@@ -665,27 +676,28 @@ class SefariaToSQLiteConverter(
 
                 when {
                     dep1 && !dep2 -> {
-                        // citation1 is commentary/targum on citation2
-                        sourceBookId = bookId2
-                        sourceLineId = lineId2
-                        targetBookId = bookId1
-                        targetLineId = lineId1
+                        // citation1 is commentary/targum on citation2 (keep default orientation)
                     }
                     dep2 && !dep1 -> {
-                        // citation2 is commentary/targum on citation1
-                        sourceBookId = bookId1
-                        sourceLineId = lineId1
-                        targetBookId = bookId2
-                        targetLineId = lineId2
+                        // citation2 is commentary/targum on citation1 -> flip
+                        srcBook = bookId1
+                        srcLine = lineId1
+                        tgtBook = bookId2
+                        tgtLine = lineId2
                     }
-                    else -> {
-                        // Fallback: keep CSV order (citation1 as source)
-                        sourceBookId = bookId1
-                        sourceLineId = lineId1
-                        targetBookId = bookId2
-                        targetLineId = lineId2
-                    }
+                    // else: keep CSV convention
                 }
+
+                sourceBookId = srcBook
+                sourceLineId = srcLine
+                targetBookId = tgtBook
+                targetLineId = tgtLine
+            } else {
+                // Reference/other: respect CSV ordering
+                sourceBookId = bookId1
+                sourceLineId = lineId1
+                targetBookId = bookId2
+                targetLineId = lineId2
             }
 
             // Create the link
