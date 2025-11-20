@@ -636,12 +636,39 @@ class SefariaToSQLiteConverter(
                 return false
             }
 
+            val schema1 = schemaCache[citation1.bookTitle]
+            val schema2 = schemaCache[citation2.bookTitle]
+
+            fun isDependent(schema: SefariaSchema?): Boolean {
+                val dep = schema?.dependence ?: return false
+                return dep.equals("Commentary", ignoreCase = true) ||
+                        dep.equals("Targum", ignoreCase = true)
+            }
+
+            fun isTargum(schema: SefariaSchema?): Boolean {
+                val dep = schema?.dependence ?: return false
+                return dep.equals("Targum", ignoreCase = true)
+            }
+
             // Determine connection type
-            val connectionType = when (link.connectionType.lowercase()) {
-                "commentary" -> io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType.COMMENTARY
-                "targum" -> io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType.TARGUM
-                "quotation" -> io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType.REFERENCE
-                else -> io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType.OTHER
+            val rawType = link.connectionType.lowercase()
+            val connectionType = when {
+                rawType == "commentary" ->
+                    io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType.COMMENTARY
+                rawType == "targum" ->
+                    io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType.TARGUM
+                rawType == "quotation" ->
+                    io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType.REFERENCE
+                rawType.isBlank() && isDependent(schema1) != isDependent(schema2) -> {
+                    // Infer when CSV omits connection type but one side is a commentary/targum
+                    if (isTargum(schema1) || isTargum(schema2)) {
+                        io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType.TARGUM
+                    } else {
+                        io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType.COMMENTARY
+                    }
+                }
+                else ->
+                    io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType.OTHER
             }
 
             // Decide link orientation:
@@ -661,15 +688,6 @@ class SefariaToSQLiteConverter(
                 var srcLine = lineId2
                 var tgtBook = bookId1
                 var tgtLine = lineId1
-
-                val schema1 = schemaCache[citation1.bookTitle]
-                val schema2 = schemaCache[citation2.bookTitle]
-
-                fun isDependent(schema: SefariaSchema?): Boolean {
-                    val dep = schema?.dependence ?: return false
-                    return dep.equals("Commentary", ignoreCase = true) ||
-                            dep.equals("Targum", ignoreCase = true)
-                }
 
                 val dep1 = isDependent(schema1)
                 val dep2 = isDependent(schema2)
