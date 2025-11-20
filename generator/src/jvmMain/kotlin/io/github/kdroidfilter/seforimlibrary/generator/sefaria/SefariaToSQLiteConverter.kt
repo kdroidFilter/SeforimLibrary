@@ -22,6 +22,7 @@ class SefariaToSQLiteConverter(
         isLenient = true
         coerceInputValues = true
     }
+    private val tableOfContents = loadTableOfContents()
 
     // Maps to track IDs
     private val categoryMap = mutableMapOf<String, Long>() // Hebrew title -> DB ID
@@ -114,6 +115,18 @@ class SefariaToSQLiteConverter(
         logger.info("============================================================")
     }
 
+    private fun loadTableOfContents(): SefariaTableOfContents? {
+        val tocFile = File(sefariaBaseDir, "table_of_contents.json")
+        if (!tocFile.exists()) {
+            logger.warn("table_of_contents.json not found in ${sefariaBaseDir.absolutePath}; falling back to English category names")
+            return null
+        }
+
+        return runCatching { SefariaTableOfContents.fromFile(tocFile, json) }
+            .onFailure { logger.error("Failed to parse table_of_contents.json at ${tocFile.absolutePath}", it) }
+            .getOrNull()
+    }
+
     private suspend fun processSchemas() {
         val schemasDir = File(sefariaBaseDir, "schemas")
         if (!schemasDir.exists()) {
@@ -181,17 +194,22 @@ class SefariaToSQLiteConverter(
         // Determine if this is a base book or commentary
         val isBaseBook = schema.dependence != "Commentary"
 
+        val tocBookInfo = tableOfContents?.bookInfo(schema.title)
+        val bookOrder = tocBookInfo?.order ?: 999f
+        val hebrewBookTitle = tocBookInfo?.hebrewTitle ?: schema.heTitle
+
         // Create book
         val book = Book(
             categoryId = categoryId,
             sourceId = sourceMap["Sefaria"]!!,
-            title = schema.heTitle,
+            title = hebrewBookTitle,
             heShortDesc = schema.heShortDesc ?: schema.heDesc,
+            order = bookOrder.toFloat(),
             isBaseBook = isBaseBook
         )
 
         val bookId = repository.insertBook(book)
-        bookMap[schema.heTitle] = bookId
+        bookMap[hebrewBookTitle] = bookId
         bookMapByEnglish[schema.title] = bookId
         stats.booksCreated++
 
@@ -213,9 +231,14 @@ class SefariaToSQLiteConverter(
         var parentId: Long? = null
         var currentLevel = 0
 
-        // Need to get Hebrew category names - for now use English and we'll translate later
-        categories.forEach { categoryName ->
-            val hebrewCategoryName = translateCategoryToHebrew(categoryName)
+        val categoryNames = tableOfContents?.hebrewCategoryPath(categories) ?: run {
+            if (tableOfContents != null) {
+                logger.warn("Could not resolve Hebrew names for categories ${categories.joinToString(" > ")} from table_of_contents.json; using English names")
+            }
+            categories
+        }
+
+        categoryNames.forEach { hebrewCategoryName ->
             val key = if (parentId == null) hebrewCategoryName else "$parentId/$hebrewCategoryName"
 
             val categoryId = categoryMap.getOrPut(key) {
@@ -966,84 +989,4 @@ class SefariaToSQLiteConverter(
         }
     }
 
-    /**
-     * Translates English category names to Hebrew
-     */
-    private fun translateCategoryToHebrew(englishName: String): String {
-        return when (englishName) {
-            // Main categories
-            "Tanakh" -> "תנ״ך"
-            "Torah" -> "תורה"
-            "Prophets" -> "נביאים"
-            "Writings" -> "כתובים"
-            "Talmud" -> "תלמוד"
-            "Mishnah" -> "משנה"
-            "Halakhah" -> "הלכה"
-            "Kabbalah" -> "קבלה"
-            "Liturgy" -> "תפילה"
-            "Midrash" -> "מדרש"
-            "Musar" -> "מוסר"
-            "Chasidut" -> "חסידות"
-            "Responsa" -> "שו״ת"
-            "Reference" -> "מקורות"
-            "Jewish Thought" -> "מחשבת ישראל"
-            "Tosefta" -> "תוספתא"
-            "Second Temple" -> "בית שני"
-
-            // Talmud sub-categories
-            "Bavli" -> "בבלי"
-            "Yerushalmi" -> "ירושלמי"
-
-            // Commentary periods
-            "Rishonim" -> "ראשונים"
-            "Acharonim" -> "אחרונים"
-            "Rishonim on Tanakh" -> "ראשונים על התנ״ך"
-            "Acharonim on Tanakh" -> "אחרונים על התנ״ך"
-            "Rishonim on Talmud" -> "ראשונים על התלמוד"
-            "Acharonim on Talmud" -> "אחרונים על התלמוד"
-            "Modern Commentary on Tanakh" -> "פרשנות מודרנית על התנ״ך"
-            "Modern Commentary on Talmud" -> "פרשנות מודרנית על התלמוד"
-
-            // Commentators
-            "Rashi" -> "רש״י"
-            "Ramban" -> "רמב״ן"
-            "Ibn Ezra" -> "אבן עזרא"
-            "Rashbam" -> "רשב״ם"
-            "Sforno" -> "ספורנו"
-
-            // Midrash types
-            "Aggadic Midrash" -> "מדרש אגדה"
-            "Halakhic Midrash" -> "מדרש הלכה"
-
-            // Halakhah
-            "Mishneh Torah" -> "משנה תורה"
-            "Shulchan Arukh" -> "שולחן ערוך"
-            "Tur" -> "טור"
-
-            // Kabbalah
-            "Zohar" -> "זוהר"
-
-            // Chasidut schools
-            "Chabad" -> "חב״ד"
-            "Breslov" -> "ברסלב"
-
-            // Mishnah orders
-            "Seder Zeraim" -> "סדר זרעים"
-            "Seder Moed" -> "סדר מועד"
-            "Seder Nashim" -> "סדר נשים"
-            "Seder Nezikin" -> "סדר נזיקין"
-            "Seder Kodashim" -> "סדר קדשים"
-            "Seder Tahorot" -> "סדר טהרות"
-
-            // Dictionary/Reference
-            "Dictionary" -> "מילון"
-            "Grammar" -> "דקדוק"
-
-            // Other
-            "Early Works" -> "יצירות מוקדמות"
-            "Other Works" -> "יצירות אחרות"
-
-            else -> englishName // Keep English if no translation
-        }
-    }
 }

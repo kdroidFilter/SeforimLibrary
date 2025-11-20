@@ -5,6 +5,7 @@ import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import io.github.kdroidfilter.seforimlibrary.generator.utils.HebrewTextUtils
+import io.github.kdroidfilter.seforimlibrary.generator.sefaria.SefariaTableOfContents
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -47,6 +48,7 @@ class DatabaseGenerator(
         ignoreUnknownKeys = true
         coerceInputValues = true
     }
+    private val sefariaTableOfContents = loadSefariaTableOfContents()
     private var nextBookId = 1L // Counter for book IDs
     private var nextLineId = 1L // Counter for line IDs
     private var nextTocEntryId = 1L // Counter for TOC entry IDs
@@ -372,6 +374,24 @@ class DatabaseGenerator(
             logger.w { "Metadata file metadata.json not found" }
             emptyMap()
         }
+    }
+
+    private fun loadSefariaTableOfContents(): SefariaTableOfContents? {
+        val candidates = listOf(
+            sourceDirectory.resolve("table_of_contents.json").toFile(),
+            sourceDirectory.resolve("sefaria/table_of_contents.json").toFile()
+        )
+
+        for (file in candidates) {
+            if (!file.exists()) continue
+            return runCatching { SefariaTableOfContents.fromFile(file) }
+                .onSuccess { logger.i { "Loaded Sefaria table_of_contents.json from ${file.absolutePath}" } }
+                .onFailure { logger.w(it) { "Failed to parse table_of_contents.json at ${file.absolutePath}" } }
+                .getOrNull()
+        }
+
+        logger.d { "No Sefaria table_of_contents.json found next to ${sourceDirectory}; catalog ordering will fall back to alphabetical" }
+        return null
     }
 
     @Serializable
@@ -1139,11 +1159,14 @@ class DatabaseGenerator(
         logger.i { "Building catalog from ${allBooks.size} books" }
 
         // Start from root categories and build recursively
-        val rootCategories = repository.getRootCategories()
+        val rootCategories = orderCategoriesForCatalog(
+            parentPath = emptyList(),
+            categories = repository.getRootCategories()
+        )
         var totalCategories = 0
 
         val catalogRoots = rootCategories.map { rootCategory ->
-            buildCatalogCategoryRecursive(rootCategory, booksByCategory).also {
+            buildCatalogCategoryRecursive(rootCategory, booksByCategory, listOf(rootCategory.title)).also {
                 totalCategories += countCategories(it)
             }
         }
@@ -1163,10 +1186,13 @@ class DatabaseGenerator(
      */
     private suspend fun buildCatalogCategoryRecursive(
         category: Category,
-        booksByCategory: Map<Long, List<Book>>
+        booksByCategory: Map<Long, List<Book>>,
+        hebrewPath: List<String>
     ): CatalogCategory {
         // Get books in this category
-        val books = booksByCategory[category.id]?.map { book ->
+        val booksInCategory = booksByCategory[category.id] ?: emptyList()
+        val orderedBooks = orderBooksForCatalog(hebrewPath, booksInCategory)
+        val books = orderedBooks.map { book ->
             CatalogBook(
                 id = book.id,
                 title = book.title,
@@ -1180,12 +1206,15 @@ class DatabaseGenerator(
                 hasCommentaryConnection = book.hasCommentaryConnection,
                 hasOtherConnection = book.hasOtherConnection
             )
-        }?.sortedBy { it.order } ?: emptyList()
+        }
 
         // Get subcategories and build them recursively
-        val children = repository.getCategoryChildren(category.id)
+        val children = orderCategoriesForCatalog(
+            parentPath = hebrewPath,
+            categories = repository.getCategoryChildren(category.id)
+        )
         val subcategories = children.map { child ->
-            buildCatalogCategoryRecursive(child, booksByCategory)
+            buildCatalogCategoryRecursive(child, booksByCategory, hebrewPath + child.title)
         }
 
         return CatalogCategory(
@@ -1195,6 +1224,29 @@ class DatabaseGenerator(
             parentId = category.parentId,
             books = books,
             subcategories = subcategories
+        )
+    }
+
+    private fun orderCategoriesForCatalog(parentPath: List<String>, categories: List<Category>): List<Category> {
+        val tocOrder = sefariaTableOfContents?.orderedCategoryNames(parentPath)
+        if (tocOrder.isNullOrEmpty()) return categories.sortedBy { it.title }
+
+        val indexByName = tocOrder.withIndex().associate { it.value to it.index }
+        return categories.sortedWith(
+            compareBy<Category> { indexByName[it.title] ?: Int.MAX_VALUE }
+                .thenBy { it.title }
+        )
+    }
+
+    private fun orderBooksForCatalog(parentPath: List<String>, books: List<Book>): List<Book> {
+        val tocOrder = sefariaTableOfContents?.orderedBookTitles(parentPath)
+        if (tocOrder.isNullOrEmpty()) return books.sortedBy { it.order }
+
+        val indexByTitle = tocOrder.withIndex().associate { it.value to it.index }
+        return books.sortedWith(
+            compareBy<Book> { indexByTitle[it.title] ?: Int.MAX_VALUE }
+                .thenBy { it.order }
+                .thenBy { it.title }
         )
     }
 
