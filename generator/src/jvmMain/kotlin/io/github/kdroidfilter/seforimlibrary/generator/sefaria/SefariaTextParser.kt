@@ -270,35 +270,34 @@ class SefariaTextParser {
                 } else {
                     null
                 }
+                val parentForChildren = thisTocId ?: parentId
 
                 // Parse the content of this node
                 when {
                     // If this node has sub-nodes, process them recursively
                     node.nodes != null && node.nodes.isNotEmpty() && jsonValue is JsonObject -> {
                         // Handle special case: node with both Introduction and default ("") key
-                        // Process non-default keys first, then default key
                         if (jsonValue.containsKey("")) {
-                            // Process non-empty keys first (like "Introduction")
-                            jsonValue.forEach { (subKey, subValue) ->
-                                if (subKey.isNotEmpty()) {
-                                    parseJsonElementToLines(subValue, bookId, lines)
+                            // Process non-empty keys first (like "Introduction"), then default key,
+                            // while still building TOC entries for each child node
+                            val orderedChildren = buildJsonObject {
+                                jsonValue.forEach { (subKey, subValue) ->
+                                    if (subKey.isNotEmpty()) {
+                                        put(subKey, subValue)
+                                    }
+                                }
+                                jsonValue[""]?.let { defaultValue ->
+                                    put("", defaultValue)
                                 }
                             }
-                            // Now process the default "" key with schema nodes
-                            jsonValue[""]?.let { defaultValue ->
-                                if (defaultValue is JsonObject) {
-                                    currentTocId = parseSchemaNodesWithLines(
-                                        bookId, node.nodes, defaultValue, lines, tocsWithIndices,
-                                        level + 1, thisTocId, currentTocId
-                                    )
-                                } else {
-                                    parseJsonElementToLines(defaultValue, bookId, lines)
-                                }
-                            }
+                            currentTocId = parseSchemaNodesWithLines(
+                                bookId, node.nodes, orderedChildren, lines, tocsWithIndices,
+                                level + 1, parentForChildren, currentTocId
+                            )
                         } else {
                             currentTocId = parseSchemaNodesWithLines(
                                 bookId, node.nodes, jsonValue, lines, tocsWithIndices,
-                                level + 1, thisTocId, currentTocId
+                                level + 1, parentForChildren, currentTocId
                             )
                         }
                     }
@@ -316,7 +315,7 @@ class SefariaTextParser {
                             depth = depth,
                             currentDepth = 0,
                             level = level + 1,
-                            parentId = thisTocId,
+                            parentId = parentForChildren,
                             nextTocId = currentTocId
                         )
                     }
