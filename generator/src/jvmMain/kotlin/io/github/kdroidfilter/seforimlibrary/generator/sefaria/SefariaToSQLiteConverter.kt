@@ -312,17 +312,44 @@ class SefariaToSQLiteConverter(
                 bookCache[index] = lineId
             }
 
-            // Insert TOC entries
-            // TocText will be created automatically by the repository
-            val insertedTocIds = mutableListOf<Long>()
+            // Insert TOC entries with temporary ID mapping
+            // Map temporary parser IDs to real database-generated IDs
+            val tempIdToRealId = mutableMapOf<Long, Long>()
+
             parsed.tocEntries.forEach { tocEntry ->
-                val tocId = repository.insertTocEntry(tocEntry)
-                insertedTocIds.add(tocId)
+                // Get the line index for this TOC entry
+                val lineIndex = parsed.tocLineIndices[tocEntry.id]
+                val lineId = if (lineIndex != null && lineIndex < parsed.lines.size) {
+                    bookCache[lineIndex]
+                } else null
+
+                // Map parent ID from temporary to real
+                val realParentId = if (tocEntry.parentId != null) {
+                    tempIdToRealId[tocEntry.parentId]
+                } else null
+
+                // Create TOC entry with real parent ID and line ID
+                val tocToInsert = TocEntry(
+                    id = 0,  // Let database auto-generate
+                    bookId = tocEntry.bookId,
+                    parentId = realParentId,
+                    level = tocEntry.level,
+                    text = tocEntry.text,
+                    lineId = lineId
+                )
+
+                val realTocId = repository.insertTocEntry(tocToInsert)
+                tempIdToRealId[tocEntry.id] = realTocId
+
+                // Update line's TOC entry reference if we have a line
+                if (lineId != null) {
+                    repository.updateLineTocEntry(lineId, realTocId)
+                }
             }
 
             // Second pass: update hasChildren and isLastChild flags
-            if (insertedTocIds.isNotEmpty()) {
-                updateTocEntryFlags(bookId, parsed.tocEntries)
+            if (parsed.tocEntries.isNotEmpty()) {
+                updateTocEntryFlags(bookId, parsed.tocEntries, tempIdToRealId)
             }
 
             // Update book's total lines
@@ -341,27 +368,39 @@ class SefariaToSQLiteConverter(
      * Second pass: update hasChildren and isLastChild flags for TOC entries
      * Inspired by Otzaria generator approach
      */
-    private suspend fun updateTocEntryFlags(bookId: Long, tocEntries: List<TocEntry>) {
+    private suspend fun updateTocEntryFlags(
+        bookId: Long,
+        tocEntries: List<TocEntry>,
+        tempIdToRealId: Map<Long, Long>
+    ) {
         try {
-            // Group entries by parentId to find children
-            val entriesByParent = tocEntries.groupBy { it.parentId }
+            // Group entries by real parent ID
+            val entriesByRealParent = tocEntries.groupBy { entry ->
+                if (entry.parentId != null) tempIdToRealId[entry.parentId] else null
+            }
 
-            // Create a set of IDs that have children
-            val parentIds = tocEntries.mapNotNull { it.parentId }.toSet()
+            // Create a set of real IDs that have children (map temp parent IDs to real IDs)
+            val realParentIds = tocEntries.mapNotNull { entry ->
+                entry.parentId?.let { tempIdToRealId[it] }
+            }.toSet()
 
             // Update hasChildren flag for all entries that are parents
             for (entry in tocEntries) {
-                if (entry.id in parentIds) {
-                    repository.updateTocEntryHasChildren(entry.id, true)
+                val realTocId = tempIdToRealId[entry.id]
+                if (realTocId != null && realTocId in realParentIds) {
+                    repository.updateTocEntryHasChildren(realTocId, true)
                 }
             }
 
             // Update isLastChild flag for the last child of each parent
-            for ((parentId, children) in entriesByParent) {
+            for ((realParentId, children) in entriesByRealParent) {
                 if (children.isNotEmpty()) {
                     // The last child in the list is the last child
-                    val lastChildId = children.last().id
-                    repository.updateTocEntryIsLastChild(lastChildId, true)
+                    val lastChildTempId = children.last().id
+                    val lastChildRealId = tempIdToRealId[lastChildTempId]
+                    if (lastChildRealId != null) {
+                        repository.updateTocEntryIsLastChild(lastChildRealId, true)
+                    }
                 }
             }
 

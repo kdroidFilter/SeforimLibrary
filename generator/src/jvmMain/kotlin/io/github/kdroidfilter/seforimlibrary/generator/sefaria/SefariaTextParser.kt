@@ -14,9 +14,21 @@ import org.slf4j.LoggerFactory
 class SefariaTextParser {
     private val logger = LoggerFactory.getLogger(SefariaTextParser::class.java)
 
+    // Global counter for generating unique temporary TOC IDs across all books
+    private var globalTocIdCounter = 1L
+
     data class ParsedText(
         val lines: List<Line>,
-        val tocEntries: List<TocEntry>
+        val tocEntries: List<TocEntry>,
+        val tocLineIndices: Map<Long, Int>  // Maps temporary TOC ID to starting line index
+    )
+
+    /**
+     * Helper class to track TOC entries with their line indices during parsing
+     */
+    private data class TocWithLineIndex(
+        val tocEntry: TocEntry,
+        val lineIndex: Int
     )
 
     /**
@@ -27,20 +39,28 @@ class SefariaTextParser {
      */
     fun parse(bookId: Long, mergedText: SefariaMergedText, schema: SefariaSchema? = null): ParsedText {
         val lines = mutableListOf<Line>()
-        val tocEntries = mutableListOf<TocEntry>()
+        val tocsWithIndices = mutableListOf<TocWithLineIndex>()
 
-        // First, parse the text to create lines
+        // Parse text and generate TOCs simultaneously
         val textElement = mergedText.text
         val hasSectionNames = mergedText.sectionNames != null
         val hasSchema = mergedText.schema != null
 
         when {
+            hasSectionNames && textElement is JsonArray && schema?.schema != null -> {
+                // Simple model with schema: parse with TOC generation
+                parseSimpleArrayWithToc(bookId, mergedText, schema.schema!!, lines, tocsWithIndices)
+            }
+            textElement is JsonObject && schema?.schema != null -> {
+                // Complex model with schema: parse with TOC generation
+                parseComplexSchemaWithToc(bookId, mergedText, schema.schema!!, lines, tocsWithIndices)
+            }
             hasSectionNames && textElement is JsonArray -> {
-                // Simple model: text is a nested array
+                // Simple model without schema: just parse lines
                 parseSimpleArrayLines(bookId, mergedText, lines)
             }
             textElement is JsonObject || hasSchema -> {
-                // Complex model: text is an object with named sections
+                // Complex model without schema: just parse lines
                 parseComplexSchemaLines(bookId, mergedText, lines)
             }
             else -> {
@@ -48,15 +68,11 @@ class SefariaTextParser {
             }
         }
 
-        // Generate TOC from schema if available, otherwise use text-based approach
-        if (schema?.schema != null) {
-            generateTocFromSchema(bookId, schema.schema!!, mergedText, lines, tocEntries)
-        } else {
-            // Fallback to text-based TOC generation
-            generateTocFromText(bookId, mergedText, lines, tocEntries)
-        }
+        // Extract TOC entries and build index map
+        val tocEntries = tocsWithIndices.map { it.tocEntry }
+        val tocLineIndices = tocsWithIndices.associate { it.tocEntry.id to it.lineIndex }
 
-        return ParsedText(lines, tocEntries)
+        return ParsedText(lines, tocEntries, tocLineIndices)
     }
 
     private fun parseSimpleArrayLines(
@@ -116,276 +132,264 @@ class SefariaTextParser {
     }
 
     /**
-     * Generate hierarchical TOC entries from schema structure
-     * Inspired by Otzaria generator approach
+     * Parse simple array structure with TOC generation during parsing
      */
-    private fun generateTocFromSchema(
+    private fun parseSimpleArrayWithToc(
         bookId: Long,
-        schemaNode: SchemaNode,
         mergedText: SefariaMergedText,
-        lines: List<Line>,
-        tocEntries: MutableList<TocEntry>
+        schemaNode: SchemaNode,
+        lines: MutableList<Line>,
+        tocsWithIndices: MutableList<TocWithLineIndex>
     ) {
-        // Track parent TOC IDs at each level (like Otzaria's parentStack)
-        val parentStack = mutableMapOf<Int, Long>()
-        // Track current line index
-        val lineIndexCounter = IntArray(1) // [0] = current line index
-        // Track next TOC ID to assign
-        var nextTocId = 1L
+        val textElement = mergedText.text
+        if (textElement !is JsonArray) {
+            logger.warn("Expected JsonArray for simple array schema in book $bookId")
+            return
+        }
 
-        // Track entries by parent for second pass
-        val entriesByParent = mutableMapOf<Long?, MutableList<Long>>()
+        val heSectionNames = schemaNode.heSectionNames ?: schemaNode.sectionNames ?: emptyList()
+        val depth = schemaNode.depth ?: heSectionNames.size
+
+        // Parse with TOC generation
+        globalTocIdCounter = parseArrayWithToc(
+            array = textElement,
+            bookId = bookId,
+            lines = lines,
+            tocsWithIndices = tocsWithIndices,
+            sectionNames = heSectionNames,
+            depth = depth,
+            currentDepth = 0,
+            level = 0,
+            parentId = null,
+            nextTocId = globalTocIdCounter
+        )
+    }
+
+    /**
+     * Parse complex schema structure with TOC generation during parsing
+     * IMPORTANT: This function follows JSON key order to ensure line indices match buildSeifIndexFromMerged
+     */
+    private fun parseComplexSchemaWithToc(
+        bookId: Long,
+        mergedText: SefariaMergedText,
+        schemaNode: SchemaNode,
+        lines: MutableList<Line>,
+        tocsWithIndices: MutableList<TocWithLineIndex>
+    ) {
+        val textElement = mergedText.text
+        if (textElement !is JsonObject) {
+            logger.warn("Expected JsonObject for complex schema in book $bookId")
+            return
+        }
 
         // If schema has multiple nodes, it's a complex structure (like Tur with sections)
         if (schemaNode.nodes != null && schemaNode.nodes.isNotEmpty()) {
-            nextTocId = processSchemaNodesHierarchical(
+            globalTocIdCounter = parseSchemaNodesWithLines(
                 bookId = bookId,
                 nodes = schemaNode.nodes,
-                textElement = mergedText.text,
-                tocEntries = tocEntries,
+                textElement = textElement,
+                lines = lines,
+                tocsWithIndices = tocsWithIndices,
                 level = 0,
-                parentStack = parentStack,
-                lineIndexCounter = lineIndexCounter,
-                nextTocId = nextTocId,
-                entriesByParent = entriesByParent
+                parentId = null,
+                nextTocId = globalTocIdCounter
             )
         } else {
-            // Simple JaggedArrayNode - generate TOC based on sectionNames
-            nextTocId = processSingleSchemaNodeHierarchical(
-                bookId = bookId,
-                node = schemaNode,
-                textElement = mergedText.text,
-                tocEntries = tocEntries,
-                level = 0,
-                parentStack = parentStack,
-                lineIndexCounter = lineIndexCounter,
-                nextTocId = nextTocId,
-                parentId = null,
-                entriesByParent = entriesByParent
-            )
+            // Simple JaggedArrayNode
+            val heSectionNames = schemaNode.heSectionNames ?: schemaNode.sectionNames ?: emptyList()
+            val depth = schemaNode.depth ?: heSectionNames.size
+
+            if (textElement is JsonArray) {
+                globalTocIdCounter = parseArrayWithToc(
+                    array = textElement,
+                    bookId = bookId,
+                    lines = lines,
+                    tocsWithIndices = tocsWithIndices,
+                    sectionNames = heSectionNames,
+                    depth = depth,
+                    currentDepth = 0,
+                    level = 0,
+                    parentId = null,
+                    nextTocId = globalTocIdCounter
+                )
+            }
         }
     }
 
-    private fun processSchemaNodesHierarchical(
+    /**
+     * Parse schema nodes with lines and TOCs simultaneously
+     * CRITICAL: Follow JSON key order, NOT schema node order, to match buildSeifIndexFromMerged
+     */
+    private fun parseSchemaNodesWithLines(
         bookId: Long,
         nodes: List<SchemaNode>,
-        textElement: JsonElement,
-        tocEntries: MutableList<TocEntry>,
+        textElement: JsonObject,
+        lines: MutableList<Line>,
+        tocsWithIndices: MutableList<TocWithLineIndex>,
         level: Int,
-        parentStack: MutableMap<Int, Long>,
-        lineIndexCounter: IntArray,
-        nextTocId: Long,
-        entriesByParent: MutableMap<Long?, MutableList<Long>>
+        parentId: Long?,
+        nextTocId: Long
     ): Long {
-        if (textElement !is JsonObject) return nextTocId
-
         var currentTocId = nextTocId
 
-        nodes.forEach { node ->
-            // Use ONLY Hebrew title for TOC display
-            val heTitle = node.heTitle ?: ""
-
-            // Get the text for this node
-            // Try multiple keys: key, all English titles, then enTitle as fallback
-            val nodeText = when {
-                node.key == "default" -> textElement[""]  // Default node uses empty key
-                node.key != null && textElement[node.key] != null -> textElement[node.key]
-                // Try all English title variants from the titles list
-                node.titles != null -> {
-                    val englishTitles = node.titles.filter { it.lang == "en" }.map { it.text }
-                    englishTitles.firstNotNullOfOrNull { title -> textElement[title] }
+        // IMPORTANT: Follow the order of keys in the JSON, NOT the order of nodes in the schema
+        // This ensures line indices match the order used by buildSeifIndexFromMerged
+        textElement.forEach { (jsonKey, jsonValue) ->
+            // Find the schema node that corresponds to this JSON key
+            val node = nodes.firstOrNull { schemaNode ->
+                when {
+                    schemaNode.key == "default" && jsonKey == "" -> true
+                    schemaNode.key == jsonKey -> true
+                    schemaNode.titles?.any { it.lang == "en" && it.text == jsonKey } == true -> true
+                    schemaNode.enTitle == jsonKey -> true
+                    else -> false
                 }
-                node.enTitle != null -> textElement[node.enTitle]
-                else -> null
             }
 
-            if (nodeText != null) {
-                // Calculate parent ID (same as Otzaria: find parent at level-1)
-                val parentId = if (level > 0) parentStack[level - 1] else null
+            if (node != null) {
+                val heTitle = node.heTitle ?: ""
 
-                // Only create TOC entry if this node has a Hebrew title (skip "default" nodes without title)
+                // Only create TOC entry if this node has a Hebrew title
                 val thisTocId = if (heTitle.isNotEmpty()) {
-                    // Create TOC entry for this section
+                    val startLineIndex = lines.size
+
+                    // Create TOC entry
                     val tocEntry = TocEntry(
                         id = currentTocId,
                         bookId = bookId,
                         parentId = parentId,
                         level = level,
                         text = heTitle,
-                        lineId = null  // Will be set later based on first line of section
+                        lineId = null  // Will be linked later in converter
                     )
-                    tocEntries.add(tocEntry)
-
-                    // Track this TOC ID for its parent
-                    entriesByParent.getOrPut(parentId) { mutableListOf() }.add(currentTocId)
-
-                    // Update parent stack for this level
-                    parentStack[level] = currentTocId
+                    tocsWithIndices.add(TocWithLineIndex(tocEntry, startLineIndex))
 
                     val id = currentTocId
                     currentTocId++
                     id
                 } else {
-                    // No TOC entry for this node (e.g., "default" node), use parent's ID
-                    parentId
+                    null
                 }
 
-                // If this node has sub-nodes, process them
-                if (node.nodes != null && node.nodes.isNotEmpty()) {
-                    currentTocId = processSchemaNodesHierarchical(
-                        bookId, node.nodes, nodeText, tocEntries, level + 1,
-                        parentStack, lineIndexCounter, currentTocId, entriesByParent
-                    )
-                } else {
-                    // This is a leaf node (JaggedArrayNode) - generate TOC for array elements
-                    currentTocId = processJaggedArrayNodeHierarchical(
-                        bookId, node, nodeText, tocEntries, level + 1,
-                        parentStack, lineIndexCounter, currentTocId, thisTocId, entriesByParent
-                    )
+                // Parse the content of this node
+                when {
+                    // If this node has sub-nodes, process them recursively
+                    node.nodes != null && node.nodes.isNotEmpty() && jsonValue is JsonObject -> {
+                        // Handle special case: node with both Introduction and default ("") key
+                        // Process non-default keys first, then default key
+                        if (jsonValue.containsKey("")) {
+                            // Process non-empty keys first (like "Introduction")
+                            jsonValue.forEach { (subKey, subValue) ->
+                                if (subKey.isNotEmpty()) {
+                                    parseJsonElementToLines(subValue, bookId, lines)
+                                }
+                            }
+                            // Now process the default "" key with schema nodes
+                            jsonValue[""]?.let { defaultValue ->
+                                if (defaultValue is JsonObject) {
+                                    currentTocId = parseSchemaNodesWithLines(
+                                        bookId, node.nodes, defaultValue, lines, tocsWithIndices,
+                                        level + 1, thisTocId, currentTocId
+                                    )
+                                } else {
+                                    parseJsonElementToLines(defaultValue, bookId, lines)
+                                }
+                            }
+                        } else {
+                            currentTocId = parseSchemaNodesWithLines(
+                                bookId, node.nodes, jsonValue, lines, tocsWithIndices,
+                                level + 1, thisTocId, currentTocId
+                            )
+                        }
+                    }
+                    // This is a leaf node (JaggedArrayNode) - parse array with TOCs
+                    jsonValue is JsonArray -> {
+                        val heSectionNames = node.heSectionNames ?: node.sectionNames ?: emptyList()
+                        val depth = node.depth ?: heSectionNames.size
+
+                        currentTocId = parseArrayWithToc(
+                            array = jsonValue,
+                            bookId = bookId,
+                            lines = lines,
+                            tocsWithIndices = tocsWithIndices,
+                            sectionNames = heSectionNames,
+                            depth = depth,
+                            currentDepth = 0,
+                            level = level + 1,
+                            parentId = thisTocId,
+                            nextTocId = currentTocId
+                        )
+                    }
+                    // Otherwise just parse the JSON element to lines
+                    else -> {
+                        parseJsonElementToLines(jsonValue, bookId, lines)
+                    }
                 }
+            } else {
+                // No matching schema node, just parse the content
+                parseJsonElementToLines(jsonValue, bookId, lines)
             }
         }
 
         return currentTocId
     }
 
-    private fun processSingleSchemaNodeHierarchical(
-        bookId: Long,
-        node: SchemaNode,
-        textElement: JsonElement,
-        tocEntries: MutableList<TocEntry>,
-        level: Int,
-        parentStack: MutableMap<Int, Long>,
-        lineIndexCounter: IntArray,
-        nextTocId: Long,
-        parentId: Long?,
-        entriesByParent: MutableMap<Long?, MutableList<Long>>
-    ): Long {
-        if (node.nodeType == "JaggedArrayNode") {
-            return processJaggedArrayNodeHierarchical(
-                bookId, node, textElement, tocEntries, level,
-                parentStack, lineIndexCounter, nextTocId, parentId, entriesByParent
-            )
-        }
-        return nextTocId
-    }
-
-    private fun processJaggedArrayNodeHierarchical(
-        bookId: Long,
-        node: SchemaNode,
-        textElement: JsonElement,
-        tocEntries: MutableList<TocEntry>,
-        level: Int,
-        parentStack: MutableMap<Int, Long>,
-        lineIndexCounter: IntArray,
-        nextTocId: Long,
-        parentId: Long?,
-        entriesByParent: MutableMap<Long?, MutableList<Long>>
-    ): Long {
-        // Get Hebrew section names (e.g., "סימן", "סעיף") - prefer Hebrew, fallback to English
-        val heSectionNames = node.heSectionNames ?: node.sectionNames ?: return nextTocId
-        val depth = node.depth ?: heSectionNames.size
-
-        if (textElement is JsonArray && depth >= 1) {
-            return processJaggedArrayHierarchical(
-                bookId = bookId,
-                array = textElement,
-                tocEntries = tocEntries,
-                level = level,
-                depth = depth,
-                currentDepth = 0,
-                sectionNames = heSectionNames,
-                parentStack = parentStack,
-                lineIndexCounter = lineIndexCounter,
-                nextTocId = nextTocId,
-                parentId = parentId,
-                entriesByParent = entriesByParent,
-                lines = emptyList() // Will get lineId from lineIndexCounter
-            )
-        }
-        return nextTocId
-    }
-
-    private fun processJaggedArrayHierarchical(
-        bookId: Long,
+    /**
+     * Parse array with TOC generation for JaggedArrayNodes
+     */
+    private fun parseArrayWithToc(
         array: JsonArray,
-        tocEntries: MutableList<TocEntry>,
-        level: Int,
+        bookId: Long,
+        lines: MutableList<Line>,
+        tocsWithIndices: MutableList<TocWithLineIndex>,
+        sectionNames: List<String>,
         depth: Int,
         currentDepth: Int,
-        sectionNames: List<String>,
-        parentStack: MutableMap<Int, Long>,
-        lineIndexCounter: IntArray,
-        nextTocId: Long,
+        level: Int,
         parentId: Long?,
-        entriesByParent: MutableMap<Long?, MutableList<Long>>,
-        lines: List<Line>
+        nextTocId: Long
     ): Long {
         var currentTocId = nextTocId
 
         array.forEachIndexed { index, element ->
             when {
                 // Only create TOC for top level (Simanim), not for deeper levels (Seifim)
-                currentDepth == 0 && element is JsonArray -> {
+                currentDepth == 0 && element is JsonArray && depth >= 1 -> {
+                    val startLineIndex = lines.size
+
                     // Get Hebrew section name (e.g., "סימן")
                     val sectionName = sectionNames.getOrNull(currentDepth) ?: ""
                     // Use Hebrew numerals (א, ב, ג...) instead of Arabic (1, 2, 3...)
                     val hebrewNumber = toHebrewNumeral(index + 1)
                     val tocText = "$sectionName $hebrewNumber"
 
-                    // Calculate parent (use parentId passed from parent node)
-                    val tocParentId = if (level > 0) parentId else null
-
                     // Create TOC entry
                     val tocEntry = TocEntry(
                         id = currentTocId,
                         bookId = bookId,
-                        parentId = tocParentId,
+                        parentId = parentId,
                         level = level,
                         text = tocText,
-                        lineId = null // Will be set by repository based on lineIndex
+                        lineId = null  // Will be linked later in converter
                     )
-                    tocEntries.add(tocEntry)
-
-                    // Track for parent
-                    entriesByParent.getOrPut(tocParentId) { mutableListOf() }.add(currentTocId)
-
-                    // Update parent stack
-                    parentStack[level] = currentTocId
+                    tocsWithIndices.add(TocWithLineIndex(tocEntry, startLineIndex))
 
                     currentTocId++
 
-                    // Recurse into nested array and count lines
-                    countTextLines(element, lineIndexCounter)
-                }
-                currentDepth > 0 && element is JsonArray -> {
-                    // Just count lines, don't create TOC for seifim
-                    countTextLines(element, lineIndexCounter)
-                }
-                element is JsonPrimitive && element.isString && element.content.isNotBlank() -> {
-                    // Count this line
-                    lineIndexCounter[0]++
+                    // Parse nested array to lines
+                    parseArrayToLines(element, bookId, lines)
                 }
                 element is JsonArray -> {
-                    // Leaf level array - count all text lines
-                    countTextLines(element, lineIndexCounter)
+                    // Deeper level or no TOC needed - just parse lines
+                    parseArrayToLines(element, bookId, lines)
+                }
+                element is JsonPrimitive && element.isString && element.content.isNotBlank() -> {
+                    lines.add(Line(bookId = bookId, lineIndex = lines.size, content = element.content))
                 }
             }
         }
 
         return currentTocId
-    }
-
-    private fun countTextLines(element: JsonElement, counter: IntArray) {
-        when (element) {
-            is JsonArray -> element.forEach { countTextLines(it, counter) }
-            is JsonObject -> element.values.forEach { countTextLines(it, counter) }
-            is JsonPrimitive -> {
-                if (element.isString && element.content.isNotBlank()) {
-                    counter[0]++
-                }
-            }
-        }
     }
 
     /**
@@ -420,30 +424,6 @@ class SefariaTextParser {
         }
 
         return result.toString()
-    }
-
-    /**
-     * Fallback: generate TOC from text structure (old method)
-     */
-    private fun generateTocFromText(
-        bookId: Long,
-        mergedText: SefariaMergedText,
-        lines: List<Line>,
-        tocEntries: MutableList<TocEntry>
-    ) {
-        // Use simple numbering based on structure
-        val textElement = mergedText.text
-        if (textElement is JsonObject) {
-            textElement.forEach { (key, _) ->
-                tocEntries.add(
-                    TocEntry(
-                        bookId = bookId,
-                        level = 0,
-                        text = if (key.isEmpty()) "ראשי" else key
-                    )
-                )
-            }
-        }
     }
 
 }
