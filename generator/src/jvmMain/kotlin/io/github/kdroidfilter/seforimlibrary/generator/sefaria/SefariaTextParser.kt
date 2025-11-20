@@ -335,7 +335,9 @@ class SefariaTextParser {
     }
 
     /**
-     * Parse array with TOC generation for JaggedArrayNodes
+     * Parse array with TOC generation for JaggedArrayNodes.
+     * Builds hierarchical entries for every depth (Siman/Seif/...) so numbering
+     * reflects the nested structure instead of a flat list.
      */
     private fun parseArrayWithToc(
         array: JsonArray,
@@ -352,40 +354,61 @@ class SefariaTextParser {
         var currentTocId = nextTocId
 
         array.forEachIndexed { index, element ->
-            when {
-                // Only create TOC for top level (Simanim), not for deeper levels (Seifim)
-                currentDepth == 0 && element is JsonArray && depth >= 1 -> {
-                    val startLineIndex = lines.size
+            val withinDepth = depth <= 0 || currentDepth < depth
 
-                    // Get Hebrew section name (e.g., "סימן")
-                    val sectionName = sectionNames.getOrNull(currentDepth) ?: ""
-                    // Use Hebrew numerals (א, ב, ג...) instead of Arabic (1, 2, 3...)
-                    val hebrewNumber = toHebrewNumeral(index + 1)
-                    val tocText = "$sectionName $hebrewNumber"
+            if (!withinDepth) {
+                parseJsonElementToLines(element, bookId, lines)
+                return@forEachIndexed
+            }
 
-                    // Create TOC entry
-                    val tocEntry = TocEntry(
-                        id = currentTocId,
+            val startLineIndex = lines.size
+
+            val sectionName = sectionNames.getOrNull(currentDepth)
+            val hebrewNumber = toHebrewNumeral(index + 1)
+            val tocText = when {
+                !sectionName.isNullOrBlank() -> "$sectionName $hebrewNumber"
+                else -> hebrewNumber
+            }
+
+            val tocId = currentTocId++
+
+            val tocEntry = TocEntry(
+                id = tocId,
+                bookId = bookId,
+                parentId = parentId,
+                level = level + currentDepth,
+                text = tocText,
+                lineId = null
+            )
+            tocsWithIndices.add(TocWithLineIndex(tocEntry, startLineIndex))
+
+            when (element) {
+                is JsonArray -> {
+                    currentTocId = parseArrayWithToc(
+                        array = element,
                         bookId = bookId,
-                        parentId = parentId,
+                        lines = lines,
+                        tocsWithIndices = tocsWithIndices,
+                        sectionNames = sectionNames,
+                        depth = depth,
+                        currentDepth = currentDepth + 1,
                         level = level,
-                        text = tocText,
-                        lineId = null  // Will be linked later in converter
+                        parentId = tocId,
+                        nextTocId = currentTocId
                     )
-                    tocsWithIndices.add(TocWithLineIndex(tocEntry, startLineIndex))
-
-                    currentTocId++
-
-                    // Parse nested array to lines
-                    parseArrayToLines(element, bookId, lines)
                 }
-                element is JsonArray -> {
-                    // Deeper level or no TOC needed - just parse lines
-                    parseArrayToLines(element, bookId, lines)
-                }
-                element is JsonPrimitive && element.isString && element.content.isNotBlank() -> {
+                is JsonObject -> parseJsonElementToLines(element, bookId, lines)
+                is JsonPrimitive -> if (element.isString && element.content.isNotBlank()) {
                     lines.add(Line(bookId = bookId, lineIndex = lines.size, content = element.content))
                 }
+            }
+
+            // Trim empty TOC branches to avoid dangling nodes with no content
+            if (lines.size == startLineIndex) {
+                if (tocsWithIndices.isNotEmpty()) {
+                    tocsWithIndices.removeAt(tocsWithIndices.lastIndex)
+                }
+                currentTocId--
             }
         }
 
