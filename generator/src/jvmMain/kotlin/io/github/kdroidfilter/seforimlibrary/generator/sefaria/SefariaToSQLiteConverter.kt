@@ -100,6 +100,16 @@ class SefariaToSQLiteConverter(
             return seen.toList()
         }
 
+        /**
+         * A link without any numeric reference has no precise anchor.
+         * Allow only intro-style citations (e.g., "..., Introduction") to map without numbers.
+         */
+        internal fun hasPositionalReference(citation: SefariaCitationParser.Citation): Boolean {
+            val isIntroduction = citation.section?.contains("introduction", ignoreCase = true) == true
+            val hasPositiveReference = citation.references.any { it > 0 }
+            return isIntroduction || hasPositiveReference
+        }
+
         private fun englishTitleForNode(node: SchemaNode): String? {
             val fromTitles = node.titles
                 ?.firstOrNull { it.lang.equals("en", ignoreCase = true) && (it.primary == true) }
@@ -773,6 +783,11 @@ class SefariaToSQLiteConverter(
 
             if (citation1 == null || citation2 == null) {
                 logger.debug("Could not parse citations: ${link.citation1} -> ${link.citation2}")
+                return false
+            }
+
+            if (!hasPositionalReference(citation1) || !hasPositionalReference(citation2)) {
+                logger.debug("Skipping link without positional references: ${link.citation1} -> ${link.citation2}")
                 return false
             }
 

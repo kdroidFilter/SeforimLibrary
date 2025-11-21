@@ -8,6 +8,10 @@ import org.slf4j.LoggerFactory
 class SefariaCitationParser {
     private val logger = LoggerFactory.getLogger(SefariaCitationParser::class.java)
 
+    companion object {
+        private val TALMUD_REF_REGEX = Regex("""^(\d+)([ab])(?::(.*))?$""", RegexOption.IGNORE_CASE)
+    }
+
     data class Citation(
         val bookTitle: String,
         val section: String? = null,
@@ -75,25 +79,28 @@ class SefariaCitationParser {
     private fun parseReferences(refsStr: String): List<Int> {
         val refs = mutableListOf<Int>()
 
-        // Handle Talmud page references (e.g., "45b")
-        if (refsStr.contains(Regex("[ab]"))) {
-            val page = refsStr.substringBefore(":").trim()
-            val pageNum = page.replace(Regex("[ab]"), "").toIntOrNull() ?: 0
-            val side = if (page.endsWith("b")) 1 else 0
-            refs.add(pageNum * 2 + side) // Convert to linear index
+        val trimmed = refsStr.trim()
+        val talmudMatch = TALMUD_REF_REGEX.matchEntire(trimmed)
+        if (talmudMatch != null) {
+            val pageNum = talmudMatch.groupValues[1].toIntOrNull()
+            if (pageNum != null) {
+                val side = if (talmudMatch.groupValues[2].equals("b", ignoreCase = true)) 1 else 0
+                refs.add(pageNum * 2 + side) // Convert to linear index
+            }
 
-            // Add remaining references
-            val remaining = refsStr.substringAfter(":", "")
-            if (remaining.isNotEmpty()) {
-                remaining.split(":").forEach { ref ->
-                    ref.toIntOrNull()?.let { refs.add(it) }
+            talmudMatch.groupValues[3]
+                .takeIf { it.isNotBlank() }
+                ?.split(":")
+                ?.forEach { ref ->
+                    ref.trim().toIntOrNull()?.let { refs.add(it) }
                 }
-            }
-        } else {
-            // Simple numeric references
-            refsStr.split(":").forEach { ref ->
-                ref.trim().toIntOrNull()?.let { refs.add(it) }
-            }
+
+            return refs
+        }
+
+        // Simple numeric references
+        trimmed.split(":").forEach { ref ->
+            ref.trim().toIntOrNull()?.let { refs.add(it) }
         }
 
         return refs

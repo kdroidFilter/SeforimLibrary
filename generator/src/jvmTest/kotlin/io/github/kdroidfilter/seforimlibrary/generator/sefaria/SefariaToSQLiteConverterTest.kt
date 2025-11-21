@@ -3,6 +3,8 @@ package io.github.kdroidfilter.seforimlibrary.generator.sefaria
 import io.github.kdroidfilter.seforimlibrary.generator.sefaria.models.SchemaNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class SefariaToSQLiteConverterTest {
@@ -33,5 +35,19 @@ class SefariaToSQLiteConverterTest {
         assertTrue(aliases.contains("Tur, Orach Chayim"))
         assertTrue(aliases.contains("Tur, Yoreh De'ah"))
         assertTrue(aliases.contains("Tur, Even HaEzer"))
+    }
+
+    @Test
+    fun `skips links without positional references but keeps introductions`() {
+        val parser = SefariaCitationParser()
+
+        val missingRefs = parser.parse("Tur, Orach Chayim")
+        assertNotNull(missingRefs, "parser should handle section-only citations")
+        assertEquals(emptyList(), missingRefs.references, "section-only citations should have no numeric refs")
+        assertFalse(SefariaToSQLiteConverter.hasPositionalReference(missingRefs))
+
+        val intro = parser.parse("Tur, Orach Chayim, Introduction")
+        assertNotNull(intro, "parser should handle introduction citations")
+        assertTrue(SefariaToSQLiteConverter.hasPositionalReference(intro))
     }
 }

@@ -71,4 +71,13 @@ class SefariaCitationParserTest {
         assertEquals(null, citation.section)
         assertEquals(emptyList(), citation.references)
     }
+
+    @Test
+    fun `ignore incidental letters a-b in section names`() {
+        val citation = parser.parse("Tur, Orach Chayim")
+        assertNotNull(citation)
+        assertEquals("Tur", citation.bookTitle)
+        assertEquals("Orach Chayim", citation.section)
+        assertEquals(emptyList(), citation.references, "section-only links must not fabricate a 0 ref")
+    }
 }
