@@ -995,14 +995,61 @@ class SefariaToSQLiteConverter(
             ?: return null
 
         val root = merged.text
-        val sectionElement = if (citation.section != null && root is JsonObject) {
-            root[citation.section] ?: return null
+
+        // Handle sections with subsections like "Orach Chayim, Introduction"
+        var sectionElement: JsonElement? = if (citation.section != null && root is JsonObject) {
+            // First try direct lookup
+            root[citation.section] ?: run {
+                // If not found and section contains comma, try splitting into section and subsection
+                if (citation.section.contains(",")) {
+                    val parts = citation.section.split(",", limit = 2)
+                    val mainSection = parts[0].trim()
+                    val subSection = parts[1].trim()
+                    val mainElement = root[mainSection] as? JsonObject
+                    mainElement?.get(subSection)
+                } else {
+                    null
+                }
+            }
         } else {
             root
         }
+
+        if (sectionElement == null) return null
+
+        // Special handling for subsections within an object-based section
+        // When citation points to a subsection like "Introduction" within "Orach Chayim"
+        // we need to calculate the offset of lines before this subsection
+        val offsetBeforeSubsection = if (citation.section?.contains(",") == true && root is JsonObject) {
+            val parts = citation.section.split(",", limit = 2)
+            val mainSection = parts[0].trim()
+            val subSection = parts[1].trim()
+            val mainElement = root[mainSection] as? JsonObject
+            if (mainElement != null) {
+                calculateOffsetBeforeKey(mainElement, subSection)
+            } else {
+                0
+            }
+        } else {
+            0
+        }
+
         val (targetArray, introLines) = unwrapSectionElement(sectionElement) ?: return null
         val idx = lineIndexInArray(targetArray, citation.references) ?: return null
-        return introLines + idx
+        return offsetBeforeSubsection + introLines + idx
+    }
+
+    /**
+     * Calculate how many lines exist in the object before the specified key,
+     * following the traversal order used during text parsing.
+     */
+    private fun calculateOffsetBeforeKey(obj: JsonObject, targetKey: String): Int {
+        var offset = 0
+        for ((key, value) in obj) {
+            if (key == targetKey) break
+            offset += countLinesInElement(value)
+        }
+        return offset
     }
 
     /**
@@ -1030,8 +1077,10 @@ class SefariaToSQLiteConverter(
 
     /**
      * Recursively compute the line index inside a JsonArray using 1-based references list.
+     * When refs is empty, returns 0 (first line of the array/section).
      */
     private fun lineIndexInArray(array: JsonArray, refs: List<Int>): Int? {
+        // If no references, return first line (index 0)
         if (refs.isEmpty()) return 0
         val targetIdx = refs.first() - 1
         if (targetIdx !in array.indices) return null

@@ -20,6 +20,7 @@ class SefariaCitationParser {
      * Examples:
      * - "Genesis 1:1" -> bookTitle="Genesis", references=[1, 1]
      * - "Beit Yosef, Orach Chayim 325:34:1" -> bookTitle="Beit Yosef", section="Orach Chayim", references=[325, 34, 1]
+     * - "Tur, Orach Chayim, Introduction" -> bookTitle="Tur", section="Orach Chayim, Introduction", references=[]
      * - "Shabbat 45b:3" -> bookTitle="Shabbat", references=[page for 45b, 3]
      */
     fun parse(citation: String): Citation? {
@@ -36,7 +37,14 @@ class SefariaCitationParser {
                     val section = rest.substring(0, lastSpaceIndex).trim()
                     val refsStr = rest.substring(lastSpaceIndex + 1).trim()
                     val refs = parseReferences(refsStr)
+                    // If refs is empty (e.g., "Introduction" could not be parsed), treat entire rest as section
+                    if (refs.isEmpty()) {
+                        return Citation(bookTitle, rest, refs)
+                    }
                     return Citation(bookTitle, section, refs)
+                } else {
+                    // No space found, treat entire rest as section without references
+                    return Citation(bookTitle, rest, emptyList())
                 }
             }
 
@@ -46,11 +54,15 @@ class SefariaCitationParser {
                 val bookTitle = citation.substring(0, lastSpaceIndex).trim()
                 val refsStr = citation.substring(lastSpaceIndex + 1).trim()
                 val refs = parseReferences(refsStr)
+                // If refs is empty, treat entire citation as book title
+                if (refs.isEmpty()) {
+                    return Citation(citation.trim(), null, refs)
+                }
                 return Citation(bookTitle, null, refs)
             }
 
-            logger.warn("Could not parse citation: $citation")
-            return null
+            // No space or comma found - treat as book title only
+            return Citation(citation.trim(), null, emptyList())
         } catch (e: Exception) {
             logger.error("Error parsing citation: $citation", e)
             return null
