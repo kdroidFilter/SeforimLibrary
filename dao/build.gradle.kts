@@ -13,7 +13,11 @@ group = "io.github.kdroidfilter.seforimlibrary"
 kotlin {
     jvmToolchain(libs.versions.jvmToolchain.get().toInt())
 
-    androidTarget { publishLibraryVariants("release") }
+    androidLibrary {
+        namespace = "io.github.kdroidfilter.seforimlibrary"
+        compileSdk = 35
+        minSdk = 21
+    }
     jvm()
 
     sourceSets {
@@ -43,15 +47,6 @@ kotlin {
 
     }
 
-}
-
-android {
-    namespace = "io.github.kdroidfilter.seforimlibrary"
-    compileSdk = 35
-
-    defaultConfig {
-        minSdk = 21
-    }
 }
 
 
