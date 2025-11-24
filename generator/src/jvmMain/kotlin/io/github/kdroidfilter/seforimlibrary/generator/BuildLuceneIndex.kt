@@ -48,6 +48,15 @@ fun main() = runBlocking {
             ?: System.getenv("SEFORIM_DB")
             ?: Paths.get("build", "seforim.db").toString()
 
+    // Magic lexicon (surface/variant/base) must be present for intelligent boosts.
+    val lexicalPath: Path =
+        System.getProperty("magicDict")?.let { Paths.get(it) }
+            ?: System.getenv("SEFORIM_MAGIC_DICT")?.let { Paths.get(it) }
+            ?: Paths.get("SeforimLibrary", "SeforimMagicIndexer", "magicindexer", "build", "db", "lexical.db")
+    require(Files.exists(lexicalPath)) {
+        "Lexical dictionary not found at $lexicalPath. Build SeforimMagicIndexer or pass -DmagicDict=/path/lexical.db"
+    }
+
     val dbFile = File(dbPath)
     require(dbFile.exists()) { "Database not found at $dbPath" }
 
