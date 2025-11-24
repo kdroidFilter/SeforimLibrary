@@ -5,8 +5,6 @@ package io.github.kdroidfilter.seforimlibrary.dao.repository
 import app.cash.sqldelight.db.SqlDriver
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.*
-import app.cash.sqldelight.db.SqlCursor
-import app.cash.sqldelight.db.QueryResult
 import io.github.kdroidfilter.seforimlibrary.dao.extensions.toModel
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import kotlinx.coroutines.Dispatchers
@@ -334,6 +332,10 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     /**
      * Retrieves a book by its ID, including all related data (authors, topics, etc.).
      *
+     * This is a heavy call: it performs additional queries to fetch authors, topics,
+     * publication places and dates. Prefer [getBookCore] in hot paths where only
+     * basic book metadata (id, title, categoryId, order, totalLines, flags) is needed.
+     *
      * @param id The ID of the book to retrieve
      * @return The book if found, null otherwise
      */
@@ -344,6 +346,18 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         val pubPlaces = getBookPubPlaces(bookData.id)
         val pubDates = getBookPubDates(bookData.id)
         return@withContext bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+    }
+
+    /**
+     * Lightweight variant of [getBook] that only reads the core book row without
+     * joining authors, topics, publication places or dates.
+     *
+     * Suitable for search suggestions, navigation trees and other scenarios where
+     * only id/title/category information is required.
+     */
+    suspend fun getBookCore(id: Long): Book? = withContext(Dispatchers.IO) {
+        val bookData = database.bookQueriesQueries.selectById(id).executeAsOneOrNull() ?: return@withContext null
+        return@withContext bookData.toModel(json)
     }
 
     /**
@@ -380,6 +394,9 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Finds books whose title matches the LIKE pattern. Use %term% for contains.
+     *
+     * This version loads full metadata (authors, topics, publication info) for each match.
+     * For lightweight use cases (e.g., typeahead suggestions), prefer [findBooksByTitleLikeCore].
      */
     suspend fun findBooksByTitleLike(pattern: String, limit: Int = 20): List<Book> = withContext(Dispatchers.IO) {
         val rows = database.bookQueriesQueries.selectManyByTitleLike(pattern, limit.toLong()).executeAsList()
@@ -390,6 +407,15 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             val pubDates = getBookPubDates(bookData.id)
             bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
         }
+    }
+
+    /**
+     * Lightweight variant of [findBooksByTitleLike] that returns only core book metadata
+     * without issuing extra queries for authors, topics, publication places or dates.
+     */
+    suspend fun findBooksByTitleLikeCore(pattern: String, limit: Int = 20): List<Book> = withContext(Dispatchers.IO) {
+        val rows = database.bookQueriesQueries.selectManyByTitleLike(pattern, limit.toLong()).executeAsList()
+        rows.map { bookData -> bookData.toModel(json) }
     }
 
     
