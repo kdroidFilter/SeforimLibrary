@@ -141,6 +141,12 @@ fun main() = runBlocking {
 
                     // Create a separate read-only connection per worker for concurrent reads
                     val localRepo = SeforimRepository(dbPath, JdbcSqliteDriver(url = jdbcUrl))
+                    // Slightly increase boost for base books by nudging orderIndex closer to the front
+                    val orderIndexForBoost = if (book.isBaseBook) {
+                        (book.order.toInt() - 5).coerceAtLeast(1)
+                    } else {
+                        book.order.toInt()
+                    }
                     try {
                         // Title terms (stored in text index for future use)
                         writer.addBookTitleTerm(book.id, book.categoryId, book.title, book.title)
@@ -210,7 +216,7 @@ fun main() = runBlocking {
                                     lineIndex = ln.lineIndex,
                                     normalizedText = normalized,
                                     rawPlainText = snippetSource,
-                                    orderIndex = book.order.toInt(),
+                                    orderIndex = orderIndexForBoost,
                                     isBaseBook = book.isBaseBook
                                 )
                                 processed += 1
