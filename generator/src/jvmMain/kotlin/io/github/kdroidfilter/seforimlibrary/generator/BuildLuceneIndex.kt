@@ -209,7 +209,9 @@ fun main() = runBlocking {
                                     lineId = ln.id,
                                     lineIndex = ln.lineIndex,
                                     normalizedText = normalized,
-                                    rawPlainText = snippetSource
+                                    rawPlainText = snippetSource,
+                                    orderIndex = book.order.toInt(),
+                                    isBaseBook = book.isBaseBook
                                 )
                                 processed += 1
                                 val pct = (processed.toLong() * 100L / total).toInt().coerceIn(0, 100)
