@@ -4,9 +4,11 @@ package io.github.kdroidfilter.seforimlibrary.dao.repository
 
 import app.cash.sqldelight.db.SqlDriver
 import co.touchlab.kermit.Logger
+import co.touchlab.kermit.Severity
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.dao.extensions.toModel
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
+import io.github.kdroidfilter.seforimlibrary.env.getEnvironmentVariable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -24,7 +26,12 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     private val logger = Logger.withTag("SeforimRepository")
 
     init {
-
+        val repositoryLoggingEnv = getEnvironmentVariable("SEFORIMAPP_REPOSITORY_LOGGING")?.lowercase()
+        if (repositoryLoggingEnv == "true" || repositoryLoggingEnv == "1" || repositoryLoggingEnv == "yes") {
+            Logger.setMinSeverity(Severity.Verbose)
+        } else {
+            Logger.setMinSeverity(Severity.Assert)
+        }
         logger.d{"Initializing SeforimRepository"}
         // Create the database schema (fresh builds only; no runtime migrations needed)
         SeforimDb.Schema.create(driver)
