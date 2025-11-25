@@ -439,12 +439,18 @@ class SefariaToOtzariaConverter(
             return null
         }
 
-        val refsByCitation = refEntries.groupBy { normalizeCitation(it.ref) }
-        // Fallback: base key without trailing segment (e.g., "Shabbat 45a" from "Shabbat 45a:7")
-        val refsByBase = refEntries
-            .groupBy { baseCitationKey(it.ref) }
-            // Pick the earliest line for ambiguous base keys to avoid combinatorial explosion
-            .mapValues { (_, list) -> list.minByOrNull { it.lineIndex }!! }
+        // Canonicalized maps so variant punctuation/spaces still match (e.g., "Tur, Orach Chayim 455")
+        val refsByCitation = refEntries.groupBy { canonicalCitation(it.ref) }
+        // Pick earliest line for a base to use when the link lacks segment detail
+        val refsByBase = buildMap<String, RefEntry> {
+            for (entry in refEntries) {
+                val base = canonicalBase(entry.ref)
+                val existing = this[base]
+                if (existing == null || entry.lineIndex < existing.lineIndex) {
+                    this[base] = entry
+                }
+            }
+        }
         val linksByBook = mutableMapOf<String, MutableList<LinkOutputEntry>>()
 
         Files.list(linksDir)
@@ -501,17 +507,19 @@ class SefariaToOtzariaConverter(
         refsByCitation: Map<String, List<RefEntry>>,
         refsByBase: Map<String, RefEntry>
     ): List<RefEntry> {
-        // 1) Exact match
-        refsByCitation[citation]?.let { if (it.isNotEmpty()) return it }
+        val canonical = canonicalCitation(citation)
 
-        // 2) Range start: "Yoma 62a:7-8" -> "Yoma 62a:7"
-        val rangeStart = citationRangeStart(citation)
+        // 1) Exact canonical match
+        refsByCitation[canonical]?.let { if (it.isNotEmpty()) return it }
+
+        // 2) Range start (e.g., "Yoma 62a:7-8" -> "Yoma 62a:7")
+        val rangeStart = citationRangeStart(canonical)
         if (rangeStart != null) {
             refsByCitation[rangeStart]?.let { if (it.isNotEmpty()) return it }
         }
 
-        // 3) Base without trailing segment: "Shabbat 45a"
-        refsByBase[baseCitationKey(citation)]?.let { return listOf(it) }
+        // 3) Base without trailing segment: match to first line of that base
+        refsByBase[canonicalBase(canonical)]?.let { return listOf(it) }
 
         return emptyList()
     }
@@ -571,13 +579,19 @@ class SefariaToOtzariaConverter(
     private fun normalizeCitation(raw: String): String =
         raw.trim().trim('"', '\'').replace("\\s+".toRegex(), " ")
 
+    // Canonical form: collapse whitespace, drop commas, lowercase for tolerant matching
+    private fun canonicalCitation(raw: String): String =
+        normalizeCitation(raw).replace(",", "").lowercase()
+
+    private fun canonicalBase(citation: String): String =
+        canonicalCitation(citation).replace(Regex(":\\d+[ab]?(?:-\\d+[ab]?)?$"), "")
+            .replace(Regex(" \\d.*$"), "")
+            .trim()
+
     private fun citationRangeStart(citation: String): String? {
         val match = Regex("^(.*?):(\\d+[ab]?)\\s*-\\s*\\d+[ab]?$").matchEntire(citation)
-        return match?.let { "${it.groupValues[1]}:${it.groupValues[2]}" }
+        return match?.let { canonicalCitation("${it.groupValues[1]}:${it.groupValues[2]}") }
     }
-
-    private fun baseCitationKey(citation: String): String =
-        normalizeCitation(citation).replace(Regex(":\\d+[ab]?(?:-\\d+[ab]?)?$"), "").trim()
 
     private fun copyMetadataIfAvailable(dbRoot: Path, targetRoot: Path) {
         val candidates = listOfNotNull(
