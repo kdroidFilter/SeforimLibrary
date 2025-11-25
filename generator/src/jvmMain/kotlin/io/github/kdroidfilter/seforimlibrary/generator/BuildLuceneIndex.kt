@@ -28,7 +28,6 @@ import java.nio.file.Paths
 
 private const val SNIPPET_NEIGHBOR_WINDOW = 4
 private const val SNIPPET_MIN_LENGTH = 280
-private const val SNIPPET_MAX_LENGTH = 1600
 
 /**
  * Build Lucene indexes using Lucene's StandardAnalyzer and an extra 4-gram field for substring search.
@@ -205,8 +204,6 @@ fun main() = runBlocking {
                                     val start = (idx - SNIPPET_NEIGHBOR_WINDOW).coerceAtLeast(0)
                                     val end = (idx + SNIPPET_NEIGHBOR_WINDOW).coerceAtMost(plainLines.lastIndex)
                                     plainLines.subList(start, end + 1).joinToString(" ")
-                                }.let { snippet ->
-                                    if (snippet.length <= SNIPPET_MAX_LENGTH) snippet else snippet.substring(0, SNIPPET_MAX_LENGTH)
                                 }
                                 writer.addLine(
                                     bookId = book.id,
