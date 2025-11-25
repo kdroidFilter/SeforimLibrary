@@ -330,14 +330,15 @@ class SefariaToOtzariaConverter(
         refEntries: MutableList<RefEntry>?,
         refPath: String?,
         refPrefix: String,
-        heRefPrefix: String
+        heRefPrefix: String,
+        linePrefix: String = ""
     ) {
         if (depth == 0) {
             val primitive = text as? JsonPrimitive
             val content = primitive?.takeIf { it.isString }?.content
             if (!content.isNullOrEmpty()) {
                 when (mode) {
-                    OutputMode.LIBRARY -> output += content.replace("\n", "")
+                    OutputMode.LIBRARY -> output += linePrefix + content.replace("\n", "")
                     OutputMode.REFS -> {
                         val cleanRef = trimTrailingSeparators(refPrefix)
                         val cleanHeRef = trimTrailingSeparators(heRefPrefix)
@@ -362,11 +363,14 @@ class SefariaToOtzariaConverter(
         text.forEachIndexed { idx, item ->
             if (item.isTriviallyEmpty()) return@forEachIndexed
             val letter = if (sectionName == "דף") toDaf(idx + 1) else toGematria(idx + 1)
+            val nextLinePrefix = if (depth == 1 && mode == OutputMode.LIBRARY && sectionName !in inlineSkipSections) {
+                "($letter) "
+            } else {
+                ""
+            }
             if (depth > 1) {
                 val tag = headingTagForLevel(level)
                 output += "${tag.first}$sectionName $letter${tag.second}"
-            } else if (mode == OutputMode.LIBRARY && sectionName !in inlineSkipSections) {
-                output += "($letter) "
             }
 
             val newRefPrefix = buildString {
@@ -390,7 +394,8 @@ class SefariaToOtzariaConverter(
                 refEntries = refEntries,
                 refPath = refPath,
                 refPrefix = newRefPrefix,
-                heRefPrefix = newHeRefPrefix
+                heRefPrefix = newHeRefPrefix,
+                linePrefix = nextLinePrefix
             )
         }
     }
@@ -434,7 +439,12 @@ class SefariaToOtzariaConverter(
             return null
         }
 
-        val refsByCitation = refEntries.groupBy { it.ref }
+        val refsByCitation = refEntries.groupBy { normalizeCitation(it.ref) }
+        // Fallback: base key without trailing segment (e.g., "Shabbat 45a" from "Shabbat 45a:7")
+        val refsByBase = refEntries
+            .groupBy { baseCitationKey(it.ref) }
+            // Pick the earliest line for ambiguous base keys to avoid combinatorial explosion
+            .mapValues { (_, list) -> list.minByOrNull { it.lineIndex }!! }
         val linksByBook = mutableMapOf<String, MutableList<LinkOutputEntry>>()
 
         Files.list(linksDir)
@@ -445,22 +455,22 @@ class SefariaToOtzariaConverter(
                     Files.newBufferedReader(file).use { reader ->
                         val lines = reader.lineSequence().iterator()
                         if (!lines.hasNext()) return@use
-                        val headers = parseCsvLine(lines.next()).map { it.trim() }
-                        val idxCitation1 = headers.indexOf("Citation 1")
-                        val idxCitation2 = headers.indexOf("Citation 2")
-                        val idxConnection = headers.indexOf("Conection Type")
+                        val headers = parseCsvLine(lines.next()).map { normalizeCitation(it) }
+                        val idxCitation1 = headers.indexOf("Citation 1").takeIf { it >= 0 } ?: headers.indexOf("'Citation 1'")
+                        val idxCitation2 = headers.indexOf("Citation 2").takeIf { it >= 0 } ?: headers.indexOf("'Citation 2'")
+                        val idxConnection = headers.indexOf("Conection Type").takeIf { it >= 0 } ?: headers.indexOf("'Conection Type'")
                         if (idxCitation1 < 0 || idxCitation2 < 0 || idxConnection < 0) return@use
 
                         while (lines.hasNext()) {
                             val row = parseCsvLine(lines.next())
                             if (row.isEmpty()) continue
-                            val citation1 = row.getOrNull(idxCitation1)?.trim().orEmpty()
-                            val citation2 = row.getOrNull(idxCitation2)?.trim().orEmpty()
+                            val citation1 = normalizeCitation(row.getOrNull(idxCitation1).orEmpty())
+                            val citation2 = normalizeCitation(row.getOrNull(idxCitation2).orEmpty())
                             if (citation1.isEmpty() || citation2.isEmpty()) continue
                             val connectionType = row.getOrNull(idxConnection)?.trim().orEmpty()
 
-                            val fromRefs = refsByCitation[citation1].orEmpty()
-                            val toRefs = refsByCitation[citation2].orEmpty()
+                            val fromRefs = resolveRefs(citation1, refsByCitation, refsByBase)
+                            val toRefs = resolveRefs(citation2, refsByCitation, refsByBase)
                             if (fromRefs.isEmpty() || toRefs.isEmpty()) continue
 
                             for (from in fromRefs) {
@@ -484,6 +494,26 @@ class SefariaToOtzariaConverter(
             outFile.writeText(json.encodeToString(entries))
         }
         return linksRoot
+    }
+
+    private fun resolveRefs(
+        citation: String,
+        refsByCitation: Map<String, List<RefEntry>>,
+        refsByBase: Map<String, RefEntry>
+    ): List<RefEntry> {
+        // 1) Exact match
+        refsByCitation[citation]?.let { if (it.isNotEmpty()) return it }
+
+        // 2) Range start: "Yoma 62a:7-8" -> "Yoma 62a:7"
+        val rangeStart = citationRangeStart(citation)
+        if (rangeStart != null) {
+            refsByCitation[rangeStart]?.let { if (it.isNotEmpty()) return it }
+        }
+
+        // 3) Base without trailing segment: "Shabbat 45a"
+        refsByBase[baseCitationKey(citation)]?.let { return listOf(it) }
+
+        return emptyList()
     }
 
     private fun addLinkEntry(
@@ -537,6 +567,17 @@ class SefariaToOtzariaConverter(
         result += sb.toString()
         return result
     }
+
+    private fun normalizeCitation(raw: String): String =
+        raw.trim().trim('"', '\'').replace("\\s+".toRegex(), " ")
+
+    private fun citationRangeStart(citation: String): String? {
+        val match = Regex("^(.*?):(\\d+[ab]?)\\s*-\\s*\\d+[ab]?$").matchEntire(citation)
+        return match?.let { "${it.groupValues[1]}:${it.groupValues[2]}" }
+    }
+
+    private fun baseCitationKey(citation: String): String =
+        normalizeCitation(citation).replace(Regex(":\\d+[ab]?(?:-\\d+[ab]?)?$"), "").trim()
 
     private fun copyMetadataIfAvailable(dbRoot: Path, targetRoot: Path) {
         val candidates = listOfNotNull(
