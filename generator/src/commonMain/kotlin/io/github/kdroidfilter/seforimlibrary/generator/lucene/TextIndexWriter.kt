@@ -16,6 +16,8 @@ interface TextIndexWriter : AutoCloseable {
      * @param normalizedText Normalized text to index in the primary field (typically StandardAnalyzer)
      * @param rawPlainText Optional raw plain text (stored) for snippet generation
      * @param normalizedTextHebrew Optional normalized text for a secondary text field
+     * @param orderIndex The order index of the book (for ranking basebooks)
+     * @param isBaseBook Whether this book is marked as a base book
      */
     fun addLine(
         bookId: Long,
@@ -25,7 +27,9 @@ interface TextIndexWriter : AutoCloseable {
         lineIndex: Int,
         normalizedText: String,
         rawPlainText: String? = null,
-        normalizedTextHebrew: String? = null
+        normalizedTextHebrew: String? = null,
+        orderIndex: Int = 999,
+        isBaseBook: Boolean = false
     )
 
     /**

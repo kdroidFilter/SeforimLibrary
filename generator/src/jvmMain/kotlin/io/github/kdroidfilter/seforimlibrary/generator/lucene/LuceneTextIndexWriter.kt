@@ -40,6 +40,8 @@ class LuceneTextIndexWriter(
         const val FIELD_TEXT_HE = "text_he"
         const val FIELD_TEXT_NG4 = "text_ng4"
         const val FIELD_TITLE = "title" // analyzed suggestion term
+        const val FIELD_ORDER_INDEX = "order_index"
+        const val FIELD_IS_BASE_BOOK = "is_base_book"
     }
 
     private val dir = FSDirectory.open(indexDir)
@@ -58,7 +60,9 @@ class LuceneTextIndexWriter(
         lineIndex: Int,
         normalizedText: String,
         rawPlainText: String?,
-        normalizedTextHebrew: String?
+        normalizedTextHebrew: String?,
+        orderIndex: Int,
+        isBaseBook: Boolean
     ) {
         val doc = Document().apply {
             add(StringField(FIELD_TYPE, TYPE_LINE, Field.Store.NO))
@@ -73,6 +77,12 @@ class LuceneTextIndexWriter(
             add(IntPoint(FIELD_LINE_ID, lineId.toInt()))
             add(StoredField(FIELD_LINE_INDEX, lineIndex))
             add(IntPoint(FIELD_LINE_INDEX, lineIndex))
+
+            // Store order_index and is_base_book for boosting
+            add(StoredField(FIELD_ORDER_INDEX, orderIndex))
+            add(IntPoint(FIELD_ORDER_INDEX, orderIndex))
+            add(StoredField(FIELD_IS_BASE_BOOK, if (isBaseBook) 1 else 0))
+            add(IntPoint(FIELD_IS_BASE_BOOK, if (isBaseBook) 1 else 0))
 
             if (indexPrimaryText) {
                 add(TextField(FIELD_TEXT, normalizedText, Field.Store.NO))

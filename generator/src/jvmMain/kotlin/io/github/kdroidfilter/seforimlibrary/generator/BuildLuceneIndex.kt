@@ -26,6 +26,10 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 
+private const val SNIPPET_NEIGHBOR_WINDOW = 4
+private const val SNIPPET_MIN_LENGTH = 280
+private const val SNIPPET_MAX_LENGTH = 1600
+
 /**
  * Build Lucene indexes using Lucene's StandardAnalyzer and an extra 4-gram field for substring search.
  *
@@ -43,6 +47,15 @@ fun main() = runBlocking {
         System.getProperty("seforimDb")
             ?: System.getenv("SEFORIM_DB")
             ?: Paths.get("build", "seforim.db").toString()
+
+    // Magic lexicon (surface/variant/base) must be present for intelligent boosts.
+    val lexicalPath: Path =
+        System.getProperty("magicDict")?.let { Paths.get(it) }
+            ?: System.getenv("SEFORIM_MAGIC_DICT")?.let { Paths.get(it) }
+            ?: Paths.get("SeforimLibrary", "SeforimMagicIndexer", "magicindexer", "build", "db", "lexical.db")
+    require(Files.exists(lexicalPath)) {
+        "Lexical dictionary not found at $lexicalPath. Build SeforimMagicIndexer or pass -DmagicDict=/path/lexical.db"
+    }
 
     val dbFile = File(dbPath)
     require(dbFile.exists()) { "Database not found at $dbPath" }
@@ -128,6 +141,12 @@ fun main() = runBlocking {
 
                     // Create a separate read-only connection per worker for concurrent reads
                     val localRepo = SeforimRepository(dbPath, JdbcSqliteDriver(url = jdbcUrl))
+                    // Slightly increase boost for base books by nudging orderIndex closer to the front
+                    val orderIndexForBoost = if (book.isBaseBook) {
+                        (book.order.toInt() - 5).coerceAtLeast(1)
+                    } else {
+                        book.order.toInt()
+                    }
                     try {
                         // Title terms (stored in text index for future use)
                         writer.addBookTitleTerm(book.id, book.categoryId, book.title, book.title)
@@ -169,10 +188,26 @@ fun main() = runBlocking {
                         val total = book.totalLines
                         if (total > 0) {
                             val allLines = runCatching { localRepo.getLines(book.id, 0, total - 1) }.getOrDefault(emptyList())
+                            val plainLines = allLines.map { ln ->
+                                Jsoup.clean(ln.content, Safelist.none())
+                                    .replace("\\s+".toRegex(), " ")
+                                    .trim()
+                            }
                             var processed = 0
                             var nextLogPct = 10
                             for (ln in allLines) {
                                 val normalized = normalizeForIndexDefault(ln.content)
+                                val idx = ln.lineIndex.coerceIn(0, plainLines.lastIndex)
+                                val basePlain = plainLines.getOrNull(idx).orEmpty()
+                                val snippetSource = if (basePlain.length >= SNIPPET_MIN_LENGTH) {
+                                    basePlain
+                                } else {
+                                    val start = (idx - SNIPPET_NEIGHBOR_WINDOW).coerceAtLeast(0)
+                                    val end = (idx + SNIPPET_NEIGHBOR_WINDOW).coerceAtMost(plainLines.lastIndex)
+                                    plainLines.subList(start, end + 1).joinToString(" ")
+                                }.let { snippet ->
+                                    if (snippet.length <= SNIPPET_MAX_LENGTH) snippet else snippet.substring(0, SNIPPET_MAX_LENGTH)
+                                }
                                 writer.addLine(
                                     bookId = book.id,
                                     bookTitle = book.title,
@@ -180,7 +215,9 @@ fun main() = runBlocking {
                                     lineId = ln.id,
                                     lineIndex = ln.lineIndex,
                                     normalizedText = normalized,
-                                    rawPlainText = null
+                                    rawPlainText = snippetSource,
+                                    orderIndex = orderIndexForBoost,
+                                    isBaseBook = book.isBaseBook
                                 )
                                 processed += 1
                                 val pct = (processed.toLong() * 100L / total).toInt().coerceIn(0, 100)
