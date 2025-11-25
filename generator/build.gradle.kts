@@ -228,6 +228,105 @@ tasks.register<JavaExec>("generateLinks") {
     )
 }
 
+// Phase 1 using Sefaria-generated Otzaria source
+// Usage:
+//   ./gradlew :generator:generateLinesFromSefaria [-PseforimDb=/path/to.db]
+tasks.register<JavaExec>("generateLinesFromSefaria") {
+    group = "application"
+    description = "Phase 1: generate categories/books/lines using Otzaria data produced by :sefaria."
+
+    dependsOn("jvmJar")
+    dependsOn("downloadAcronymizer")
+    dependsOn(":sefaria:generateSefariaOtzaria")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.GenerateLinesKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    val defaultDbPath = layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+    val defaultAcronymDb = layout.buildDirectory.file("acronymizer/acronymizer.db").get().asFile.absolutePath
+    val inMemory = project.findProperty("inMemoryDb") != "false"
+    val cliDbPath = if (inMemory) ":memory:" else defaultDbPath
+
+    val sefariaOtzariaDir = project(":sefaria")
+        .layout.buildDirectory
+        .dir("sefaria/otzaria")
+        .get()
+        .asFile
+        .absolutePath
+
+    // args: DB path, sourceDir (Sefaria Otzaria)
+    args(cliDbPath, sefariaOtzariaDir)
+
+    if (project.hasProperty("acronymDb")) {
+        systemProperty("acronymDb", project.property("acronymDb") as String)
+    } else {
+        systemProperty("acronymDb", defaultAcronymDb)
+    }
+
+    if (inMemory) {
+        if (project.hasProperty("persistDb")) {
+            systemProperty("persistDb", project.property("persistDb") as String)
+        } else {
+            systemProperty("persistDb", defaultDbPath)
+        }
+    }
+
+    jvmArgs = listOf(
+        "-Xmx10g",
+        "-XX:+UseG1GC",
+        "-XX:MaxGCPauseMillis=200",
+        "--enable-native-access=ALL-UNNAMED",
+        "--add-modules=jdk.incubator.vector"
+    )
+}
+
+// Phase 2 using Sefaria-generated Otzaria source
+// Usage:
+//   ./gradlew :generator:generateLinksFromSefaria [-PseforimDb=/path/to.db]
+tasks.register<JavaExec>("generateLinksFromSefaria") {
+    group = "application"
+    description = "Phase 2: process links using Otzaria data produced by :sefaria."
+
+    dependsOn("jvmJar")
+    dependsOn(":sefaria:generateSefariaOtzaria")
+    dependsOn("generateLinesFromSefaria")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.generator.GenerateLinksKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    val defaultDbPath = layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+    val inMemory = project.findProperty("inMemoryDb") != "false"
+    val cliDbPath = if (inMemory) ":memory:" else defaultDbPath
+
+    val sefariaOtzariaDir = project(":sefaria")
+        .layout.buildDirectory
+        .dir("sefaria/otzaria")
+        .get()
+        .asFile
+        .absolutePath
+
+    args(cliDbPath, sefariaOtzariaDir)
+
+    if (inMemory) {
+        if (project.hasProperty("persistDb")) {
+            systemProperty("persistDb", project.property("persistDb") as String)
+        } else {
+            systemProperty("persistDb", defaultDbPath)
+        }
+        if (project.hasProperty("seforimDb")) {
+            systemProperty("baseDb", project.property("seforimDb") as String)
+        } else {
+            systemProperty("baseDb", defaultDbPath)
+        }
+    }
+
+    jvmArgs = listOf(
+        "-Xmx10g",
+        "-XX:+UseG1GC",
+        "-XX:MaxGCPauseMillis=200",
+        "--enable-native-access=ALL-UNNAMED",
+        "--add-modules=jdk.incubator.vector"
+    )
+}
+
 // Build only the precomputed catalog (catalog.pb) from an existing database
 // Usage:
 //   ./gradlew :generator:buildCatalog -PseforimDb=/path/to/seforim.db

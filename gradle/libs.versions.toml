@@ -15,6 +15,8 @@ kermit = "2.0.8"
 sqlDelight = "2.1.0"
 compose = "1.9.3"
 androidx-activityCompose = "1.12.0"
+commons-compress = "1.27.1"
+zstd-jni = "1.5.7-1"
 
 [libraries]
 
@@ -34,6 +36,8 @@ sqlDelight-driver-sqlite = { module = "app.cash.sqldelight:sqlite-driver", versi
 sqlDelight-driver-android = { module = "app.cash.sqldelight:android-driver", version.ref = "sqlDelight" }
 sqlDelight-driver-native = { module = "app.cash.sqldelight:native-driver", version.ref = "sqlDelight" }
 sqlDelight-driver-js = { module = "app.cash.sqldelight:web-worker-driver", version.ref = "sqlDelight" }
+commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commons-compress" }
+zstd = { module = "com.github.luben:zstd-jni", version.ref = "zstd-jni" }
 androidx-activityCompose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activityCompose" }
 
 [plugins]

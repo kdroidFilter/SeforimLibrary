@@ -31,5 +31,6 @@ dependencyResolutionManagement {
 include(":core")
 include(":dao")
 include(":generator")
+include(":sefaria")
 
 includeBuild("SeforimMagicIndexer")
