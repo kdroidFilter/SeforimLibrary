@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.sefaria
 
 import co.touchlab.kermit.Logger
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -193,8 +194,8 @@ class SefariaToOtzariaConverter(
     ): List<String> {
         val output = mutableListOf<String>()
         val tag = headingTagForLevel(0)
-        output += "${tag.first}$bookHeTitle${tag.second}\n"
-        authors.forEach { output += "$it\n" }
+        output += "${tag.first}$bookHeTitle${tag.second}"
+        authors.forEach { output += it }
 
         if (schemaObj.containsKey("nodes")) {
             val nodes = schemaObj["nodes"]?.jsonArray ?: JsonArray(emptyList())
@@ -262,7 +263,7 @@ class SefariaToOtzariaConverter(
     ) {
         val heTitle = node["heTitle"]?.stringOrNull().orEmpty()
         val tag = headingTagForLevel(level)
-        output += "${tag.first}$heTitle${tag.second}\n"
+        output += "${tag.first}$heTitle${tag.second}"
 
         if (node.containsKey("nodes")) {
             val children = node["nodes"]?.jsonArray ?: JsonArray(emptyList())
@@ -336,11 +337,11 @@ class SefariaToOtzariaConverter(
             val content = primitive?.takeIf { it.isString }?.content
             if (!content.isNullOrEmpty()) {
                 when (mode) {
-                    OutputMode.LIBRARY -> output += content.replace("\n", "") + "\n"
+                    OutputMode.LIBRARY -> output += content.replace("\n", "")
                     OutputMode.REFS -> {
                         val cleanRef = trimTrailingSeparators(refPrefix)
                         val cleanHeRef = trimTrailingSeparators(heRefPrefix)
-                        output += "ref: $cleanRef| heRef: $cleanHeRef| text: ${content.replace("\n", "")}\n"
+                        output += "ref: $cleanRef| heRef: $cleanHeRef| text: ${content.replace("\n", "")}"
                         refEntries?.add(
                             RefEntry(
                                 ref = cleanRef,
@@ -363,7 +364,7 @@ class SefariaToOtzariaConverter(
             val letter = if (sectionName == "דף") toDaf(idx + 1) else toGematria(idx + 1)
             if (depth > 1) {
                 val tag = headingTagForLevel(level)
-                output += "${tag.first}$sectionName $letter${tag.second}\n"
+                output += "${tag.first}$sectionName $letter${tag.second}"
             } else if (mode == OutputMode.LIBRARY && sectionName !in inlineSkipSections) {
                 output += "($letter) "
             }
@@ -815,9 +816,14 @@ data class RefEntry(
 
 @Serializable
 data class LinkOutputEntry(
+    @SerialName("line_index_1")
     val lineIndex1: Int,
+    @SerialName("heRef_2")
     val heRef2: String,
+    @SerialName("path_2")
     val path2: String,
+    @SerialName("line_index_2")
     val lineIndex2: Int,
+    @SerialName("Conection Type")
     val connectionType: String
 )
