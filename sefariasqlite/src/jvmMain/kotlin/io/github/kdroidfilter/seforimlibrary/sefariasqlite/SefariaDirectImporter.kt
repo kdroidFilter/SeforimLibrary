@@ -13,6 +13,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -64,9 +65,76 @@ class SefariaDirectImporter(
         val lineIndex: Int
     )
 
+    /**
+     * Parse table_of_contents.json to extract category and book orders
+     */
+    private fun parseTableOfContentsOrders(dbRoot: Path): Pair<Map<String, Int>, Map<String, Int>> {
+        val tocFile = dbRoot.resolve("table_of_contents.json")
+        if (!Files.exists(tocFile)) {
+            logger.w { "table_of_contents.json not found, using default ordering" }
+            return Pair(emptyMap(), emptyMap())
+        }
+
+        val categoryOrders = mutableMapOf<String, Int>() // category path -> order
+        val bookOrders = mutableMapOf<String, Int>()     // book title -> order
+
+        try {
+            val tocJson = Files.readString(tocFile)
+            val tocEntries = json.parseToJsonElement(tocJson).jsonArray
+
+            fun processTocItem(item: JsonObject, categoryPath: List<String> = emptyList()) {
+                // If it's a book (has title but no subcategories with contents)
+                val title = item["title"]?.jsonPrimitive?.contentOrNull
+                val order = item["order"]?.jsonPrimitive?.intOrNull
+                if (title != null && order != null) {
+                    bookOrders[title] = order
+                }
+
+                // If it has a category name, add to category orders
+                val category = item["category"]?.jsonPrimitive?.contentOrNull
+                if (category != null && order != null && categoryPath.isNotEmpty()) {
+                    val fullPath = (categoryPath + category).joinToString("/")
+                    categoryOrders[fullPath] = order
+                }
+
+                // Process subcategories/books recursively
+                item["contents"]?.jsonArray?.forEach { subItem ->
+                    val newPath = if (category != null) {
+                        categoryPath + category
+                    } else {
+                        categoryPath
+                    }
+                    processTocItem(subItem.jsonObject, newPath)
+                }
+            }
+
+            tocEntries.forEach { categoryEntry ->
+                val obj = categoryEntry.jsonObject
+                val catName = obj["category"]?.jsonPrimitive?.contentOrNull
+                    ?: obj["heCategory"]?.jsonPrimitive?.contentOrNull
+                    ?: return@forEach
+                val order = obj["order"]?.jsonPrimitive?.intOrNull ?: return@forEach
+                categoryOrders[catName] = order
+
+                obj["contents"]?.jsonArray?.forEach { item ->
+                    processTocItem(item.jsonObject, listOf(catName))
+                }
+            }
+
+            logger.i { "Parsed TOC orders: ${categoryOrders.size} categories, ${bookOrders.size} books" }
+        } catch (e: Exception) {
+            logger.e(e) { "Error parsing table_of_contents.json" }
+        }
+
+        return Pair(categoryOrders, bookOrders)
+    }
+
     suspend fun import() {
         val dbRoot = findDatabaseExportRoot(exportRoot)
         val jsonDir = dbRoot.resolve("json")
+
+        // Parse table of contents for ordering
+        val (categoryOrders, bookOrders) = parseTableOfContentsOrders(dbRoot)
         val schemaDir = dbRoot.resolve("schemas")
         require(jsonDir.isDirectory() && schemaDir.isDirectory()) { "Missing json/schemas under $dbRoot" }
 
@@ -148,11 +216,14 @@ class SefariaDirectImporter(
                     parentId = existing
                     return@forEachIndexed
                 }
+                // Get order from table_of_contents.json, default to 999 if not found
+                val categoryOrder = categoryOrders[key] ?: categoryOrders[part] ?: 999
                 val cat = Category(
                     id = 0,
                     parentId = parentId,
                     title = part,
-                    level = idx
+                    level = idx,
+                    order = categoryOrder
                 )
                 val id = repository.insertCategory(cat)
                 categoryIds[key] = id
@@ -171,6 +242,8 @@ class SefariaDirectImporter(
             val catId = ensureCategoryPath(payload.categoriesHe)
             val bookId = nextBookId++
             val bookPath = buildBookPath(payload.categoriesHe, payload.heTitle)
+            // Get order from table_of_contents.json using English title, default to 999 if not found
+            val bookOrder = bookOrders[payload.enTitle]?.toFloat() ?: 999f
             val book = Book(
                 id = bookId,
                 categoryId = catId,
@@ -181,7 +254,7 @@ class SefariaDirectImporter(
                 pubDates = payload.pubDates,
                 heShortDesc = payload.description,
                 notesContent = null,
-                order = 999f,
+                order = bookOrder,
                 topics = emptyList(),
                 isBaseBook = true,
                 totalLines = payload.lines.size
@@ -876,7 +949,7 @@ class SefariaDirectImporter(
     private suspend fun buildCatalogTree(): PrecomputedCatalog {
         val allBooks = repository.getAllBooks()
         val booksByCategory = allBooks.groupBy { it.categoryId }
-        val rootCategories = repository.getRootCategories()
+        val rootCategories = repository.getRootCategories().sortedBy { it.order }
         var totalCategories = 0
 
         logger.i { "Building catalog from ${allBooks.size} books" }
@@ -918,10 +991,12 @@ class SefariaDirectImporter(
             )
         }?.sortedBy { it.order } ?: emptyList()
 
-        // Get subcategories and build them recursively
-        val subCategories = repository.getCategoryChildren(category.id).map {
-            buildCatalogCategoryRecursive(it, booksByCategory)
-        }
+        // Get subcategories and build them recursively, sorted by order
+        val subCategories = repository.getCategoryChildren(category.id)
+            .sortedBy { it.order }
+            .map {
+                buildCatalogCategoryRecursive(it, booksByCategory)
+            }
 
         return CatalogCategory(
             id = category.id,

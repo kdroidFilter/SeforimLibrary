@@ -7,10 +7,10 @@ selectById:
 SELECT * FROM category WHERE id = ?;
 
 selectByParentId:
-SELECT * FROM category WHERE parentId = ? ORDER BY title;
+SELECT * FROM category WHERE parentId = ? ORDER BY orderIndex, title;
 
 selectRoot:
-SELECT * FROM category WHERE parentId IS NULL ORDER BY title;
+SELECT * FROM category WHERE parentId IS NULL ORDER BY orderIndex, title;
 
 selectByTitle:
 SELECT * FROM category WHERE title = ? LIMIT 1;
@@ -22,8 +22,8 @@ selectManyByTitleLike:
 SELECT * FROM category WHERE title LIKE ? ORDER BY level ASC, title LIMIT ?;
 
 insert:
-INSERT INTO category (parentId, title, level)
-VALUES (?, ?, ?);
+INSERT INTO category (parentId, title, level, orderIndex)
+VALUES (?, ?, ?, ?);
 
 update:
 UPDATE category SET

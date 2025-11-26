@@ -9,11 +9,13 @@ import kotlinx.serialization.Serializable
  * @property parentId The identifier of the parent category, or null if this is a root category
  * @property title The title of the category
  * @property level The level of the category in the hierarchy (0 for root categories)
+ * @property order The display order of the category (lower values appear first)
  */
 @Serializable
 data class Category(
     val id: Long = 0,
     val parentId: Long? = null,
     val title: String,
-    val level: Int = 0
+    val level: Int = 0,
+    val order: Int = 999
 )

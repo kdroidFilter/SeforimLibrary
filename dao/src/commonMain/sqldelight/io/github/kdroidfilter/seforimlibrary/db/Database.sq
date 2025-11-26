@@ -4,10 +4,12 @@ CREATE TABLE IF NOT EXISTS category (
     parentId INTEGER,
     title TEXT NOT NULL,
     level INTEGER NOT NULL DEFAULT 0,
+    orderIndex INTEGER NOT NULL DEFAULT 999,
     FOREIGN KEY (parentId) REFERENCES category(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_category_parent ON category(parentId);
+CREATE INDEX IF NOT EXISTS idx_category_order ON category(orderIndex);
 
 -- Closure table for efficient descendant/ancestor lookups
 CREATE TABLE IF NOT EXISTS category_closure (

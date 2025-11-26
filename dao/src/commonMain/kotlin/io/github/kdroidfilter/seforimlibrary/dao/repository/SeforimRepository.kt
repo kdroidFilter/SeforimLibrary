@@ -258,7 +258,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             database.categoryQueriesQueries.insert(
                 parentId = category.parentId,
                 title = category.title,
-                level = category.level.toLong()
+                level = category.level.toLong(),
+                orderIndex = category.order.toLong()
             )
 
             val insertedId = database.categoryQueriesQueries.lastInsertRowId().executeAsOne()
