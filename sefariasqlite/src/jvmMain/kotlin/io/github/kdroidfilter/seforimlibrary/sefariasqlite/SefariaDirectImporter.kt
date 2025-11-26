@@ -38,7 +38,6 @@ class SefariaDirectImporter(
     ) {
 
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
-    private val inlineSkipSections = setOf("שורה", "פירוש", "פסקה")
 
     private data class BookPayload(
         val heTitle: String,
@@ -627,18 +626,18 @@ class SefariaDirectImporter(
         text.forEachIndexed { idx, item ->
             if (item.isTriviallyEmpty()) return@forEachIndexed
 
-            // Use addressTypes from schema instead of heuristics
+            // Use addressTypes from schema
             val currentAddressType = addressTypes.getOrNull(addressTypes.size - depth)
             val letter = when (currentAddressType) {
                 "Talmud" -> toDaf(idx + 1)  // Talmud pages use Daf notation
                 "Integer" -> (idx + 1).toString()  // Simple integer
-                else -> if (sectionName == "דף") toDaf(idx + 1) else toGematria(idx + 1)  // Fallback to heuristic
+                else -> toGematria(idx + 1)  // Default to gematria for Hebrew numbering
             }
 
             // Check if this level should show inline prefixes using schema's referenceableSections
             val sectionIndex = sectionNames.size - depth
             val isReferenceable = referenceableSections.getOrNull(sectionIndex) ?: true
-            val nextLinePrefix = if (depth == 1 && sectionName !in inlineSkipSections && isReferenceable) {
+            val nextLinePrefix = if (depth == 1 && isReferenceable) {
                 "($letter) "
             } else {
                 ""
@@ -669,8 +668,7 @@ class SefariaDirectImporter(
                 // Use addressTypes for English reference format
                 val refNumber = when (currentAddressType) {
                     "Talmud" -> toEnglishDaf(idx + 1)  // e.g., "2a", "2b"
-                    "Integer" -> (idx + 1).toString()
-                    else -> if (sectionName == "דף") toEnglishDaf(idx + 1) else (idx + 1).toString()
+                    else -> (idx + 1).toString()  // Default to integer for English references
                 }
                 append(refNumber)
                 append(":")
