@@ -3,6 +3,7 @@ package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
+import kotlinx.serialization.protobuf.ProtoBuf
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -31,6 +32,7 @@ import kotlin.io.path.readText
 class SefariaDirectImporter(
     private val exportRoot: Path,
     private val repository: SeforimRepository,
+    private val catalogOutput: Path,
     private val logger: Logger = Logger.withTag("SefariaDirectImporter")
     ) {
 
@@ -180,7 +182,8 @@ class SefariaDirectImporter(
                 notesContent = null,
                 order = 999f,
                 topics = emptyList(),
-                isBaseBook = true
+                isBaseBook = true,
+                totalLines = payload.lines.size
             )
             repository.insertBook(book)
 
@@ -200,38 +203,37 @@ class SefariaDirectImporter(
                 lineKeyToId[bookPath to idx] = lineId
                 lineIdToBookId[lineId] = bookId
             }
-            // Insert TOC entries for headings and build line_toc mappings manually
-            val headingIds = mutableListOf<Pair<Int, Long>>() // lineIndex -> tocId
-            for (heading in payload.headings) {
-                val lineId = lineKeyToId[bookPath to heading.lineIndex] ?: continue
-                val tocId = repository.insertTocEntry(
-                    TocEntry(
-                        id = 0,
-                        bookId = bookId,
-                        parentId = null,
-                        textId = null,
-                        text = heading.title,
-                        level = heading.level,
-                        lineId = lineId,
-                        isLastChild = false,
-                        hasChildren = false
+            // Insert TOC entries hierarchically and build line_toc mappings
+            if (payload.headings.isNotEmpty()) {
+                val levelStack = ArrayDeque<Pair<Int, Long>>()
+                val headingLineToToc = mutableMapOf<Int, Long>()
+                payload.headings.sortedBy { it.lineIndex }.forEach { h ->
+                    while (levelStack.isNotEmpty() && levelStack.last().first >= h.level) levelStack.removeLast()
+                    val parent = levelStack.lastOrNull()?.second
+                    val lineIdForHeading = lineKeyToId[bookPath to h.lineIndex]
+                    val tocId = repository.insertTocEntry(
+                        TocEntry(
+                            id = 0,
+                            bookId = bookId,
+                            parentId = parent,
+                            textId = null,
+                            text = h.title,
+                            level = h.level,
+                            lineId = lineIdForHeading,
+                            isLastChild = false,
+                            hasChildren = false
+                        )
                     )
-                )
-                headingIds += heading.lineIndex to tocId
-            }
-            if (headingIds.isNotEmpty()) {
-                headingIds.sortBy { it.first }
-                var idxHeading = 0
-                var current = headingIds[idxHeading]
+                    headingLineToToc[h.lineIndex] = tocId
+                    levelStack.addLast(h.level to tocId)
+                }
+                val sortedKeys = headingLineToToc.keys.sorted()
                 for (lineIdx in payload.lines.indices) {
-                    while (idxHeading + 1 < headingIds.size && lineIdx >= headingIds[idxHeading + 1].first) {
-                        idxHeading++
-                        current = headingIds[idxHeading]
-                    }
-                    if (lineIdx < current.first) continue
+                    val key = sortedKeys.lastOrNull { it <= lineIdx } ?: continue
+                    val tocId = headingLineToToc[key] ?: continue
                     val lineId = lineKeyToId[bookPath to lineIdx] ?: continue
                     repository.executeRawQuery(
-                        "INSERT INTO line_toc(lineId, tocEntryId) VALUES ($lineId, ${current.second})"
+                        "INSERT INTO line_toc(lineId, tocEntryId) VALUES ($lineId, $tocId)"
                     )
                 }
             }
@@ -299,6 +301,7 @@ class SefariaDirectImporter(
         repository.rebuildCategoryClosure()
         // book_has_links flags & connection flags
         updateBookHasLinks()
+        buildAndSaveCatalog()
         logger.i { "Direct Sefaria import completed." }
     }
 
@@ -334,6 +337,7 @@ class SefariaDirectImporter(
         val tag = headingTagForLevel(0)
         output += "${tag.first}$bookHeTitle${tag.second}"
         authors.forEach { output += it }
+        headings += Heading(title = bookHeTitle, level = 0, lineIndex = 0)
 
         fun processNode(
             node: JsonObject,
@@ -385,7 +389,8 @@ class SefariaDirectImporter(
                     refPrefix = "$refPrefix ",
                     heRefPrefix = "$heRefPrefix ",
                     bookEnTitle = bookEnTitle,
-                    bookHeTitle = bookHeTitle
+                    bookHeTitle = bookHeTitle,
+                    headings = headings
                 )
             }
         }
@@ -423,7 +428,8 @@ class SefariaDirectImporter(
                 refPrefix = "$bookEnTitle ",
                 heRefPrefix = "$bookHeTitle ",
                 bookEnTitle = bookEnTitle,
-                bookHeTitle = bookHeTitle
+                bookHeTitle = bookHeTitle,
+                headings = headings
             )
         }
 
@@ -441,6 +447,7 @@ class SefariaDirectImporter(
         heRefPrefix: String,
         bookEnTitle: String,
         bookHeTitle: String,
+        headings: MutableList<Heading>,
         linePrefix: String = ""
     ) {
         if (depth == 0) {
@@ -492,6 +499,7 @@ class SefariaDirectImporter(
                 heRefPrefix = newHeRefPrefix,
                 bookEnTitle = bookEnTitle,
                 bookHeTitle = bookHeTitle,
+                headings = headings,
                 linePrefix = nextLinePrefix
             )
         }
@@ -800,5 +808,78 @@ class SefariaDirectImporter(
         setConnFlag("REFERENCE", "hasReferenceConnection")
         setConnFlag("COMMENTARY", "hasCommentaryConnection")
         setConnFlag("OTHER", "hasOtherConnection")
+    }
+
+    private suspend fun buildAndSaveCatalog() {
+        logger.i { "Building precomputed catalog..." }
+        val catalog = buildCatalogTree()
+        saveCatalog(catalog, catalogOutput)
+        logger.i { "Saved catalog to $catalogOutput (size=${catalogOutput.toFile().length() / 1024} KB)" }
+    }
+
+    private suspend fun buildCatalogTree(): PrecomputedCatalog {
+        val allBooks = repository.getAllBooks()
+        val booksByCategory = allBooks.groupBy { it.categoryId }
+        val rootCategories = repository.getRootCategories()
+        var totalCategories = 0
+
+        val catalogRoots = rootCategories.map { root ->
+            buildCatalogCategoryRecursive(root, booksByCategory, level = 0, parentId = null).also {
+                totalCategories += countCategories(it)
+            }
+        }
+
+        return PrecomputedCatalog(
+            rootCategories = catalogRoots,
+            version = 1,
+            totalBooks = allBooks.size,
+            totalCategories = totalCategories
+        )
+    }
+
+    private suspend fun buildCatalogCategoryRecursive(
+        category: Category,
+        booksByCategory: Map<Long, List<Book>>,
+        level: Int,
+        parentId: Long?
+    ): CatalogCategory {
+        val subCategories = repository.getCategoryChildren(category.id).map {
+            buildCatalogCategoryRecursive(it, booksByCategory, level = level + 1, parentId = category.id)
+        }
+        val catBooks = booksByCategory[category.id].orEmpty().map { book ->
+            CatalogBook(
+                id = book.id,
+                categoryId = book.categoryId,
+                title = book.title,
+                order = book.order,
+                authors = book.authors.map { it.name },
+                totalLines = book.totalLines,
+                isBaseBook = book.isBaseBook,
+                hasTargumConnection = book.hasTargumConnection,
+                hasReferenceConnection = book.hasReferenceConnection,
+                hasCommentaryConnection = book.hasCommentaryConnection,
+                hasOtherConnection = book.hasOtherConnection
+            )
+        }
+        return CatalogCategory(
+            id = category.id,
+            title = category.title,
+            level = level,
+            parentId = parentId,
+            books = catBooks,
+            subcategories = subCategories
+        )
+    }
+
+    private fun countCategories(root: CatalogCategory): Int {
+        var total = 1
+        for (child in root.subcategories) total += countCategories(child)
+        return total
+    }
+
+    private fun saveCatalog(catalog: PrecomputedCatalog, outputPath: Path) {
+        val bytes = ProtoBuf.encodeToByteArray(PrecomputedCatalog.serializer(), catalog)
+        outputPath.toFile().parentFile?.mkdirs()
+        Files.write(outputPath, bytes)
     }
 }

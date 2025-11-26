@@ -16,6 +16,7 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kermit)
             implementation(libs.kotlinx.serialization.json)
+            implementation(libs.kotlinx.serialization.protobuf)
         }
 
         commonTest.dependencies {

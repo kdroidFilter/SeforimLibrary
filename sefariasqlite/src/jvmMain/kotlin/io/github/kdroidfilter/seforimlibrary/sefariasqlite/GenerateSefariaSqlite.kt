@@ -39,6 +39,11 @@ fun main(args: Array<String>) = runBlocking {
         ?: System.getProperty("exportDir")
         ?: System.getenv("SEFARIA_EXPORT_DIR")
     val exportRoot: Path = exportDirArg?.let { Paths.get(it) } ?: SefariaFetcher.ensureLocalExport(logger)
+    val catalogOut = Paths.get(
+        System.getProperty("catalogOut")
+            ?: System.getenv("CATALOG_OUT")
+            ?: persistDbPath
+    ).resolveSibling("catalog.pb")
 
     // Prepare DB (optionally in-memory)
     if (!useMemoryDb) {
@@ -60,7 +65,12 @@ fun main(args: Array<String>) = runBlocking {
     val repository = SeforimRepository(dbPath, driver)
 
     try {
-        val importer = SefariaDirectImporter(exportRoot = exportRoot, repository = repository, logger = Logger.withTag("SefariaDirect"))
+        val importer = SefariaDirectImporter(
+            exportRoot = exportRoot,
+            repository = repository,
+            catalogOutput = catalogOut,
+            logger = Logger.withTag("SefariaDirect")
+        )
         importer.import()
 
         if (useMemoryDb) {
