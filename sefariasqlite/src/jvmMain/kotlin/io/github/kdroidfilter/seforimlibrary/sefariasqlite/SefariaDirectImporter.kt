@@ -37,6 +37,7 @@ class SefariaDirectImporter(
     ) {
 
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
+    private val inlineSkipSections = setOf("שורה", "פירוש", "פסקה")
 
     private data class BookPayload(
         val heTitle: String,
@@ -475,7 +476,27 @@ class SefariaDirectImporter(
         text.forEachIndexed { idx, item ->
             if (item.isTriviallyEmpty()) return@forEachIndexed
             val letter = if (sectionName == "דף") toDaf(idx + 1) else toGematria(idx + 1)
-            val nextLinePrefix = if (depth == 1) "($letter) " else ""
+            val nextLinePrefix = if (depth == 1 && sectionName !in inlineSkipSections) {
+                "($letter) "
+            } else {
+                ""
+            }
+
+            // Add intermediate section headings (depth > 1) just like SefariaToOtzariaConverter does
+            if (depth > 1) {
+                val tag = when (level) {
+                    1 -> "<h2>" to "</h2>"
+                    2 -> "<h3>" to "</h3>"
+                    3 -> "<h4>" to "</h4>"
+                    else -> "<h5>" to "</h5>"
+                }
+                output += "${tag.first}$sectionName $letter${tag.second}"
+                headings += Heading(
+                    title = "$sectionName $letter",
+                    level = level,
+                    lineIndex = output.size - 1
+                )
+            }
 
             val newRefPrefix = buildString {
                 append(refPrefix)
