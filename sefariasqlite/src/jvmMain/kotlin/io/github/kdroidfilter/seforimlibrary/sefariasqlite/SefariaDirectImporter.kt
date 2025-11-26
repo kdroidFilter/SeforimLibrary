@@ -85,24 +85,38 @@ class SefariaDirectImporter(
             fun processTocItem(item: JsonObject, categoryPath: List<String> = emptyList()) {
                 // If it's a book (has title but no subcategories with contents)
                 val title = item["title"]?.jsonPrimitive?.contentOrNull
+                val heTitle = item["heTitle"]?.jsonPrimitive?.contentOrNull
                 val order = item["order"]?.jsonPrimitive?.intOrNull
                 if (title != null && order != null) {
                     bookOrders[title] = order
                 }
+                if (heTitle != null && order != null) {
+                    bookOrders[heTitle] = order
+                    bookOrders[sanitizeFolder(heTitle)] = order
+                }
 
                 // If it has a category name, add to category orders
                 val category = item["category"]?.jsonPrimitive?.contentOrNull
-                if (category != null && order != null && categoryPath.isNotEmpty()) {
-                    val fullPath = (categoryPath + category).joinToString("/")
-                    categoryOrders[fullPath] = order
+                val heCategory = item["heCategory"]?.jsonPrimitive?.contentOrNull
+                if (order != null && categoryPath.isNotEmpty()) {
+                    if (category != null) {
+                        val fullPath = (categoryPath + category).joinToString("/")
+                        categoryOrders[fullPath] = order
+                        categoryOrders[sanitizeFolder(fullPath)] = order
+                    }
+                    if (heCategory != null) {
+                        val fullPath = (categoryPath + heCategory).joinToString("/")
+                        categoryOrders[fullPath] = order
+                        categoryOrders[sanitizeFolder(fullPath)] = order
+                    }
                 }
 
                 // Process subcategories/books recursively
                 item["contents"]?.jsonArray?.forEach { subItem ->
-                    val newPath = if (category != null) {
-                        categoryPath + category
-                    } else {
-                        categoryPath
+                    val newPath = when {
+                        heCategory != null -> categoryPath + heCategory
+                        category != null -> categoryPath + category
+                        else -> categoryPath
                     }
                     processTocItem(subItem.jsonObject, newPath)
                 }
@@ -110,14 +124,23 @@ class SefariaDirectImporter(
 
             tocEntries.forEach { categoryEntry ->
                 val obj = categoryEntry.jsonObject
-                val catName = obj["category"]?.jsonPrimitive?.contentOrNull
-                    ?: obj["heCategory"]?.jsonPrimitive?.contentOrNull
-                    ?: return@forEach
+                val catNameEn = obj["category"]?.jsonPrimitive?.contentOrNull
+                val catNameHe = obj["heCategory"]?.jsonPrimitive?.contentOrNull
                 val order = obj["order"]?.jsonPrimitive?.intOrNull ?: return@forEach
-                categoryOrders[catName] = order
 
+                // Store order with BOTH English and Hebrew names
+                if (catNameEn != null) {
+                    categoryOrders[catNameEn] = order
+                    categoryOrders[sanitizeFolder(catNameEn)] = order
+                }
+                if (catNameHe != null) {
+                    categoryOrders[catNameHe] = order
+                    categoryOrders[sanitizeFolder(catNameHe)] = order
+                }
+
+                val pathKey = catNameHe ?: catNameEn ?: return@forEach
                 obj["contents"]?.jsonArray?.forEach { item ->
-                    processTocItem(item.jsonObject, listOf(catName))
+                    processTocItem(item.jsonObject, listOf(pathKey))
                 }
             }
 
@@ -712,7 +735,9 @@ class SefariaDirectImporter(
 
     private fun sanitizeFolder(name: String?): String {
         if (name.isNullOrBlank()) return ""
-        return name.replace("\"", "").trim()
+        // Convert ASCII double quotes to Hebrew guersayim (״) instead of removing them
+        // Sefaria uses " instead of ״ in their JSON
+        return name.replace("\"", "״").trim()
     }
 
     private fun extractDescription(schemaJson: JsonObject, schemaObj: JsonObject): String? {

@@ -720,7 +720,9 @@ class SefariaToOtzariaConverter(
 
     private fun sanitizeFolder(name: String?): String {
         if (name.isNullOrBlank()) return ""
-        return name.replace("\"", "").trim()
+        // Convert ASCII double quotes to Hebrew guersayim (״) instead of removing them
+        // Sefaria uses " instead of ״ in their JSON
+        return name.replace("\"", "״").trim()
     }
 
     private fun sanitizeFileName(name: String): String {
