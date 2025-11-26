@@ -32,5 +32,6 @@ include(":core")
 include(":dao")
 include(":generator")
 include(":sefaria")
+include(":sefariasqlite")
 
 includeBuild("SeforimMagicIndexer")
