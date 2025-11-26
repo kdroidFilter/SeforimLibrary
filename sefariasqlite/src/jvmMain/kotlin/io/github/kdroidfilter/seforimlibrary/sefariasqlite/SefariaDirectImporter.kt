@@ -208,6 +208,10 @@ class SefariaDirectImporter(
             if (payload.headings.isNotEmpty()) {
                 val levelStack = ArrayDeque<Pair<Int, Long>>()
                 val headingLineToToc = mutableMapOf<Int, Long>()
+                val entriesByParent = mutableMapOf<Long?, MutableList<Long>>()
+                val allTocIds = mutableListOf<Long>()
+                val tocParentMap = mutableMapOf<Long, Long?>() // tocId -> parentId
+
                 payload.headings.sortedBy { it.lineIndex }.forEach { h ->
                     while (levelStack.isNotEmpty() && levelStack.last().first >= h.level) levelStack.removeLast()
                     val parent = levelStack.lastOrNull()?.second
@@ -227,7 +231,26 @@ class SefariaDirectImporter(
                     )
                     headingLineToToc[h.lineIndex] = tocId
                     levelStack.addLast(h.level to tocId)
+                    allTocIds.add(tocId)
+                    tocParentMap[tocId] = parent
+                    entriesByParent.getOrPut(parent) { mutableListOf() }.add(tocId)
                 }
+
+                // DEUXIÈME PASSE: Mettre à jour hasChildren et isLastChild
+                val parentIds = tocParentMap.values.filterNotNull().toSet()
+                for (tocId in allTocIds) {
+                    if (tocId in parentIds) {
+                        repository.updateTocEntryHasChildren(tocId, true)
+                    }
+                }
+                for ((parentId, children) in entriesByParent) {
+                    if (children.isNotEmpty()) {
+                        val lastChildId = children.last()
+                        repository.updateTocEntryIsLastChild(lastChildId, true)
+                    }
+                }
+
+                // Build line_toc mappings
                 val sortedKeys = headingLineToToc.keys.sorted()
                 for (lineIdx in payload.lines.indices) {
                     val key = sortedKeys.lastOrNull { it <= lineIdx } ?: continue
@@ -283,14 +306,26 @@ class SefariaDirectImporter(
                                     for (to in toRefs) {
                                         val srcLine = lineKeyToId[from.path to (from.lineIndex - 1)] ?: continue
                                         val tgtLine = lineKeyToId[to.path to (to.lineIndex - 1)] ?: continue
-                                        val link = Link(
+
+                                        // Create bidirectional links (from→to and to→from) like SefariaToOtzariaConverter
+                                        val linkForward = Link(
                                             sourceBookId = lineBookId(srcLine, lineIdToBookId),
                                             targetBookId = lineBookId(tgtLine, lineIdToBookId),
                                             sourceLineId = srcLine,
                                             targetLineId = tgtLine,
                                             connectionType = ConnectionType.fromString(conn)
                                         )
-                                        kotlinx.coroutines.runBlocking { repository.insertLink(link) }
+                                        kotlinx.coroutines.runBlocking { repository.insertLink(linkForward) }
+
+                                        // Insert reverse link (to→from)
+                                        val linkReverse = Link(
+                                            sourceBookId = lineBookId(tgtLine, lineIdToBookId),
+                                            targetBookId = lineBookId(srcLine, lineIdToBookId),
+                                            sourceLineId = tgtLine,
+                                            targetLineId = srcLine,
+                                            connectionType = ConnectionType.fromString(conn)
+                                        )
+                                        kotlinx.coroutines.runBlocking { repository.insertLink(linkReverse) }
                                     }
                                 }
                             }
@@ -844,11 +879,15 @@ class SefariaDirectImporter(
         val rootCategories = repository.getRootCategories()
         var totalCategories = 0
 
+        logger.i { "Building catalog from ${allBooks.size} books" }
+
         val catalogRoots = rootCategories.map { root ->
-            buildCatalogCategoryRecursive(root, booksByCategory, level = 0, parentId = null).also {
+            buildCatalogCategoryRecursive(root, booksByCategory).also {
                 totalCategories += countCategories(it)
             }
         }
+
+        logger.i { "Built catalog with $totalCategories categories and ${allBooks.size} books" }
 
         return PrecomputedCatalog(
             rootCategories = catalogRoots,
@@ -860,14 +899,10 @@ class SefariaDirectImporter(
 
     private suspend fun buildCatalogCategoryRecursive(
         category: Category,
-        booksByCategory: Map<Long, List<Book>>,
-        level: Int,
-        parentId: Long?
+        booksByCategory: Map<Long, List<Book>>
     ): CatalogCategory {
-        val subCategories = repository.getCategoryChildren(category.id).map {
-            buildCatalogCategoryRecursive(it, booksByCategory, level = level + 1, parentId = category.id)
-        }
-        val catBooks = booksByCategory[category.id].orEmpty().map { book ->
+        // Get books in this category and sort by order
+        val catBooks = booksByCategory[category.id]?.map { book ->
             CatalogBook(
                 id = book.id,
                 categoryId = book.categoryId,
@@ -881,12 +916,18 @@ class SefariaDirectImporter(
                 hasCommentaryConnection = book.hasCommentaryConnection,
                 hasOtherConnection = book.hasOtherConnection
             )
+        }?.sortedBy { it.order } ?: emptyList()
+
+        // Get subcategories and build them recursively
+        val subCategories = repository.getCategoryChildren(category.id).map {
+            buildCatalogCategoryRecursive(it, booksByCategory)
         }
+
         return CatalogCategory(
             id = category.id,
             title = category.title,
-            level = level,
-            parentId = parentId,
+            level = category.level,      // Use DB value, not calculated!
+            parentId = category.parentId, // Use DB value, not calculated!
             books = catBooks,
             subcategories = subCategories
         )

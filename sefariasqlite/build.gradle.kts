@@ -44,3 +44,30 @@ tasks.register<JavaExec>("generateSefariaSqlite") {
         "-XX:MaxGCPauseMillis=200"
     )
 }
+
+// Build only the precomputed catalog (catalog.pb) from an existing Sefaria database
+// Usage:
+//   ./gradlew :sefariasqlite:buildCatalog -PseforimDb=/path/to/seforim.db
+//   ./gradlew :sefariasqlite:buildCatalog  # Uses default build/seforim.db
+tasks.register<JavaExec>("buildCatalog") {
+    group = "application"
+    description = "Build precomputed catalog (catalog.pb) from an existing Sefaria database."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.sefariasqlite.BuildCatalogKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    // Default DB path in build/
+    val defaultDbPath = layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+
+    // Allow override via -PseforimDb
+    val dbPath = if (project.hasProperty("seforimDb")) {
+        project.property("seforimDb") as String
+    } else {
+        defaultDbPath
+    }
+
+    args(dbPath)
+
+    jvmArgs = listOf("-Xmx2g")
+}
