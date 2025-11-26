@@ -479,20 +479,27 @@ class SefariaDirectImporter(
             heRefPrefix: String
         ) {
             val heTitle = node["heTitle"]?.stringOrNull().orEmpty()
-            val tagNode = headingTagForLevel(level)
-            output += "${tagNode.first}$heTitle${tagNode.second}"
-            headings += Heading(title = heTitle.ifBlank { bookHeTitle }, level = level, lineIndex = output.size - 1)
+            val key = node["key"]?.stringOrNull()
+            val isDefault = key.equals("default", ignoreCase = true)
+            val hasTitle = heTitle.isNotBlank()
+
+            // Only add heading if we have a title to display
+            if (hasTitle) {
+                val tagNode = headingTagForLevel(level)
+                output += "${tagNode.first}$heTitle${tagNode.second}"
+                headings += Heading(title = heTitle, level = level, lineIndex = output.size - 1)
+            }
 
             if (node.containsKey("nodes")) {
                 val children = node["nodes"]?.jsonArray ?: JsonArray(emptyList())
                 val textObject = text as? JsonObject
                 for (childElement in children) {
                     val child = childElement.jsonObject
-                    val key = child["key"]?.stringOrNull()
+                    val childKey = child["key"]?.stringOrNull()
                     val childTitle = child["title"]?.stringOrNull().orEmpty()
                     val childHeTitle = child["heTitle"]?.stringOrNull().orEmpty()
                     val childText = if (textObject != null) {
-                        if (!key.equals("default", ignoreCase = true) && childTitle.isNotBlank()) {
+                        if (!childKey.equals("default", ignoreCase = true) && childTitle.isNotBlank()) {
                             textObject[childTitle]
                         } else {
                             textObject[""] ?: textObject[childTitle]
@@ -500,29 +507,36 @@ class SefariaDirectImporter(
                     } else null
                     val newRefPrefix = buildString {
                         append(refPrefix)
-                        if (!key.equals("default", ignoreCase = true) && childTitle.isNotBlank()) append(childTitle).append(", ")
+                        if (!childKey.equals("default", ignoreCase = true) && childTitle.isNotBlank()) append(childTitle).append(", ")
                     }
                     val newHeRefPrefix = buildString {
                         append(heRefPrefix)
-                        if (!key.equals("default", ignoreCase = true) && childHeTitle.isNotBlank()) append(childHeTitle).append(", ")
+                        if (!childKey.equals("default", ignoreCase = true) && childHeTitle.isNotBlank()) append(childHeTitle).append(", ")
                     }
+                    // All direct children of a node should be at the same level
                     processNode(child, childText, level + 1, newRefPrefix, newHeRefPrefix)
                 }
             } else {
                 val sectionNames = node["heSectionNames"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
                 val depth = node["depth"]?.jsonPrimitive?.intOrNullSafe() ?: sectionNames.size
+                val addressTypes = node["addressTypes"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+                val referenceableSections = node["referenceableSections"]?.jsonArray?.mapNotNull { it.jsonPrimitive.booleanOrNull } ?: emptyList()
+                // Don't increment level for default nodes without title - they should be siblings, not children
+                val nextLevel = if (hasTitle) level + 1 else level
                 recursiveSections(
                     sectionNames = sectionNames,
                     text = text,
                     depth = depth,
-                    level = level + 1,
+                    level = nextLevel,
                     output = output,
                     refEntries = refs,
                     refPrefix = "$refPrefix ",
                     heRefPrefix = "$heRefPrefix ",
                     bookEnTitle = bookEnTitle,
                     bookHeTitle = bookHeTitle,
-                    headings = headings
+                    headings = headings,
+                    addressTypes = addressTypes,
+                    referenceableSections = referenceableSections
                 )
             }
         }
@@ -550,6 +564,8 @@ class SefariaDirectImporter(
         } else {
             val sectionNames = schemaObj["heSectionNames"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
             val depth = schemaObj["depth"]?.jsonPrimitive?.intOrNullSafe() ?: sectionNames.size
+            val addressTypes = schemaObj["addressTypes"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+            val referenceableSections = schemaObj["referenceableSections"]?.jsonArray?.mapNotNull { it.jsonPrimitive.booleanOrNull } ?: emptyList()
             recursiveSections(
                 sectionNames = sectionNames,
                 text = textElement,
@@ -561,7 +577,9 @@ class SefariaDirectImporter(
                 heRefPrefix = "$bookHeTitle ",
                 bookEnTitle = bookEnTitle,
                 bookHeTitle = bookHeTitle,
-                headings = headings
+                headings = headings,
+                addressTypes = addressTypes,
+                referenceableSections = referenceableSections
             )
         }
 
@@ -580,7 +598,9 @@ class SefariaDirectImporter(
         bookEnTitle: String,
         bookHeTitle: String,
         headings: MutableList<Heading>,
-        linePrefix: String = ""
+        linePrefix: String = "",
+        addressTypes: List<String> = emptyList(),
+        referenceableSections: List<Boolean> = emptyList()
     ) {
         if (depth == 0) {
             val primitive = text as? JsonPrimitive
@@ -606,15 +626,30 @@ class SefariaDirectImporter(
 
         text.forEachIndexed { idx, item ->
             if (item.isTriviallyEmpty()) return@forEachIndexed
-            val letter = if (sectionName == "דף") toDaf(idx + 1) else toGematria(idx + 1)
-            val nextLinePrefix = if (depth == 1 && sectionName !in inlineSkipSections) {
+
+            // Use addressTypes from schema instead of heuristics
+            val currentAddressType = addressTypes.getOrNull(addressTypes.size - depth)
+            val letter = when (currentAddressType) {
+                "Talmud" -> toDaf(idx + 1)  // Talmud pages use Daf notation
+                "Integer" -> (idx + 1).toString()  // Simple integer
+                else -> if (sectionName == "דף") toDaf(idx + 1) else toGematria(idx + 1)  // Fallback to heuristic
+            }
+
+            // Check if this level should show inline prefixes using schema's referenceableSections
+            val sectionIndex = sectionNames.size - depth
+            val isReferenceable = referenceableSections.getOrNull(sectionIndex) ?: true
+            val nextLinePrefix = if (depth == 1 && sectionName !in inlineSkipSections && isReferenceable) {
                 "($letter) "
             } else {
                 ""
             }
 
-            // Add intermediate section headings (depth > 1) just like SefariaToOtzariaConverter does
-            if (depth > 1) {
+            // Add intermediate section headings using schema's referenceableSections
+            // Only generate headings if:
+            // 1. depth > 1 (not the leaf level)
+            // 2. sectionName is not empty (schema defines a name for this level)
+            // 3. isReferenceable is true (schema marks this level as referenceable)
+            if (depth > 1 && sectionName.isNotBlank() && isReferenceable) {
                 val tag = when (level) {
                     1 -> "<h2>" to "</h2>"
                     2 -> "<h3>" to "</h3>"
@@ -631,12 +666,18 @@ class SefariaDirectImporter(
 
             val newRefPrefix = buildString {
                 append(refPrefix)
-                append(if (sectionName == "דף") toEnglishDaf(idx + 1) else (idx + 1).toString())
+                // Use addressTypes for English reference format
+                val refNumber = when (currentAddressType) {
+                    "Talmud" -> toEnglishDaf(idx + 1)  // e.g., "2a", "2b"
+                    "Integer" -> (idx + 1).toString()
+                    else -> if (sectionName == "דף") toEnglishDaf(idx + 1) else (idx + 1).toString()
+                }
+                append(refNumber)
                 append(":")
             }
             val newHeRefPrefix = buildString {
                 append(heRefPrefix)
-                append(if (sectionName == "דף") toDaf(idx + 1) else toGematria(idx + 1))
+                append(letter)  // Use the same letter variable we computed above
                 append(", ")
             }
 
@@ -652,7 +693,9 @@ class SefariaDirectImporter(
                 bookEnTitle = bookEnTitle,
                 bookHeTitle = bookHeTitle,
                 headings = headings,
-                linePrefix = nextLinePrefix
+                linePrefix = nextLinePrefix,
+                addressTypes = addressTypes,  // Pass addressTypes through recursion
+                referenceableSections = referenceableSections  // Pass referenceableSections through recursion
             )
         }
     }
