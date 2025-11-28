@@ -286,14 +286,20 @@ class SefariaDirectImporter(
             val refsForBook = payload.refEntries.map { it.copy(path = bookPath) }
             allRefsWithPath += refsForBook
 
+            // Create a mapping from lineIndex to RefEntry for quick lookup
+            val refsByLineIndex = payload.refEntries.associateBy { it.lineIndex - 1 }
+
             payload.lines.forEachIndexed { idx, content ->
                 val lineId = nextLineId++
+                val refEntry = refsByLineIndex[idx]
                 repository.insertLine(
                     Line(
                         id = lineId,
                         bookId = bookId,
                         lineIndex = idx,
-                        content = content
+                        content = content,
+                        ref = refEntry?.ref,
+                        heRef = refEntry?.heRef
                     )
                 )
                 lineKeyToId[bookPath to idx] = lineId
@@ -637,7 +643,7 @@ class SefariaDirectImporter(
             // Check if this level should show inline prefixes using schema's referenceableSections
             val sectionIndex = sectionNames.size - depth
             val isReferenceable = referenceableSections.getOrNull(sectionIndex) ?: true
-            val nextLinePrefix = if (depth == 1 && isReferenceable) {
+            val nextLinePrefix = if (depth == 1 && isReferenceable && currentAddressType != "Integer") {
                 "($letter) "
             } else {
                 ""
