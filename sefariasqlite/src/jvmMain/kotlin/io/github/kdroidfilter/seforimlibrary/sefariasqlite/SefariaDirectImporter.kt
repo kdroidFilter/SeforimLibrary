@@ -629,6 +629,13 @@ class SefariaDirectImporter(
         val index = (sectionNames.size - depth).coerceAtLeast(0)
         val sectionName = sectionNames.getOrNull(index) ?: ""
 
+        // Count non-empty items at this depth level to determine if numbering is needed
+        val nonEmptyCount = if (depth == 1) {
+            text.count { !it.isTriviallyEmpty() }
+        } else {
+            0
+        }
+
         text.forEachIndexed { idx, item ->
             if (item.isTriviallyEmpty()) return@forEachIndexed
 
@@ -641,9 +648,10 @@ class SefariaDirectImporter(
             }
 
             // Check if this level should show inline prefixes using schema's referenceableSections
+            // Only add prefix if there's more than one line in the section
             val sectionIndex = sectionNames.size - depth
             val isReferenceable = referenceableSections.getOrNull(sectionIndex) ?: true
-            val nextLinePrefix = if (depth == 1 && isReferenceable && currentAddressType != "Integer") {
+            val nextLinePrefix = if (depth == 1 && isReferenceable && currentAddressType != "Integer" && nonEmptyCount > 1) {
                 "($letter) "
             } else {
                 ""
