@@ -173,6 +173,54 @@ class SefariaDirectImporter(
         return Pair(categoryOrders, bookOrders)
     }
 
+    private fun normalizePriorityEntry(raw: String): String {
+        var entry = raw.trim().replace('\\', '/')
+        if (entry.startsWith("/")) entry = entry.removePrefix("/")
+        return entry.split('/').filter { it.isNotBlank() }.joinToString("/") { sanitizeFolder(it) }
+    }
+
+    private fun normalizedBookPath(categories: List<String>, heTitle: String): String =
+        (categories.map { sanitizeFolder(it) } + sanitizeFolder(heTitle)).joinToString("/")
+
+    private fun loadPriorityList(): List<String> = try {
+        val stream = this::class.java.classLoader.getResourceAsStream("priority.txt") ?: return emptyList()
+        stream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+            lines.map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith("#") }
+                .map { normalizePriorityEntry(it) }
+                .filter { it.isNotEmpty() }
+                .toList()
+        }
+    } catch (e: Exception) {
+        logger.w(e) { "Unable to read Sefaria priority list, continuing with default order" }
+        emptyList()
+    }
+
+    private fun applyPriorityOrdering(
+        payloads: List<BookPayload>,
+        priorityEntries: List<String>
+    ): Pair<List<BookPayload>, List<String>> {
+        if (priorityEntries.isEmpty()) return payloads to emptyList()
+
+        val lookup = payloads.associateBy { normalizedBookPath(it.categoriesHe, it.heTitle) }
+        val used = mutableSetOf<String>()
+        val ordered = mutableListOf<BookPayload>()
+        val missing = mutableListOf<String>()
+
+        priorityEntries.forEach { entry ->
+            val normalized = normalizePriorityEntry(entry)
+            val payload = lookup[normalized]
+            if (payload != null && used.add(normalized)) {
+                ordered += payload
+            } else if (payload == null) {
+                missing += entry
+            }
+        }
+
+        val remaining = payloads.filter { normalizedBookPath(it.categoriesHe, it.heTitle) !in used }
+        return (ordered + remaining) to missing
+    }
+
     suspend fun import() {
         val dbRoot = findDatabaseExportRoot(exportRoot)
         val jsonDir = dbRoot.resolve("json")
@@ -246,6 +294,16 @@ class SefariaDirectImporter(
                 }
         }
 
+        val priorityEntries = loadPriorityList()
+        val (orderedBookPayloads, missingPriorityEntries) = applyPriorityOrdering(bookPayloads, priorityEntries)
+        if (priorityEntries.isNotEmpty()) {
+            val matched = priorityEntries.size - missingPriorityEntries.size
+            logger.i { "Applied priority ordering for $matched/${priorityEntries.size} entries" }
+            if (missingPriorityEntries.isNotEmpty()) {
+                logger.w { "Priority entries not found in Sefaria export (first 5): ${missingPriorityEntries.take(5)}" }
+            }
+        }
+
         // Build DB entries
         val sourceId = repository.insertSource("Sefaria")
         val categoryIds = mutableMapOf<String, Long>() // key: path string "cat1/cat2"
@@ -284,7 +342,7 @@ class SefariaDirectImporter(
         val lineIdToBookId = mutableMapOf<Long, Long>()
         val allRefsWithPath = mutableListOf<RefEntry>()
 
-        for (payload in bookPayloads) {
+        for (payload in orderedBookPayloads) {
             val catId = ensureCategoryPath(payload.categoriesHe)
             val bookId = nextBookId++
             val bookPath = buildBookPath(payload.categoriesHe, payload.heTitle)
