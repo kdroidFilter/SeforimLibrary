@@ -32,7 +32,7 @@ data class Link(
  */
 @Serializable
 enum class ConnectionType {
-    COMMENTARY, TARGUM, REFERENCE, OTHER;
+    COMMENTARY, TARGUM, REFERENCE, SOURCE, OTHER;
 
     companion object {
         /**
@@ -45,6 +45,7 @@ enum class ConnectionType {
             "commentary" -> COMMENTARY
             "targum" -> TARGUM
             "reference" -> REFERENCE
+            "source" -> SOURCE
             else -> OTHER
         }
     }

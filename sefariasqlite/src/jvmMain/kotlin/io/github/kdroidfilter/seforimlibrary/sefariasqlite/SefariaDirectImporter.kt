@@ -39,6 +39,12 @@ class SefariaDirectImporter(
 
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
 
+    private data class BookMeta(
+        val isBaseBook: Boolean,
+        val categoryLevel: Int,
+        val isCommentaryCategory: Boolean
+    )
+
     private data class BookPayload(
         val heTitle: String,
         val enTitle: String,
@@ -307,6 +313,7 @@ class SefariaDirectImporter(
         // Build DB entries
         val sourceId = repository.insertSource("Sefaria")
         val categoryIds = mutableMapOf<String, Long>() // key: path string "cat1/cat2"
+        val categoryLevelsById = mutableMapOf<Long, Int>()
 
         suspend fun ensureCategoryPath(pathParts: List<String>): Long {
             var parentId: Long? = null
@@ -331,6 +338,7 @@ class SefariaDirectImporter(
                 )
                 val id = repository.insertCategory(cat)
                 categoryIds[key] = id
+                categoryLevelsById[id] = idx
                 parentId = id
             }
             return parentId ?: throw IllegalStateException("No category created for $pathParts")
@@ -341,6 +349,7 @@ class SefariaDirectImporter(
         val lineKeyToId = mutableMapOf<Pair<String, Int>, Long>() // (path,lineIndex) -> lineId
         val lineIdToBookId = mutableMapOf<Long, Long>()
         val allRefsWithPath = mutableListOf<RefEntry>()
+        val bookMetaById = mutableMapOf<Long, BookMeta>()
 
         for (payload in orderedBookPayloads) {
             val catId = ensureCategoryPath(payload.categoriesHe)
@@ -365,6 +374,25 @@ class SefariaDirectImporter(
                 hasAltStructures = false
             )
             repository.insertBook(book)
+            val catLevel = categoryLevelsById[catId] ?: payload.categoriesHe.lastIndex.coerceAtLeast(0)
+            val isCommentaryCategory = payload.categoriesHe.any { categoryName ->
+                val normalized = categoryName.lowercase()
+                normalized.contains("פירוש") ||
+                        normalized.contains("מפרש") ||
+                        normalized.contains("מפרשים") ||
+                        normalized.contains("ביאור") ||
+                        normalized.contains("חידוש") ||
+                        normalized.contains("הגה") ||
+                        normalized.contains("אחרונ") ||
+                        normalized.contains("ראשונ") ||
+                        normalized.contains("פירושים מודרניים") ||
+                        normalized.contains("commentary")
+            }
+            bookMetaById[bookId] = BookMeta(
+                isBaseBook = book.isBaseBook,
+                categoryLevel = catLevel,
+                isCommentaryCategory = isCommentaryCategory
+            )
 
             val refsForBook = payload.refEntries.map { it.copy(path = bookPath) }
             allRefsWithPath += refsForBook
@@ -501,6 +529,13 @@ class SefariaDirectImporter(
                                     for (to in toRefs) {
                                         val srcLine = lineKeyToId[from.path to (from.lineIndex - 1)] ?: continue
                                         val tgtLine = lineKeyToId[to.path to (to.lineIndex - 1)] ?: continue
+                                        val baseConnectionType = ConnectionType.fromString(conn)
+                                        val (forwardType, reverseType) = resolveDirectionalConnectionTypes(
+                                            baseType = baseConnectionType,
+                                            sourceBookId = lineBookId(srcLine, lineIdToBookId),
+                                            targetBookId = lineBookId(tgtLine, lineIdToBookId),
+                                            bookMetaById = bookMetaById
+                                        )
 
                                         // Create bidirectional links (from→to and to→from) like SefariaToOtzariaConverter
                                         val linkForward = Link(
@@ -508,7 +543,7 @@ class SefariaDirectImporter(
                                             targetBookId = lineBookId(tgtLine, lineIdToBookId),
                                             sourceLineId = srcLine,
                                             targetLineId = tgtLine,
-                                            connectionType = ConnectionType.fromString(conn)
+                                            connectionType = forwardType
                                         )
                                         kotlinx.coroutines.runBlocking { repository.insertLink(linkForward) }
 
@@ -518,7 +553,7 @@ class SefariaDirectImporter(
                                             targetBookId = lineBookId(srcLine, lineIdToBookId),
                                             sourceLineId = tgtLine,
                                             targetLineId = srcLine,
-                                            connectionType = ConnectionType.fromString(conn)
+                                            connectionType = reverseType
                                         )
                                         kotlinx.coroutines.runBlocking { repository.insertLink(linkReverse) }
                                     }
@@ -1667,6 +1702,51 @@ class SefariaDirectImporter(
         return emptyList()
     }
 
+    private fun resolveDirectionalConnectionTypes(
+        baseType: ConnectionType,
+        sourceBookId: Long,
+        targetBookId: Long,
+        bookMetaById: Map<Long, BookMeta>
+    ): Pair<ConnectionType, ConnectionType> {
+        if (baseType != ConnectionType.COMMENTARY) return baseType to baseType
+
+        val sourceMeta = bookMetaById[sourceBookId] ?: return baseType to baseType
+        val targetMeta = bookMetaById[targetBookId] ?: return baseType to baseType
+
+        // Commentary vs non-commentary category
+        if (sourceMeta.isCommentaryCategory && !targetMeta.isCommentaryCategory) {
+            return ConnectionType.COMMENTARY to ConnectionType.SOURCE
+        }
+        if (!sourceMeta.isCommentaryCategory && targetMeta.isCommentaryCategory) {
+            return ConnectionType.SOURCE to ConnectionType.COMMENTARY
+        }
+
+        // Base vs non-base (precaution even though most Sefaria imports are base)
+        if (sourceMeta.isBaseBook && !targetMeta.isBaseBook) {
+            return ConnectionType.COMMENTARY to ConnectionType.SOURCE
+        }
+        if (!sourceMeta.isBaseBook && targetMeta.isBaseBook) {
+            return ConnectionType.SOURCE to ConnectionType.COMMENTARY
+        }
+
+        // Both are base (or both commentary): use hierarchy (deeper level is commentary toward shallower)
+        val sourceLevel = sourceMeta.categoryLevel
+        val targetLevel = targetMeta.categoryLevel
+        if (sourceLevel > targetLevel) {
+            return ConnectionType.COMMENTARY to ConnectionType.SOURCE
+        }
+        if (targetLevel > sourceLevel) {
+            return ConnectionType.SOURCE to ConnectionType.COMMENTARY
+        }
+
+        // Tie-breaker: higher bookId is treated as commentary
+        return if (sourceBookId > targetBookId) {
+            ConnectionType.COMMENTARY to ConnectionType.SOURCE
+        } else {
+            ConnectionType.SOURCE to ConnectionType.COMMENTARY
+        }
+    }
+
     private suspend fun updateBookHasLinks() {
         repository.executeRawQuery(
             "INSERT OR IGNORE INTO book_has_links(bookId, hasSourceLinks, hasTargetLinks) " +
@@ -1683,7 +1763,7 @@ class SefariaDirectImporter(
         )
 
         repository.executeRawQuery(
-            "UPDATE book SET hasTargumConnection=0, hasReferenceConnection=0, hasCommentaryConnection=0, hasOtherConnection=0"
+            "UPDATE book SET hasTargumConnection=0, hasReferenceConnection=0, hasSourceConnection=0, hasCommentaryConnection=0, hasOtherConnection=0"
         )
 
         suspend fun setConnFlag(typeName: String, column: String) {
@@ -1699,6 +1779,7 @@ class SefariaDirectImporter(
 
         setConnFlag("TARGUM", "hasTargumConnection")
         setConnFlag("REFERENCE", "hasReferenceConnection")
+        setConnFlag("SOURCE", "hasSourceConnection")
         setConnFlag("COMMENTARY", "hasCommentaryConnection")
         setConnFlag("OTHER", "hasOtherConnection")
     }
@@ -1750,6 +1831,7 @@ class SefariaDirectImporter(
                 isBaseBook = book.isBaseBook,
                 hasTargumConnection = book.hasTargumConnection,
                 hasReferenceConnection = book.hasReferenceConnection,
+                hasSourceConnection = book.hasSourceConnection,
                 hasCommentaryConnection = book.hasCommentaryConnection,
                 hasOtherConnection = book.hasOtherConnection,
                 hasAltStructures = book.hasAltStructures

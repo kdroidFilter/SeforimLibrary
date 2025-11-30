@@ -784,6 +784,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 orderIndex = book.order.toLong(),
                 totalLines = book.totalLines.toLong(),
                 isBaseBook = if (book.isBaseBook) 1 else 0,
+                hasSourceConnection = if (book.hasSourceConnection) 1 else 0,
                 hasAltStructures = if (book.hasAltStructures) 1 else 0
             )
             logger.d{"Used insertWithId for book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}"}
@@ -838,6 +839,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 orderIndex = book.order.toLong(),
                 totalLines = book.totalLines.toLong(),
                 isBaseBook = if (book.isBaseBook) 1 else 0,
+                hasSourceConnection = if (book.hasSourceConnection) 1 else 0,
                 hasAltStructures = if (book.hasAltStructures) 1 else 0
             )
             val id = database.bookQueriesQueries.lastInsertRowId().executeAsOne()
@@ -1626,14 +1628,16 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         bookId: Long,
         hasTargum: Boolean,
         hasReference: Boolean,
+        hasSource: Boolean,
         hasCommentary: Boolean,
         hasOther: Boolean
     ) = withContext(Dispatchers.IO) {
         val t = if (hasTargum) 1L else 0L
         val r = if (hasReference) 1L else 0L
+        val s = if (hasSource) 1L else 0L
         val c = if (hasCommentary) 1L else 0L
         val o = if (hasOther) 1L else 0L
-        database.bookQueriesQueries.updateConnectionFlags(t, r, c, o, bookId)
+        database.bookQueriesQueries.updateConnectionFlags(t, r, s, c, o, bookId)
     }
 
     /**

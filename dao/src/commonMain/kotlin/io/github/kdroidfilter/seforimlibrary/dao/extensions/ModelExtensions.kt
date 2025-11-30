@@ -89,6 +89,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json, authors: L
         isBaseBook = isBaseBook == 1L,
         hasTargumConnection = hasTargumConnection == 1L,
         hasReferenceConnection = hasReferenceConnection == 1L,
+        hasSourceConnection = hasSourceConnection == 1L,
         hasCommentaryConnection = hasCommentaryConnection == 1L,
         hasOtherConnection = hasOtherConnection == 1L,
         hasAltStructures = hasAltStructures == 1L

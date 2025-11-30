@@ -1177,6 +1177,7 @@ class DatabaseGenerator(
                 isBaseBook = book.isBaseBook,
                 hasTargumConnection = book.hasTargumConnection,
                 hasReferenceConnection = book.hasReferenceConnection,
+                hasSourceConnection = book.hasSourceConnection,
                 hasCommentaryConnection = book.hasCommentaryConnection,
                 hasOtherConnection = book.hasOtherConnection
             )

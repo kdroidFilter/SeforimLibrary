@@ -37,6 +37,7 @@ data class Book(
     val isBaseBook: Boolean = false,
     val hasTargumConnection: Boolean = false,
     val hasReferenceConnection: Boolean = false,
+    val hasSourceConnection: Boolean = false,
     val hasCommentaryConnection: Boolean = false,
     val hasOtherConnection: Boolean = false,
     val hasAltStructures: Boolean = false,

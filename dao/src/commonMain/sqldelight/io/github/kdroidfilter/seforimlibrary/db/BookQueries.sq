@@ -40,12 +40,12 @@ selectBaseIds:
 SELECT id FROM book WHERE isBaseBook = 1 ORDER BY orderIndex, title;
 
 insert:
-INSERT INTO book (categoryId, sourceId, title, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook, hasAltStructures)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO book (categoryId, sourceId, title, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook, hasSourceConnection, hasAltStructures)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO book (id, categoryId, sourceId, title, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook, hasAltStructures)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO book (id, categoryId, sourceId, title, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook, hasSourceConnection, hasAltStructures)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateTotalLines:
 UPDATE book SET totalLines = ? WHERE id = ?;
@@ -70,6 +70,7 @@ updateConnectionFlags:
 UPDATE book SET 
     hasTargumConnection = ?,
     hasReferenceConnection = ?,
+    hasSourceConnection = ?,
     hasCommentaryConnection = ?,
     hasOtherConnection = ?
 WHERE id = ?;

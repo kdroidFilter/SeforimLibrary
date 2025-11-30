@@ -120,6 +120,7 @@ private suspend fun buildCatalogCategoryRecursive(
             isBaseBook = book.isBaseBook,
             hasTargumConnection = book.hasTargumConnection,
             hasReferenceConnection = book.hasReferenceConnection,
+            hasSourceConnection = book.hasSourceConnection,
             hasCommentaryConnection = book.hasCommentaryConnection,
             hasOtherConnection = book.hasOtherConnection
         )
