@@ -1586,9 +1586,26 @@ class SefariaDirectImporter(
         val rangeStart = citationRangeStart(canonical)
         if (rangeStart != null) {
             refsByCanonical[rangeStart]?.let { if (it.isNotEmpty()) return it }
+            refsByBase[canonicalBase(rangeStart)]?.let { return listOf(it) }
+            if (!rangeStart.contains(":")) {
+                val baseWithOne = canonicalBase("$rangeStart 1")
+                refsByBase[baseWithOne]?.let { return listOf(it) }
+            }
+        }
+
+        // If the citation stops one level early (e.g., "96:4" vs stored "96:4:1"),
+        // try to anchor to the first child by appending :1.
+        if (canonical.count { it == ':' } == 1) {
+            val canonicalWithOne = "$canonical:1"
+            refsByCanonical[canonicalWithOne]?.let { if (it.isNotEmpty()) return it }
+            refsByBase[canonicalBase(canonicalWithOne)]?.let { return listOf(it) }
         }
 
         refsByBase[canonicalBase(canonical)]?.let { return listOf(it) }
+        if (!canonical.contains(":")) {
+            val baseWithOne = canonicalBase("$canonical 1")
+            refsByBase[baseWithOne]?.let { return listOf(it) }
+        }
         return emptyList()
     }
 
