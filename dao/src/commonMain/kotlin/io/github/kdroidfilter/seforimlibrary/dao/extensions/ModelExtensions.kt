@@ -1,10 +1,13 @@
 package io.github.kdroidfilter.seforimlibrary.dao.extensions
 
+import io.github.kdroidfilter.seforimlibrary.core.models.AltTocEntry
+import io.github.kdroidfilter.seforimlibrary.core.models.AltTocStructure
 import io.github.kdroidfilter.seforimlibrary.core.models.Author
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
 import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
 import io.github.kdroidfilter.seforimlibrary.core.models.Line
+import io.github.kdroidfilter.seforimlibrary.core.models.LineAltTocMapping
 import io.github.kdroidfilter.seforimlibrary.core.models.Link
 import io.github.kdroidfilter.seforimlibrary.core.models.PubDate
 import io.github.kdroidfilter.seforimlibrary.core.models.PubPlace
@@ -87,7 +90,8 @@ fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json, authors: L
         hasTargumConnection = hasTargumConnection == 1L,
         hasReferenceConnection = hasReferenceConnection == 1L,
         hasCommentaryConnection = hasCommentaryConnection == 1L,
-        hasOtherConnection = hasOtherConnection == 1L
+        hasOtherConnection = hasOtherConnection == 1L,
+        hasAltStructures = hasAltStructures == 1L
 
     )
 }
@@ -233,6 +237,76 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectByLineId.toModel(): TocEntry 
         hasChildren = hasChildren == 1L
     )
 }
+
+// --- Alternative TOC mappings ---
+
+fun io.github.kdroidfilter.seforimlibrary.db.Alt_toc_structure.toModel(): AltTocStructure =
+    AltTocStructure(
+        id = id,
+        bookId = bookId,
+        key = key,
+        title = title,
+        heTitle = heTitle
+    )
+
+fun io.github.kdroidfilter.seforimlibrary.db.SelectAltEntriesByStructureId.toModel(): AltTocEntry =
+    AltTocEntry(
+        id = id,
+        structureId = structureId,
+        parentId = parentId,
+        textId = textId,
+        text = text,
+        level = level.toInt(),
+        lineId = lineId,
+        isLastChild = isLastChild == 1L,
+        hasChildren = hasChildren == 1L
+    )
+
+fun io.github.kdroidfilter.seforimlibrary.db.SelectAltRootByStructureId.toModel(): AltTocEntry =
+    AltTocEntry(
+        id = id,
+        structureId = structureId,
+        parentId = parentId,
+        textId = textId,
+        text = text,
+        level = level.toInt(),
+        lineId = lineId,
+        isLastChild = isLastChild == 1L,
+        hasChildren = hasChildren == 1L
+    )
+
+fun io.github.kdroidfilter.seforimlibrary.db.SelectAltChildren.toModel(): AltTocEntry =
+    AltTocEntry(
+        id = id,
+        structureId = structureId,
+        parentId = parentId,
+        textId = textId,
+        text = text,
+        level = level.toInt(),
+        lineId = lineId,
+        isLastChild = isLastChild == 1L,
+        hasChildren = hasChildren == 1L
+    )
+
+fun io.github.kdroidfilter.seforimlibrary.db.SelectAltTocEntryById.toModel(): AltTocEntry =
+    AltTocEntry(
+        id = id,
+        structureId = structureId,
+        parentId = parentId,
+        textId = textId,
+        text = text,
+        level = level.toInt(),
+        lineId = lineId,
+        isLastChild = isLastChild == 1L,
+        hasChildren = hasChildren == 1L
+    )
+
+fun io.github.kdroidfilter.seforimlibrary.db.Line_alt_toc.toModel(): LineAltTocMapping =
+    LineAltTocMapping(
+        lineId = lineId,
+        structureId = structureId,
+        altTocEntryId = altTocEntryId
+    )
 
 /**
  * Converts a database Connection_type entity to a domain ConnectionType enum.

@@ -24,6 +24,9 @@ SELECT * FROM book WHERE title LIKE ? LIMIT 1;
 selectManyByTitleLike:
 SELECT * FROM book WHERE title LIKE ? ORDER BY orderIndex, title LIMIT ?;
 
+selectAltFlags:
+SELECT id, hasAltStructures FROM book;
+
 
 selectByAuthor:
 SELECT b.* FROM book b
@@ -37,12 +40,12 @@ selectBaseIds:
 SELECT id FROM book WHERE isBaseBook = 1 ORDER BY orderIndex, title;
 
 insert:
-INSERT INTO book (categoryId, sourceId, title, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO book (categoryId, sourceId, title, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook, hasAltStructures)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO book (id, categoryId, sourceId, title, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO book (id, categoryId, sourceId, title, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook, hasAltStructures)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateTotalLines:
 UPDATE book SET totalLines = ? WHERE id = ?;
@@ -70,6 +73,9 @@ UPDATE book SET
     hasCommentaryConnection = ?,
     hasOtherConnection = ?
 WHERE id = ?;
+
+updateHasAltStructures:
+UPDATE book SET hasAltStructures = ? WHERE id = ?;
 
 lastInsertRowId:
 SELECT last_insert_rowid();

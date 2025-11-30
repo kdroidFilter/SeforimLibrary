@@ -16,6 +16,7 @@ import kotlinx.serialization.Serializable
  * @property heShortDesc A short description of the book in Hebrew
  * @property order The display order of the book within its category
  * @property totalLines The total number of lines in the book
+ * @property hasAltStructures Indicates if the book has alternative TOC structures (e.g., Parasha)
  */
 @Serializable
 data class Book(
@@ -38,4 +39,5 @@ data class Book(
     val hasReferenceConnection: Boolean = false,
     val hasCommentaryConnection: Boolean = false,
     val hasOtherConnection: Boolean = false,
+    val hasAltStructures: Boolean = false,
 )

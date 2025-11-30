@@ -1,0 +1,21 @@
+-- Alternative TOC structures (one row per structure per book)
+
+selectByBookId:
+SELECT * FROM alt_toc_structure WHERE bookId = ? ORDER BY key;
+
+selectAltStructureById:
+SELECT * FROM alt_toc_structure WHERE id = ?;
+
+insert:
+INSERT INTO alt_toc_structure (bookId, key, title, heTitle)
+VALUES (?, ?, ?, ?);
+
+insertWithId:
+INSERT INTO alt_toc_structure (id, bookId, key, title, heTitle)
+VALUES (?, ?, ?, ?, ?);
+
+deleteByBookId:
+DELETE FROM alt_toc_structure WHERE bookId = ?;
+
+lastInsertRowId:
+SELECT last_insert_rowid();

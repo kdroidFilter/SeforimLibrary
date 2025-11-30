@@ -49,5 +49,6 @@ data class CatalogBook(
     @ProtoNumber(8) val hasTargumConnection: Boolean = false,
     @ProtoNumber(9) val hasReferenceConnection: Boolean = false,
     @ProtoNumber(10) val hasCommentaryConnection: Boolean = false,
-    @ProtoNumber(11) val hasOtherConnection: Boolean = false
+    @ProtoNumber(11) val hasOtherConnection: Boolean = false,
+    @ProtoNumber(12) val hasAltStructures: Boolean = false
 )

@@ -1,0 +1,38 @@
+-- Mapping lines to alternative TOC entries (per structure)
+
+selectByLineAndStructure:
+SELECT * FROM line_alt_toc WHERE lineId = ? AND structureId = ?;
+
+selectAltTocEntryIdByLineAndStructure:
+SELECT altTocEntryId FROM line_alt_toc WHERE lineId = ? AND structureId = ?;
+
+selectByStructure:
+SELECT lat.lineId, lat.structureId, lat.altTocEntryId
+FROM line_alt_toc lat
+JOIN line l ON l.id = lat.lineId
+WHERE lat.structureId = ?
+ORDER BY l.lineIndex;
+
+selectLineIdsByAltTocEntry:
+SELECT l.id
+FROM line l
+JOIN line_alt_toc lat ON lat.lineId = l.id
+WHERE lat.altTocEntryId = ?
+ORDER BY l.lineIndex;
+
+insert:
+INSERT INTO line_alt_toc (lineId, structureId, altTocEntryId)
+VALUES (?, ?, ?);
+
+upsert:
+INSERT INTO line_alt_toc (lineId, structureId, altTocEntryId)
+VALUES (?, ?, ?)
+ON CONFLICT(lineId, structureId) DO UPDATE SET altTocEntryId = excluded.altTocEntryId;
+
+deleteByStructureId:
+DELETE FROM line_alt_toc WHERE structureId = ?;
+
+deleteByBookId:
+DELETE FROM line_alt_toc WHERE lineId IN (
+    SELECT l.id FROM line l WHERE l.bookId = ?
+);

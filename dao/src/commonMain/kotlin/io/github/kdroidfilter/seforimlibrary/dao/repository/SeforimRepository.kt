@@ -5,7 +5,21 @@ package io.github.kdroidfilter.seforimlibrary.dao.repository
 import app.cash.sqldelight.db.SqlDriver
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
-import io.github.kdroidfilter.seforimlibrary.core.models.*
+import io.github.kdroidfilter.seforimlibrary.core.models.AltTocEntry
+import io.github.kdroidfilter.seforimlibrary.core.models.AltTocStructure
+import io.github.kdroidfilter.seforimlibrary.core.models.Author
+import io.github.kdroidfilter.seforimlibrary.core.models.Book
+import io.github.kdroidfilter.seforimlibrary.core.models.Category
+import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
+import io.github.kdroidfilter.seforimlibrary.core.models.Line
+import io.github.kdroidfilter.seforimlibrary.core.models.LineAltTocMapping
+import io.github.kdroidfilter.seforimlibrary.core.models.LineTocMapping
+import io.github.kdroidfilter.seforimlibrary.core.models.Link
+import io.github.kdroidfilter.seforimlibrary.core.models.PubDate
+import io.github.kdroidfilter.seforimlibrary.core.models.PubPlace
+import io.github.kdroidfilter.seforimlibrary.core.models.Source
+import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
+import io.github.kdroidfilter.seforimlibrary.core.models.Topic
 import io.github.kdroidfilter.seforimlibrary.dao.extensions.toModel
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import io.github.kdroidfilter.seforimlibrary.env.getEnvironmentVariable
@@ -400,6 +414,11 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
     }
 
+    suspend fun getAllBookAltFlags(): Map<Long, Boolean> = withContext(Dispatchers.IO) {
+        database.bookQueriesQueries.selectAltFlags().executeAsList()
+            .associate { row -> row.id to (row.hasAltStructures == 1L) }
+    }
+
     /**
      * Finds books whose title matches the LIKE pattern. Use %term% for contains.
      *
@@ -764,7 +783,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 notesContent = book.notesContent,
                 orderIndex = book.order.toLong(),
                 totalLines = book.totalLines.toLong(),
-                isBaseBook = if (book.isBaseBook) 1 else 0
+                isBaseBook = if (book.isBaseBook) 1 else 0,
+                hasAltStructures = if (book.hasAltStructures) 1 else 0
             )
             logger.d{"Used insertWithId for book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}"}
 
@@ -817,7 +837,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 notesContent = book.notesContent,
                 orderIndex = book.order.toLong(),
                 totalLines = book.totalLines.toLong(),
-                isBaseBook = if (book.isBaseBook) 1 else 0
+                isBaseBook = if (book.isBaseBook) 1 else 0,
+                hasAltStructures = if (book.hasAltStructures) 1 else 0
             )
             val id = database.bookQueriesQueries.lastInsertRowId().executeAsOne()
             logger.d{"Used insert for book '${book.title}', got ID: $id with categoryId: ${book.categoryId}"}
@@ -902,6 +923,10 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         logger.d{"Updating book $bookId with categoryId: $categoryId"}
         database.bookQueriesQueries.updateCategoryId(categoryId, bookId)
         logger.d{"Updated book $bookId with categoryId: $categoryId"}
+    }
+
+    suspend fun updateHasAltStructures(bookId: Long, hasAltStructures: Boolean) = withContext(Dispatchers.IO) {
+        database.bookQueriesQueries.updateHasAltStructures(if (hasAltStructures) 1 else 0, bookId)
     }
 
     // --- Lines ---
@@ -1019,6 +1044,135 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     suspend fun getTocChildren(parentId: Long): List<TocEntry> = withContext(Dispatchers.IO) {
         database.tocQueriesQueries.selectChildren(parentId).executeAsList().map { it.toModel() }
+    }
+
+    // --- Alternative TOC structures ---
+
+    suspend fun getAltTocStructuresForBook(bookId: Long): List<AltTocStructure> = withContext(Dispatchers.IO) {
+        database.altTocStructureQueriesQueries.selectByBookId(bookId).executeAsList().map { it.toModel() }
+    }
+
+    suspend fun clearAltTocForBook(bookId: Long) = withContext(Dispatchers.IO) {
+        database.altTocStructureQueriesQueries.deleteByBookId(bookId)
+        database.lineAltTocQueriesQueries.deleteByBookId(bookId)
+    }
+
+    suspend fun upsertAltTocStructure(structure: AltTocStructure): Long = withContext(Dispatchers.IO) {
+        val existing = database.altTocStructureQueriesQueries.selectByBookId(structure.bookId)
+            .executeAsList()
+            .firstOrNull { it.key == structure.key }
+        if (existing != null) return@withContext existing.id
+
+        if (structure.id > 0) {
+            database.altTocStructureQueriesQueries.insertWithId(
+                id = structure.id,
+                bookId = structure.bookId,
+                key = structure.key,
+                title = structure.title,
+                heTitle = structure.heTitle
+            )
+            return@withContext structure.id
+        }
+
+        database.altTocStructureQueriesQueries.insert(
+            bookId = structure.bookId,
+            key = structure.key,
+            title = structure.title,
+            heTitle = structure.heTitle
+        )
+        val id = database.altTocStructureQueriesQueries.lastInsertRowId().executeAsOne()
+        if (id == 0L) {
+            val fallback = database.altTocStructureQueriesQueries.selectByBookId(structure.bookId)
+                .executeAsList()
+                .firstOrNull { it.key == structure.key }?.id
+            if (fallback != null) return@withContext fallback
+            throw RuntimeException("Failed to insert alt_toc_structure for book ${structure.bookId} with key ${structure.key}")
+        }
+        id
+    }
+
+    suspend fun insertAltTocEntry(entry: AltTocEntry): Long = withContext(Dispatchers.IO) {
+        val textId = entry.textId ?: getOrCreateTocText(entry.text)
+        if (entry.id > 0) {
+            database.altTocEntryQueriesQueries.insertWithId(
+                id = entry.id,
+                structureId = entry.structureId,
+                parentId = entry.parentId,
+                textId = textId,
+                level = entry.level.toLong(),
+                lineId = entry.lineId,
+                isLastChild = if (entry.isLastChild) 1 else 0,
+                hasChildren = if (entry.hasChildren) 1 else 0
+            )
+            return@withContext entry.id
+        }
+
+        database.altTocEntryQueriesQueries.insert(
+            structureId = entry.structureId,
+            parentId = entry.parentId,
+            textId = textId,
+            level = entry.level.toLong(),
+            lineId = entry.lineId,
+            isLastChild = if (entry.isLastChild) 1 else 0,
+            hasChildren = if (entry.hasChildren) 1 else 0
+        )
+        val id = database.altTocEntryQueriesQueries.lastInsertRowId().executeAsOne()
+        if (id == 0L) {
+            val fallback = database.altTocEntryQueriesQueries.selectAltEntriesByStructureId(entry.structureId)
+                .executeAsList()
+                .firstOrNull { it.textId == textId && it.parentId == entry.parentId && it.level == entry.level.toLong() }?.id
+            if (fallback != null) return@withContext fallback
+            throw RuntimeException("Failed to insert alt_toc_entry for structure ${entry.structureId} with text '${entry.text}'")
+        }
+        id
+    }
+
+    suspend fun updateAltTocEntryHasChildren(altTocEntryId: Long, hasChildren: Boolean) = withContext(Dispatchers.IO) {
+        database.altTocEntryQueriesQueries.updateHasChildren(if (hasChildren) 1 else 0, altTocEntryId)
+    }
+
+    suspend fun updateAltTocEntryIsLastChild(altTocEntryId: Long, isLastChild: Boolean) = withContext(Dispatchers.IO) {
+        database.altTocEntryQueriesQueries.updateIsLastChild(if (isLastChild) 1 else 0, altTocEntryId)
+    }
+
+    suspend fun updateAltTocEntryLineId(altTocEntryId: Long, lineId: Long) = withContext(Dispatchers.IO) {
+        database.altTocEntryQueriesQueries.updateLineId(lineId, altTocEntryId)
+    }
+
+    suspend fun getAltTocEntry(id: Long): AltTocEntry? = withContext(Dispatchers.IO) {
+        database.altTocEntryQueriesQueries.selectAltTocEntryById(id).executeAsOneOrNull()?.toModel()
+    }
+
+    suspend fun getAltRootToc(structureId: Long): List<AltTocEntry> = withContext(Dispatchers.IO) {
+        database.altTocEntryQueriesQueries.selectAltRootByStructureId(structureId).executeAsList().map { it.toModel() }
+    }
+
+    suspend fun getAltTocChildren(parentId: Long): List<AltTocEntry> = withContext(Dispatchers.IO) {
+        database.altTocEntryQueriesQueries.selectAltChildren(parentId).executeAsList().map { it.toModel() }
+    }
+
+    // --- Alternative line ⇄ TOC mapping ---
+
+    suspend fun upsertLineAltToc(lineId: Long, structureId: Long, altTocEntryId: Long) = withContext(Dispatchers.IO) {
+        database.lineAltTocQueriesQueries.upsert(lineId, structureId, altTocEntryId)
+    }
+
+    suspend fun getAltTocEntryIdForLine(lineId: Long, structureId: Long): Long? = withContext(Dispatchers.IO) {
+        database.lineAltTocQueriesQueries.selectAltTocEntryIdByLineAndStructure(lineId, structureId).executeAsOneOrNull()
+    }
+
+    suspend fun getLineAltTocMappings(structureId: Long): List<LineAltTocMapping> = withContext(Dispatchers.IO) {
+        database.lineAltTocQueriesQueries.selectByStructure(structureId).executeAsList().map {
+            LineAltTocMapping(
+                lineId = it.lineId,
+                structureId = it.structureId,
+                altTocEntryId = it.altTocEntryId
+            )
+        }
+    }
+
+    suspend fun getLineIdsForAltTocEntry(altTocEntryId: Long): List<Long> = withContext(Dispatchers.IO) {
+        database.lineAltTocQueriesQueries.selectLineIdsByAltTocEntry(altTocEntryId).executeAsList()
     }
 
     // --- TocText methods ---

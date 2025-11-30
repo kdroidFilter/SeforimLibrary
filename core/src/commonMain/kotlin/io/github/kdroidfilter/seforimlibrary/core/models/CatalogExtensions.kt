@@ -79,7 +79,8 @@ fun CatalogBook.toBook(): Book {
         hasTargumConnection = hasTargumConnection,
         hasReferenceConnection = hasReferenceConnection,
         hasCommentaryConnection = hasCommentaryConnection,
-        hasOtherConnection = hasOtherConnection
+        hasOtherConnection = hasOtherConnection,
+        hasAltStructures = hasAltStructures
     )
 }
 

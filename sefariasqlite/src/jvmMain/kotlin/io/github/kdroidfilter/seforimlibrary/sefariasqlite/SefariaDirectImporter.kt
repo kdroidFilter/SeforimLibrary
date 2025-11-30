@@ -48,7 +48,8 @@ class SefariaDirectImporter(
         val headings: List<Heading>,
         val authors: List<String>,
         val description: String?,
-        val pubDates: List<PubDate>
+        val pubDates: List<PubDate>,
+        val altStructures: List<AltStructurePayload>
     )
 
     private data class RefEntry(
@@ -62,6 +63,23 @@ class SefariaDirectImporter(
         val title: String,
         val level: Int,
         val lineIndex: Int
+    )
+
+    private data class AltStructurePayload(
+        val key: String,
+        val title: String?,
+        val heTitle: String?,
+        val nodes: List<AltNodePayload>
+    )
+
+    private data class AltNodePayload(
+        val title: String?,
+        val heTitle: String?,
+        val wholeRef: String?,
+        val refs: List<String>,
+        val addressTypes: List<String>,
+        val childLabel: String?,
+        val children: List<AltNodePayload>
     )
 
     /**
@@ -204,6 +222,7 @@ class SefariaDirectImporter(
                         )
                         val description = extractDescription(schemaJson, schemaObj)
                         val pubDates = extractPubDates(schemaJson, schemaObj)
+                        val altStructures = parseAltStructures(schemaJson)
                         bookPayloads += BookPayload(
                             heTitle = hebrewTitle,
                             enTitle = englishTitle,
@@ -213,7 +232,8 @@ class SefariaDirectImporter(
                             headings = headings,
                             authors = authors,
                             description = description,
-                            pubDates = pubDates
+                            pubDates = pubDates,
+                            altStructures = altStructures
                         )
                         logger.i { "Prepared book $hebrewTitle with ${lines.size} lines and ${refs.size} refs" }
                     }.onFailure { e ->
@@ -279,7 +299,8 @@ class SefariaDirectImporter(
                 order = bookOrder,
                 topics = emptyList(),
                 isBaseBook = true,
-                totalLines = payload.lines.size
+                totalLines = payload.lines.size,
+                hasAltStructures = payload.altStructures.isNotEmpty()
             )
             repository.insertBook(book)
 
@@ -362,8 +383,15 @@ class SefariaDirectImporter(
                     )
                 }
             }
+            // Alternative structures (e.g., Parasha/Aliyah)
+            buildAltTocStructuresForBook(
+                payload = payload,
+                bookId = bookId,
+                bookPath = bookPath,
+                lineKeyToId = lineKeyToId,
+                totalLines = payload.lines.size
+            )
         }
-
         // Build citation lookup for links
         val refsByCanonical = allRefsWithPath.groupBy { canonicalCitation(it.ref) }
         val refsByBase = mutableMapOf<String, RefEntry>()
@@ -440,6 +468,237 @@ class SefariaDirectImporter(
         updateBookHasLinks()
         buildAndSaveCatalog()
         logger.i { "Direct Sefaria import completed." }
+    }
+
+    private suspend fun buildAltTocStructuresForBook(
+        payload: BookPayload,
+        bookId: Long,
+        bookPath: String,
+        lineKeyToId: Map<Pair<String, Int>, Long>,
+        totalLines: Int
+    ) {
+        if (payload.altStructures.isEmpty()) return
+
+        // Treat Bavli/Yerushalmi tractates specially: only top-level alt nodes,
+        // clicking them should jump to the first child (no explicit pages shown).
+        val isTalmudTractate = payload.categoriesHe.any { it.contains("תלמוד") }
+        // For Shulchan Arukh codes and Tur we also limit to top-level topics (no siman children in the alt tree)
+        val isShulchanArukhCode = payload.categoriesHe.any { it.contains("שולחן ערוך") }
+        val isTurCode = payload.categoriesHe.any { it.contains("טור") }
+
+        // Local lookup map for this book: canonical ref -> (lineId, lineIndex)
+        val refsForBook = payload.refEntries.map { it.copy(path = bookPath) }
+        val canonicalToLine: Map<String, Pair<Long?, Int?>> = buildMap {
+            refsForBook.forEach { entry ->
+                val lineIdx = entry.lineIndex - 1
+                val lineId = lineKeyToId[bookPath to lineIdx]
+                val key = canonicalCitation(entry.ref)
+                val current = this[key]?.second
+                if (current == null || (lineIdx >= 0 && lineIdx < current)) {
+                    put(key, lineId to lineIdx)
+                }
+            }
+        }
+        payload.altStructures.forEach { structure ->
+            // Psalms 30‑day cycle: only show days, not individual chapters
+            val isPsalms30DayCycle = structure.key == "30 Day Cycle"
+            val structureId = repository.upsertAltTocStructure(
+                AltTocStructure(
+                    bookId = bookId,
+                    key = structure.key,
+                    title = structure.title,
+                    heTitle = structure.heTitle
+                )
+            )
+
+            val headingLineToToc = mutableMapOf<Int, Long>()
+            val entriesByParent = mutableMapOf<Long?, MutableList<Long>>()
+            val entryLineInfo = mutableMapOf<Long, Pair<Long?, Int?>>()
+
+            fun resolveLineForCitation(citation: String?, isChapterOrSimanLevel: Boolean): Pair<Long?, Int?> {
+                if (citation.isNullOrBlank()) return null to null
+                val canonical = canonicalCitation(citation)
+                canonicalToLine[canonical]?.let { return it }
+
+                val rangeStart = citationRangeStart(canonical)
+                if (rangeStart != null) {
+                    canonicalToLine[rangeStart]?.let { return it }
+                }
+
+                if (isChapterOrSimanLevel) {
+                    // Handle siman/chapter-level refs like "Tur, Orach Chayim 1-7" or "Psalms 10-17"
+                    val base = canonical.substringBefore('-').trim()
+                    if (!base.contains(':')) {
+                        val withColon = "$base:1"
+                        canonicalToLine[withColon]?.let { return it }
+                    }
+                }
+
+                return null to null
+            }
+
+            fun mapBaseToHebrew(base: String?): String? {
+                if (base.isNullOrBlank()) return null
+                val norm = base.lowercase()
+                return when {
+                    "aliyah" in norm -> "עליה"
+                    "chapter" in norm -> "פרק"
+                    "perek" in norm -> "פרק"
+                    "siman" in norm -> "סימן"
+                    "section" in norm -> "סימן"
+                    "psalm" in norm || "psalms" in norm -> "מזמור"
+                    "day" in norm -> "יום"
+                    else -> base
+                }
+            }
+
+            fun buildChildLabel(base: String?, idx: Int): String {
+                val suffix = toGematria(idx + 1)
+                val hebBase = mapBaseToHebrew(base)
+                val cleanBase = hebBase?.takeIf { it.isNotBlank() }
+                return cleanBase?.let { "$it $suffix" } ?: suffix
+            }
+
+            suspend fun updateParentLineIfMissing(tocId: Long) {
+                val current = entryLineInfo[tocId]
+                if (current?.second != null) return
+                val childWithLine = entriesByParent[tocId]
+                    ?.firstNotNullOfOrNull { childId ->
+                        entryLineInfo[childId]?.second?.let { idx -> childId to (entryLineInfo[childId]!!) }
+                    }
+                val childLine = childWithLine?.second ?: return
+                val lineId = childLine.first ?: return
+                val lineIndex = childLine.second ?: return
+                repository.updateAltTocEntryLineId(tocId, lineId)
+                entryLineInfo[tocId] = lineId to lineIndex
+                headingLineToToc[lineIndex] = tocId
+            }
+
+            suspend fun addEntry(node: AltNodePayload, level: Int, parentId: Long?, position: Int?): Long {
+                val isChapterOrSimanLevel = node.addressTypes.any {
+                    it.equals("Siman", ignoreCase = true) ||
+                            it.equals("Perek", ignoreCase = true) ||
+                            it.equals("Chapter", ignoreCase = true)
+                }
+
+                // Try wholeRef first, then fall back to first child ref that resolves
+                val primaryCandidates = buildList {
+                    node.wholeRef?.let { add(it) }
+                    addAll(node.refs)
+                }
+                var lineId: Long? = null
+                var lineIndex: Int? = null
+                for (candidate in primaryCandidates) {
+                    val (lid, lidx) = resolveLineForCitation(candidate, isChapterOrSimanLevel)
+                    if (lid != null && lidx != null) {
+                        lineId = lid
+                        lineIndex = lidx
+                        break
+                    }
+                }
+                // If we can't anchor the parent node at all, skip it
+                if (lineId == null || lineIndex == null) return 0L
+                val text = when {
+                    !node.heTitle.isNullOrBlank() -> node.heTitle
+                    position != null -> "פרק ${toGematria(position + 1)}"
+                    !node.title.isNullOrBlank() -> node.title
+                    !structure.heTitle.isNullOrBlank() -> structure.heTitle!!
+                    !structure.title.isNullOrBlank() -> structure.title!!
+                    else -> structure.key
+                }
+
+                val tocId = repository.insertAltTocEntry(
+                    AltTocEntry(
+                        structureId = structureId,
+                        parentId = parentId,
+                        textId = null,
+                        text = text,
+                        level = level,
+                        lineId = lineId,
+                        isLastChild = false,
+                        hasChildren = false
+                    )
+                )
+                entryLineInfo[tocId] = lineId to lineIndex
+                entriesByParent.getOrPut(parentId) { mutableListOf() }.add(tocId)
+                if (lineIndex != null) {
+                    headingLineToToc[lineIndex] = tocId
+                }
+
+                // One extra level: direct children from node.refs (except for Talmud tractates
+                // and Shulchan Arukh codes, where we only want the top-level structure and
+                // clicking it should go to the first child section).
+                var hasChild = false
+                if (!isTalmudTractate && !isShulchanArukhCode && !isTurCode && !isPsalms30DayCycle && node.refs.isNotEmpty()) {
+                    for ((idx, ref) in node.refs.withIndex()) {
+                        val (childLineId, childLineIndex) = resolveLineForCitation(ref, isChapterOrSimanLevel)
+                        // Only create entries that are anchored to a real line
+                        if (childLineId == null || childLineIndex == null) continue
+
+                        val label = buildChildLabel(node.childLabel, idx)
+                        val childTocId = repository.insertAltTocEntry(
+                            AltTocEntry(
+                                structureId = structureId,
+                                parentId = tocId,
+                                textId = null,
+                                text = label,
+                                level = level + 1,
+                                lineId = childLineId,
+                                isLastChild = false,
+                                hasChildren = false
+                            )
+                        )
+                        hasChild = true
+                        entryLineInfo[childTocId] = childLineId to childLineIndex
+                        entriesByParent.getOrPut(tocId) { mutableListOf() }.add(childTocId)
+                        headingLineToToc[childLineIndex] = childTocId
+                    }
+                }
+
+                if (hasChild) {
+                    repository.updateAltTocEntryHasChildren(tocId, true)
+                }
+
+                return tocId
+            }
+
+            // Traverse the alt tree: treat leaf ArrayMapNodes (those with wholeRef/refs)
+            // as TOC parents; intermediate grouping nodes are flattened away.
+            suspend fun traverseAltNode(node: AltNodePayload, level: Int, parentId: Long?, position: Int?) {
+                val hasOwnRefs = node.wholeRef != null || node.refs.isNotEmpty()
+                if (!hasOwnRefs && node.children.isNotEmpty()) {
+                    node.children.forEachIndexed { idx, child ->
+                        traverseAltNode(child, level, parentId, idx)
+                    }
+                } else if (hasOwnRefs) {
+                    val tocId = addEntry(node, level, parentId, position)
+                    if (tocId != 0L) {
+                        entriesByParent.getOrPut(parentId) { mutableListOf() }.add(tocId)
+                    }
+                }
+            }
+
+            structure.nodes.forEachIndexed { idx, node ->
+                traverseAltNode(node, level = 0, parentId = null, position = idx)
+            }
+
+            // Mark last child flags (single-level tree)
+            for ((_, children) in entriesByParent) {
+                if (children.isNotEmpty()) {
+                    val lastChildId = children.last()
+                    repository.updateAltTocEntryIsLastChild(lastChildId, true)
+                }
+            }
+
+            // Build line_alt_toc mappings based on nearest heading at or before each line
+            val sortedKeys = headingLineToToc.keys.sorted()
+            for (lineIdx in 0 until totalLines) {
+                val key = sortedKeys.lastOrNull { it <= lineIdx } ?: continue
+                val tocId = headingLineToToc[key] ?: continue
+                val lineId = lineKeyToId[bookPath to lineIdx] ?: continue
+                repository.upsertLineAltToc(lineId, structureId, tocId)
+            }
+        }
     }
 
     private fun buildBookPath(categories: List<String>, title: String): String {
@@ -642,9 +901,9 @@ class SefariaDirectImporter(
             // Use addressTypes from schema
             val currentAddressType = addressTypes.getOrNull(addressTypes.size - depth)
             val letter = when (currentAddressType) {
-                "Talmud" -> toDaf(idx + 1)  // Talmud pages use Daf notation
-                "Integer" -> (idx + 1).toString()  // Simple integer
-                else -> toGematria(idx + 1)  // Default to gematria for Hebrew numbering
+                "Talmud" -> toDaf(idx + 1)            // Talmud pages use Daf notation
+                "Integer" -> toGematria(idx + 1)      // Prefer gematria even when schema marks Integer
+                else -> toGematria(idx + 1)           // Default to gematria for Hebrew numbering
             }
 
             // Check if this level should show inline prefixes using schema's referenceableSections
@@ -820,6 +1079,41 @@ class SefariaDirectImporter(
         return dates.distinct().map { PubDate(date = it) }
     }
 
+    private fun parseAltStructures(schemaJson: JsonObject): List<AltStructurePayload> {
+        val altsObj = schemaJson["alts"]?.jsonObject ?: return emptyList()
+        return altsObj.mapNotNull { (key, value) ->
+            val altObj = value.jsonObject
+            val nodesArray = altObj["nodes"]?.jsonArray ?: return@mapNotNull null
+            val nodes = nodesArray.mapNotNull { parseAltNode(it.jsonObject) }
+            AltStructurePayload(
+                key = key,
+                title = altObj["title"]?.stringOrNull(),
+                heTitle = altObj["heTitle"]?.stringOrNull(),
+                nodes = nodes
+            )
+        }
+    }
+
+    private fun parseAltNode(obj: JsonObject): AltNodePayload {
+        val title = obj["title"]?.stringOrNull()
+        val heTitle = obj["heTitle"]?.stringOrNull()
+        val wholeRef = obj["wholeRef"]?.stringOrNull()
+        val refs = obj["refs"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+        val addressTypes = obj["addressTypes"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+        val childLabel = obj["heSectionNames"]?.jsonArray?.firstOrNull()?.jsonPrimitive?.contentOrNull
+            ?: obj["sectionNames"]?.jsonArray?.firstOrNull()?.jsonPrimitive?.contentOrNull
+        val children = obj["nodes"]?.jsonArray?.mapNotNull { parseAltNode(it.jsonObject) } ?: emptyList()
+        return AltNodePayload(
+            title = title,
+            heTitle = heTitle,
+            wholeRef = wholeRef,
+            refs = refs,
+            addressTypes = addressTypes,
+            childLabel = childLabel,
+            children = children
+        )
+    }
+
     private fun trimTrailingSeparators(value: String): String =
         value.trimEnd(':', ' ', ',')
 
@@ -956,14 +1250,21 @@ class SefariaDirectImporter(
     private fun canonicalCitation(raw: String): String =
         normalizeCitation(raw).replace(",", "").lowercase()
 
-    private fun canonicalBase(citation: String): String =
-        canonicalCitation(citation).replace(Regex(":\\d+[ab]?(?:-\\d+[ab]?)?$"), "")
-            .replace(Regex(" \\d.*$"), "")
+    private fun canonicalBase(citation: String): String {
+        val normalized = canonicalCitation(citation)
+        // For Talmud, keep daf+amud (e.g., "2a") as base; strip only the line/segment after colon
+        val stripAfterColon = normalized.replace(Regex(":\\d+[ab]?(?:-\\d+[ab]?)?$"), "")
+        // If nothing left (e.g., no colon), fall back to removing trailing line numbers after space
+        return stripAfterColon
+            .replace(Regex(" +(\\d+[ab]?)$"), " $1") // keep daf marker
             .trim()
+    }
 
     private fun citationRangeStart(citation: String): String? {
-        val match = Regex("^(.*?):(\\d+[ab]?)\\s*-\\s*\\d+[ab]?$").matchEntire(citation)
-        return match?.let { canonicalCitation("${it.groupValues[1]}:${it.groupValues[2]}") }
+        val dashParts = citation.split('-', limit = 2)
+        val start = dashParts.firstOrNull()?.trim().orEmpty()
+        if (start.isBlank()) return null
+        return canonicalCitation(start)
     }
 
     private fun resolveRefs(
@@ -1067,7 +1368,8 @@ class SefariaDirectImporter(
                 hasTargumConnection = book.hasTargumConnection,
                 hasReferenceConnection = book.hasReferenceConnection,
                 hasCommentaryConnection = book.hasCommentaryConnection,
-                hasOtherConnection = book.hasOtherConnection
+                hasOtherConnection = book.hasOtherConnection,
+                hasAltStructures = book.hasAltStructures
             )
         }?.sortedBy { it.order } ?: emptyList()
 

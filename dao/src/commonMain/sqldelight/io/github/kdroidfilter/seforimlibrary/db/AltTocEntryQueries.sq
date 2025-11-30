@@ -1,0 +1,48 @@
+-- Alternative TOC entries (hierarchical)
+
+selectAltEntriesByStructureId:
+SELECT e.*, tt.text
+FROM alt_toc_entry e
+JOIN tocText tt ON e.textId = tt.id
+WHERE e.structureId = ?;
+
+selectAltRootByStructureId:
+SELECT e.*, tt.text
+FROM alt_toc_entry e
+JOIN tocText tt ON e.textId = tt.id
+WHERE e.structureId = ? AND e.parentId IS NULL;
+
+selectAltChildren:
+SELECT e.*, tt.text
+FROM alt_toc_entry e
+JOIN tocText tt ON e.textId = tt.id
+WHERE e.parentId = ?;
+
+selectAltTocEntryById:
+SELECT e.*, tt.text
+FROM alt_toc_entry e
+JOIN tocText tt ON e.textId = tt.id
+WHERE e.id = ?;
+
+insert:
+INSERT INTO alt_toc_entry (structureId, parentId, textId, level, lineId, isLastChild, hasChildren)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+insertWithId:
+INSERT INTO alt_toc_entry (id, structureId, parentId, textId, level, lineId, isLastChild, hasChildren)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+updateLineId:
+UPDATE alt_toc_entry SET lineId = ? WHERE id = ?;
+
+updateIsLastChild:
+UPDATE alt_toc_entry SET isLastChild = ? WHERE id = ?;
+
+updateHasChildren:
+UPDATE alt_toc_entry SET hasChildren = ? WHERE id = ?;
+
+deleteByStructureId:
+DELETE FROM alt_toc_entry WHERE structureId = ?;
+
+lastInsertRowId:
+SELECT last_insert_rowid();

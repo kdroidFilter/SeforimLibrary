@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS book (
     hasReferenceConnection INTEGER NOT NULL DEFAULT 0,
     hasCommentaryConnection INTEGER NOT NULL DEFAULT 0,
     hasOtherConnection INTEGER NOT NULL DEFAULT 0,
+    hasAltStructures INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (categoryId) REFERENCES category(id) ON DELETE CASCADE,
     FOREIGN KEY (sourceId) REFERENCES source(id) ON DELETE RESTRICT
 );
@@ -239,6 +240,55 @@ CREATE TABLE IF NOT EXISTS line_toc (
 );
 
 CREATE INDEX IF NOT EXISTS idx_linetoc_toc ON line_toc(tocEntryId);
+
+-- Alternative TOC structures (e.g., Parasha/Aliyah)
+CREATE TABLE IF NOT EXISTS alt_toc_structure (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bookId INTEGER NOT NULL,
+    -- Stable key for the structure (e.g., "Parasha")
+    key TEXT NOT NULL,
+    title TEXT,
+    heTitle TEXT,
+    UNIQUE (bookId, key),
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_alt_toc_structure_book ON alt_toc_structure(bookId);
+CREATE INDEX IF NOT EXISTS idx_alt_toc_structure_key ON alt_toc_structure(key);
+
+CREATE TABLE IF NOT EXISTS alt_toc_entry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    structureId INTEGER NOT NULL,
+    parentId INTEGER,
+    textId INTEGER NOT NULL,
+    level INTEGER NOT NULL,
+    lineId INTEGER,
+    isLastChild INTEGER NOT NULL DEFAULT 0,
+    hasChildren INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (structureId) REFERENCES alt_toc_structure(id) ON DELETE CASCADE,
+    FOREIGN KEY (parentId) REFERENCES alt_toc_entry(id) ON DELETE CASCADE,
+    FOREIGN KEY (textId) REFERENCES tocText(id) ON DELETE CASCADE,
+    FOREIGN KEY (lineId) REFERENCES line(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_alt_toc_entry_structure ON alt_toc_entry(structureId);
+CREATE INDEX IF NOT EXISTS idx_alt_toc_entry_parent ON alt_toc_entry(parentId);
+CREATE INDEX IF NOT EXISTS idx_alt_toc_entry_text ON alt_toc_entry(textId);
+CREATE INDEX IF NOT EXISTS idx_alt_toc_entry_line ON alt_toc_entry(lineId);
+
+-- Mapping table: line -> alternative TOC entry (per structure)
+CREATE TABLE IF NOT EXISTS line_alt_toc (
+    lineId INTEGER NOT NULL,
+    structureId INTEGER NOT NULL,
+    altTocEntryId INTEGER NOT NULL,
+    PRIMARY KEY (lineId, structureId),
+    FOREIGN KEY (lineId) REFERENCES line(id) ON DELETE CASCADE,
+    FOREIGN KEY (structureId) REFERENCES alt_toc_structure(id) ON DELETE CASCADE,
+    FOREIGN KEY (altTocEntryId) REFERENCES alt_toc_entry(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_line_alt_toc_entry ON line_alt_toc(altTocEntryId);
+CREATE INDEX IF NOT EXISTS idx_line_alt_toc_structure ON line_alt_toc(structureId);
 
 -- Book acronyms table: stores alternate names/abbreviations per book
 -- One row per (bookId, term) pair for efficient lookup
