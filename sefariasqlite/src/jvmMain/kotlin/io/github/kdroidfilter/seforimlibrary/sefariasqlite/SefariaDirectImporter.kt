@@ -1695,34 +1695,67 @@ class SefariaDirectImporter(
         targetBookId: Long,
         bookMetaById: Map<Long, BookMeta>
     ): Pair<ConnectionType, ConnectionType> {
-        if (baseType != ConnectionType.COMMENTARY) return baseType to baseType
+        // Only COMMENTARY and TARGUM need directional normalization.
+        if (baseType != ConnectionType.COMMENTARY && baseType != ConnectionType.TARGUM) {
+            return baseType to baseType
+        }
 
         val sourceMeta = bookMetaById[sourceBookId] ?: return baseType to baseType
         val targetMeta = bookMetaById[targetBookId] ?: return baseType to baseType
 
+        fun typesFor(sourceIsSecondary: Boolean): Pair<ConnectionType, ConnectionType> {
+            return when (baseType) {
+                ConnectionType.COMMENTARY ->
+                    if (sourceIsSecondary) {
+                        // source = commentary, target = base/source text
+                        ConnectionType.SOURCE to ConnectionType.COMMENTARY
+                    } else {
+                        // source = base/source text, target = commentary
+                        ConnectionType.COMMENTARY to ConnectionType.SOURCE
+                    }
+
+                ConnectionType.TARGUM ->
+                    if (sourceIsSecondary) {
+                        // source = targum, target = base/source text
+                        ConnectionType.SOURCE to ConnectionType.TARGUM
+                    } else {
+                        // source = base/source text, target = targum
+                        ConnectionType.TARGUM to ConnectionType.SOURCE
+                    }
+
+                else -> baseType to baseType
+            }
+        }
+
         // Rule 1: Base book vs non-base book
         if (sourceMeta.isBaseBook && !targetMeta.isBaseBook) {
-            return ConnectionType.COMMENTARY to ConnectionType.SOURCE
+            // target is secondary (commentary/targum)
+            return typesFor(sourceIsSecondary = false)
         }
         if (!sourceMeta.isBaseBook && targetMeta.isBaseBook) {
-            return ConnectionType.SOURCE to ConnectionType.COMMENTARY
+            // source is secondary (commentary/targum)
+            return typesFor(sourceIsSecondary = true)
         }
 
         // Rule 2: Both base books — use hierarchy (category level) then bookId as tie-breaker
         val sourceLevel = sourceMeta.categoryLevel
         val targetLevel = targetMeta.categoryLevel
         if (sourceLevel < targetLevel) {
-            return ConnectionType.COMMENTARY to ConnectionType.SOURCE
+            // target is deeper in the tree -> treat as secondary
+            return typesFor(sourceIsSecondary = false)
         }
         if (targetLevel < sourceLevel) {
-            return ConnectionType.SOURCE to ConnectionType.COMMENTARY
+            // source is deeper in the tree -> treat as secondary
+            return typesFor(sourceIsSecondary = true)
         }
 
         // Tie-breaker: higher bookId is treated as the source
         return if (sourceBookId > targetBookId) {
-            ConnectionType.SOURCE to ConnectionType.COMMENTARY
+            // source comes later -> treat as secondary
+            typesFor(sourceIsSecondary = true)
         } else {
-            ConnectionType.COMMENTARY to ConnectionType.SOURCE
+            // target comes later -> treat as secondary
+            typesFor(sourceIsSecondary = false)
         }
     }
 
