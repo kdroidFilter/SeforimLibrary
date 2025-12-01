@@ -41,8 +41,7 @@ class SefariaDirectImporter(
 
     private data class BookMeta(
         val isBaseBook: Boolean,
-        val categoryLevel: Int,
-        val isCommentaryCategory: Boolean
+        val categoryLevel: Int
     )
 
     private data class BookPayload(
@@ -302,6 +301,9 @@ class SefariaDirectImporter(
 
         val priorityEntries = loadPriorityList()
         val (orderedBookPayloads, missingPriorityEntries) = applyPriorityOrdering(bookPayloads, priorityEntries)
+        // Books listed in priority.txt are considered base books (primary texts).
+        // All other books are treated as non‑base (commentaries, derivatives, etc.).
+        val baseBookKeys = priorityEntries.toSet()
         if (priorityEntries.isNotEmpty()) {
             val matched = priorityEntries.size - missingPriorityEntries.size
             logger.i { "Applied priority ordering for $matched/${priorityEntries.size} entries" }
@@ -357,6 +359,8 @@ class SefariaDirectImporter(
             val bookPath = buildBookPath(payload.categoriesHe, payload.heTitle)
             // Get order from table_of_contents.json using English title, default to 999 if not found
             val bookOrder = bookOrders[payload.enTitle]?.toFloat() ?: 999f
+            val normalizedPath = normalizedBookPath(payload.categoriesHe, payload.heTitle)
+            val isBaseBook = normalizedPath in baseBookKeys
             val book = Book(
                 id = bookId,
                 categoryId = catId,
@@ -369,30 +373,13 @@ class SefariaDirectImporter(
                 notesContent = null,
                 order = bookOrder,
                 topics = emptyList(),
-                isBaseBook = true,
+                isBaseBook = isBaseBook,
                 totalLines = payload.lines.size,
                 hasAltStructures = false
             )
             repository.insertBook(book)
             val catLevel = categoryLevelsById[catId] ?: payload.categoriesHe.lastIndex.coerceAtLeast(0)
-            val isCommentaryCategory = payload.categoriesHe.any { categoryName ->
-                val normalized = categoryName.lowercase()
-                normalized.contains("פירוש") ||
-                        normalized.contains("מפרש") ||
-                        normalized.contains("מפרשים") ||
-                        normalized.contains("ביאור") ||
-                        normalized.contains("חידוש") ||
-                        normalized.contains("הגה") ||
-                        normalized.contains("אחרונ") ||
-                        normalized.contains("ראשונ") ||
-                        normalized.contains("פירושים מודרניים") ||
-                        normalized.contains("commentary")
-            }
-            bookMetaById[bookId] = BookMeta(
-                isBaseBook = book.isBaseBook,
-                categoryLevel = catLevel,
-                isCommentaryCategory = isCommentaryCategory
-            )
+            bookMetaById[bookId] = BookMeta(isBaseBook = book.isBaseBook, categoryLevel = catLevel)
 
             val refsForBook = payload.refEntries.map { it.copy(path = bookPath) }
             allRefsWithPath += refsForBook
@@ -1713,15 +1700,7 @@ class SefariaDirectImporter(
         val sourceMeta = bookMetaById[sourceBookId] ?: return baseType to baseType
         val targetMeta = bookMetaById[targetBookId] ?: return baseType to baseType
 
-        // Commentary vs non-commentary category
-        if (sourceMeta.isCommentaryCategory && !targetMeta.isCommentaryCategory) {
-            return ConnectionType.COMMENTARY to ConnectionType.SOURCE
-        }
-        if (!sourceMeta.isCommentaryCategory && targetMeta.isCommentaryCategory) {
-            return ConnectionType.SOURCE to ConnectionType.COMMENTARY
-        }
-
-        // Base vs non-base (precaution even though most Sefaria imports are base)
+        // Rule 1: Base book vs non-base book
         if (sourceMeta.isBaseBook && !targetMeta.isBaseBook) {
             return ConnectionType.COMMENTARY to ConnectionType.SOURCE
         }
@@ -1729,21 +1708,21 @@ class SefariaDirectImporter(
             return ConnectionType.SOURCE to ConnectionType.COMMENTARY
         }
 
-        // Both are base (or both commentary): use hierarchy (deeper level is commentary toward shallower)
+        // Rule 2: Both base books — use hierarchy (category level) then bookId as tie-breaker
         val sourceLevel = sourceMeta.categoryLevel
         val targetLevel = targetMeta.categoryLevel
-        if (sourceLevel > targetLevel) {
+        if (sourceLevel < targetLevel) {
             return ConnectionType.COMMENTARY to ConnectionType.SOURCE
         }
-        if (targetLevel > sourceLevel) {
+        if (targetLevel < sourceLevel) {
             return ConnectionType.SOURCE to ConnectionType.COMMENTARY
         }
 
-        // Tie-breaker: higher bookId is treated as commentary
+        // Tie-breaker: higher bookId is treated as the source
         return if (sourceBookId > targetBookId) {
-            ConnectionType.COMMENTARY to ConnectionType.SOURCE
-        } else {
             ConnectionType.SOURCE to ConnectionType.COMMENTARY
+        } else {
+            ConnectionType.COMMENTARY to ConnectionType.SOURCE
         }
     }
 
