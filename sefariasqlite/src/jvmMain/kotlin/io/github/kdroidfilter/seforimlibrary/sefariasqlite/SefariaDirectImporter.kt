@@ -834,6 +834,24 @@ class SefariaDirectImporter(
                     return expansions
                 }
 
+                fun matchKey(key: String): Pair<Long?, Int?>? {
+                    val variants = linkedSetOf(key).apply {
+                        if (key.contains('.')) {
+                            add(key.replace('.', ' '))
+                            add(key.replace(Regex("\\.(\\d+)")) { match -> ":${match.groupValues[1]}" })
+                            add(key.replace(Regex("\\.(\\d+)")) { match -> " ${match.groupValues[1]}" })
+                            add(key.replace(".", ""))
+                        }
+                    }.filter { it.isNotBlank() }
+                    variants.forEach { variant ->
+                        canonicalToLine[variant]?.let { return it }
+                        for (expanded in expandedCandidates(variant)) {
+                            canonicalToLine[expanded]?.let { return it }
+                        }
+                    }
+                    return null
+                }
+
                 fun fallbackWithinChapter(canonical: String): Pair<Long?, Int?>? {
                     if (!canonical.contains(':')) return null
                     val base = canonical.substringBefore(':')
@@ -844,7 +862,7 @@ class SefariaDirectImporter(
                         val candidates = listOf(candidate, stripBookAlias(candidate, bookAliasKeys))
                         candidates.forEach { key ->
                             if (key.isNotBlank()) {
-                                canonicalToLine[key]?.let { return it }
+                                matchKey(key)?.let { return it }
                             }
                         }
                     }
@@ -862,10 +880,7 @@ class SefariaDirectImporter(
                     }
                     candidates.forEach { key ->
                         if (key.isNotBlank()) {
-                            canonicalToLine[key]?.let { return it }
-                            for (expanded in expandedCandidates(key)) {
-                                canonicalToLine[expanded]?.let { return it }
-                            }
+                            matchKey(key)?.let { return it }
                         }
                     }
                     val rangeStart = citationRangeStart(canonical)
@@ -877,10 +892,7 @@ class SefariaDirectImporter(
                         }
                         rangeCandidates.forEach { key ->
                             if (key.isNotBlank()) {
-                                canonicalToLine[key]?.let { return it }
-                                for (expanded in expandedCandidates(key)) {
-                                    canonicalToLine[expanded]?.let { return it }
-                                }
+                                matchKey(key)?.let { return it }
                             }
                         }
                     }
@@ -898,10 +910,7 @@ class SefariaDirectImporter(
                             )
                             chapterCandidates.forEach { key ->
                                 if (key.isNotBlank()) {
-                                    canonicalToLine[key]?.let { return it }
-                                    for (expanded in expandedCandidates(key)) {
-                                        canonicalToLine[expanded]?.let { return it }
-                                    }
+                                    matchKey(key)?.let { return it }
                                 }
                             }
                         }
@@ -934,6 +943,7 @@ class SefariaDirectImporter(
                     "perek" in norm -> "פרק"
                     "siman" in norm -> "סימן"
                     "section" in norm -> "סימן"
+                    "klal" in norm -> "כלל"
                     "psalm" in norm || "psalms" in norm -> "מזמור"
                     "day" in norm -> "יום"
                     else -> base
