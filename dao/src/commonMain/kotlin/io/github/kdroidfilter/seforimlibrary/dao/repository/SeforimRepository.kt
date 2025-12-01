@@ -94,6 +94,22 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     suspend fun setJournalModeOff() = setJournalMode("OFF")
     suspend fun setJournalModeWal() = setJournalMode("WAL")
 
+    /**
+     * Inserts multiple line_toc mappings in a single batch.
+     * Assumes the database is in a fresh import state (no existing mappings for these lineIds).
+     */
+    suspend fun insertLineTocBatch(mappings: List<Pair<Long, Long>>) = withContext(Dispatchers.IO) {
+        if (mappings.isEmpty()) return@withContext
+        database.transaction {
+            mappings.forEach { (lineId, tocEntryId) ->
+                database.lineTocQueriesQueries.insert(
+                    lineId = lineId,
+                    tocEntryId = tocEntryId
+                )
+            }
+        }
+    }
+
     suspend fun bulkUpsertLineToc(pairs: List<Pair<Long, Long>>) = withContext(Dispatchers.IO) {
         if (pairs.isEmpty()) return@withContext
         for ((lineId, tocEntryId) in pairs) {
@@ -979,6 +995,29 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             .executeAsOneOrNull()?.toModel()
     }
 
+    /**
+     * Inserts multiple lines in a single transaction.
+     * This is optimized for bulk import where IDs are provided explicitly.
+     */
+    suspend fun insertLinesBatch(lines: List<Line>) = withContext(Dispatchers.IO) {
+        if (lines.isEmpty()) return@withContext
+
+        database.transaction {
+            lines.forEach { line ->
+                // For batch import we expect explicit IDs > 0
+                database.lineQueriesQueries.insertWithId(
+                    id = line.id,
+                    bookId = line.bookId,
+                    lineIndex = line.lineIndex.toLong(),
+                    content = line.content,
+                    ref = line.ref,
+                    heRef = line.heRef,
+                    tocEntryId = null
+                )
+            }
+        }
+    }
+
     suspend fun insertLine(line: Line): Long = withContext(Dispatchers.IO) {
         logger.d{"Repository inserting line with bookId: ${line.bookId}"}
 
@@ -1504,6 +1543,38 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             // Changed from error to warning level to reduce unnecessary error logs
             logger.w(e){"Error inserting link: ${e.message}"}
             throw e
+        }
+    }
+
+    /**
+     * Inserts multiple links in a single transaction.
+     * Optimized for bulk import; assumes no duplicate (sourceBookId, targetBookId, sourceLineId, targetLineId) rows.
+     */
+    suspend fun insertLinksBatch(links: List<Link>) = withContext(Dispatchers.IO) {
+        if (links.isEmpty()) return@withContext
+
+        // Pre-resolve connection type IDs per type name to avoid repeated lookups.
+        val typeIdCache = mutableMapOf<String, Long>()
+        for (link in links) {
+            val name = link.connectionType.name
+            if (name !in typeIdCache) {
+                typeIdCache[name] = getOrCreateConnectionType(name)
+            }
+        }
+
+        database.transaction {
+            links.forEach { link ->
+                val connectionTypeId = typeIdCache[link.connectionType.name]
+                    ?: error("Missing connection type id for ${link.connectionType.name}")
+
+                database.linkQueriesQueries.insert(
+                    sourceBookId = link.sourceBookId,
+                    targetBookId = link.targetBookId,
+                    sourceLineId = link.sourceLineId,
+                    targetLineId = link.targetLineId,
+                    connectionTypeId = connectionTypeId
+                )
+            }
         }
     }
 

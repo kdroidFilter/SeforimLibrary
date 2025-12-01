@@ -3,25 +3,17 @@ package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.json.*
 import kotlinx.serialization.protobuf.ProtoBuf
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.int
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.Paths
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.io.path.exists
-import kotlin.io.path.invariantSeparatorsPathString
 import kotlin.io.path.isDirectory
 import kotlin.io.path.name
 import kotlin.io.path.readText
@@ -29,15 +21,25 @@ import kotlin.io.path.readText
 /**
  * Direct importer: reads Sefaria database_export and writes into SQLite without intermediate Otzaria files.
  * Scope: replicate existing Otzaria-based logic (books/lines/links) with best-effort citation matching.
+ *
+ * OPTIMIZED VERSION: Uses batch processing, parallel file reading, and transaction grouping.
  */
 class SefariaDirectImporter(
     private val exportRoot: Path,
     private val repository: SeforimRepository,
     private val catalogOutput: Path,
     private val logger: Logger = Logger.withTag("SefariaDirectImporter")
-    ) {
+) {
 
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
+
+    // Batch sizes for optimal performance
+    companion object {
+        private const val LINE_BATCH_SIZE = 5000
+        private const val LINK_BATCH_SIZE = 2000
+        private const val TOC_BATCH_SIZE = 1000
+        private const val FILE_PARALLELISM = 8
+    }
 
     private data class BookMeta(
         val isBaseBook: Boolean,
@@ -101,15 +103,14 @@ class SefariaDirectImporter(
             return Pair(emptyMap(), emptyMap())
         }
 
-        val categoryOrders = mutableMapOf<String, Int>() // category path -> order
-        val bookOrders = mutableMapOf<String, Int>()     // book title -> order
+        val categoryOrders = ConcurrentHashMap<String, Int>()
+        val bookOrders = ConcurrentHashMap<String, Int>()
 
         try {
             val tocJson = Files.readString(tocFile)
             val tocEntries = json.parseToJsonElement(tocJson).jsonArray
 
             fun processTocItem(item: JsonObject, categoryPath: List<String> = emptyList()) {
-                // If it's a book (has title but no subcategories with contents)
                 val title = item["title"]?.jsonPrimitive?.contentOrNull
                 val heTitle = item["heTitle"]?.jsonPrimitive?.contentOrNull
                 val order = item["order"]?.jsonPrimitive?.intOrNull
@@ -121,7 +122,6 @@ class SefariaDirectImporter(
                     bookOrders[sanitizeFolder(heTitle)] = order
                 }
 
-                // If it has a category name, add to category orders
                 val category = item["category"]?.jsonPrimitive?.contentOrNull
                 val heCategory = item["heCategory"]?.jsonPrimitive?.contentOrNull
                 if (order != null && categoryPath.isNotEmpty()) {
@@ -137,7 +137,6 @@ class SefariaDirectImporter(
                     }
                 }
 
-                // Process subcategories/books recursively
                 item["contents"]?.jsonArray?.forEach { subItem ->
                     val newPath = when {
                         heCategory != null -> categoryPath + heCategory
@@ -154,7 +153,6 @@ class SefariaDirectImporter(
                 val catNameHe = obj["heCategory"]?.jsonPrimitive?.contentOrNull
                 val order = obj["order"]?.jsonPrimitive?.intOrNull ?: return@forEach
 
-                // Store order with BOTH English and Hebrew names
                 if (catNameEn != null) {
                     categoryOrders[catNameEn] = order
                     categoryOrders[sanitizeFolder(catNameEn)] = order
@@ -226,7 +224,7 @@ class SefariaDirectImporter(
         return (ordered + remaining) to missing
     }
 
-    suspend fun import() {
+    suspend fun import() = coroutineScope {
         val dbRoot = findDatabaseExportRoot(exportRoot)
         val jsonDir = dbRoot.resolve("json")
 
@@ -236,74 +234,16 @@ class SefariaDirectImporter(
         require(jsonDir.isDirectory() && schemaDir.isDirectory()) { "Missing json/schemas under $dbRoot" }
 
         val schemaLookup = buildSchemaLookup(schemaDir)
-        val bookPayloads = mutableListOf<BookPayload>()
 
-        Files.walk(jsonDir).use { stream ->
-            stream.filter { Files.isRegularFile(it) && it.fileName.name.equals("merged.json", ignoreCase = true) }
-                .forEach { textPath ->
-                    runCatching {
-                        val textJson = json.parseToJsonElement(textPath.readText()).jsonObject
-                        val fileTitle = textJson["title"]?.stringOrNull()
-                        val fileHeTitle = textJson["heTitle"]?.stringOrNull()
-                        val folderName = textPath.parent?.fileName?.name
-
-                        val schemaPath = resolveSchemaPath(
-                            title = fileTitle,
-                            heTitle = fileHeTitle,
-                            folderName = folderName,
-                            schemaDir = schemaDir,
-                            lookup = schemaLookup
-                        ) ?: return@runCatching
-
-                        val schemaJson = json.parseToJsonElement(schemaPath.readText()).jsonObject
-                        val schemaObj = schemaJson["schema"]?.jsonObject ?: return@runCatching
-                        val englishTitle = schemaObj["title"]?.stringOrNull() ?: fileTitle ?: folderName ?: return@runCatching
-                        val hebrewTitle = schemaObj["heTitle"]?.stringOrNull() ?: fileHeTitle ?: englishTitle
-
-                        val textElement = textJson["text"] ?: return@runCatching
-                        val categories = schemaJson["heCategories"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
-                            ?: schemaObj["heCategories"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
-                            ?: textJson["categories"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
-                            ?: emptyList()
-
-                        val authors = schemaJson["authors"]?.jsonArray?.mapNotNull { author ->
-                            author.jsonObject["he"]?.stringOrNull()
-                        } ?: emptyList()
-
-                        val (lines, refs, headings) = buildBookContent(
-                            schemaObj = schemaObj,
-                            textElement = textElement,
-                            bookHeTitle = hebrewTitle,
-                            bookEnTitle = englishTitle,
-                            authors = authors
-                        )
-                        val description = extractDescription(schemaJson, schemaObj)
-                        val pubDates = extractPubDates(schemaJson, schemaObj)
-                        val altStructures = parseAltStructures(schemaJson)
-                        bookPayloads += BookPayload(
-                            heTitle = hebrewTitle,
-                            enTitle = englishTitle,
-                            categoriesHe = categories.map { sanitizeFolder(it) },
-                            lines = lines,
-                            refEntries = refs,
-                            headings = headings,
-                            authors = authors,
-                            description = description,
-                            pubDates = pubDates,
-                            altStructures = altStructures
-                        )
-                        logger.i { "Prepared book $hebrewTitle with ${lines.size} lines and ${refs.size} refs" }
-                    }.onFailure { e ->
-                        logger.w(e) { "Failed to prepare book from $textPath" }
-                    }
-                }
-        }
+        // OPTIMIZATION: Read and parse files in parallel
+        logger.i { "Starting parallel file processing..." }
+        val bookPayloads = readBooksInParallel(jsonDir, schemaDir, schemaLookup)
+        logger.i { "Parsed ${bookPayloads.size} books" }
 
         val priorityEntries = loadPriorityList()
         val (orderedBookPayloads, missingPriorityEntries) = applyPriorityOrdering(bookPayloads, priorityEntries)
-        // Books listed in priority.txt are considered base books (primary texts).
-        // All other books are treated as non‑base (commentaries, derivatives, etc.).
         val baseBookKeys = priorityEntries.toSet()
+
         if (priorityEntries.isNotEmpty()) {
             val matched = priorityEntries.size - missingPriorityEntries.size
             logger.i { "Applied priority ordering for $matched/${priorityEntries.size} entries" }
@@ -312,10 +252,15 @@ class SefariaDirectImporter(
             }
         }
 
+        // OPTIMIZATION: Disable synchronous writes during bulk import
+        repository.executeRawQuery("PRAGMA synchronous = OFF")
+        repository.executeRawQuery("PRAGMA journal_mode = MEMORY")
+        repository.executeRawQuery("PRAGMA cache_size = -64000") // 64MB cache
+
         // Build DB entries
         val sourceId = repository.insertSource("Sefaria")
-        val categoryIds = mutableMapOf<String, Long>() // key: path string "cat1/cat2"
-        val categoryLevelsById = mutableMapOf<Long, Int>()
+        val categoryIds = ConcurrentHashMap<String, Long>()
+        val categoryLevelsById = ConcurrentHashMap<Long, Int>()
 
         suspend fun ensureCategoryPath(pathParts: List<String>): Long {
             var parentId: Long? = null
@@ -329,7 +274,6 @@ class SefariaDirectImporter(
                     parentId = existing
                     return@forEachIndexed
                 }
-                // Get order from table_of_contents.json, default to 999 if not found
                 val categoryOrder = categoryOrders[key] ?: categoryOrders[part] ?: 999
                 val cat = Category(
                     id = 0,
@@ -346,21 +290,28 @@ class SefariaDirectImporter(
             return parentId ?: throw IllegalStateException("No category created for $pathParts")
         }
 
-        var nextBookId = 1L
-        var nextLineId = 1L
-        val lineKeyToId = mutableMapOf<Pair<String, Int>, Long>() // (path,lineIndex) -> lineId
-        val lineIdToBookId = mutableMapOf<Long, Long>()
+        val nextBookId = AtomicLong(1L)
+        val nextLineId = AtomicLong(1L)
+        val lineKeyToId = ConcurrentHashMap<Pair<String, Int>, Long>()
+        val lineIdToBookId = ConcurrentHashMap<Long, Long>()
         val allRefsWithPath = mutableListOf<RefEntry>()
-        val bookMetaById = mutableMapOf<Long, BookMeta>()
+        val bookMetaById = ConcurrentHashMap<Long, BookMeta>()
+
+        // OPTIMIZATION: Batch line insertions
+        val lineBatch = mutableListOf<Line>()
+        val lineTocBatch = mutableListOf<Pair<Long, Long>>() // lineId, tocId
+
+        logger.i { "Inserting books and lines..." }
+        var processedBooks = 0
 
         for (payload in orderedBookPayloads) {
             val catId = ensureCategoryPath(payload.categoriesHe)
-            val bookId = nextBookId++
+            val bookId = nextBookId.getAndIncrement()
             val bookPath = buildBookPath(payload.categoriesHe, payload.heTitle)
-            // Get order from table_of_contents.json using English title, default to 999 if not found
             val bookOrder = bookOrders[payload.enTitle]?.toFloat() ?: 999f
             val normalizedPath = normalizedBookPath(payload.categoriesHe, payload.heTitle)
             val isBaseBook = normalizedPath in baseBookKeys
+
             val book = Book(
                 id = bookId,
                 categoryId = catId,
@@ -382,85 +333,47 @@ class SefariaDirectImporter(
             bookMetaById[bookId] = BookMeta(isBaseBook = book.isBaseBook, categoryLevel = catLevel)
 
             val refsForBook = payload.refEntries.map { it.copy(path = bookPath) }
-            allRefsWithPath += refsForBook
+            synchronized(allRefsWithPath) {
+                allRefsWithPath += refsForBook
+            }
 
             // Create a mapping from lineIndex to RefEntry for quick lookup
             val refsByLineIndex = payload.refEntries.associateBy { it.lineIndex - 1 }
 
+            // OPTIMIZATION: Batch lines
             payload.lines.forEachIndexed { idx, content ->
-                val lineId = nextLineId++
+                val lineId = nextLineId.getAndIncrement()
                 val refEntry = refsByLineIndex[idx]
-                repository.insertLine(
-                    Line(
-                        id = lineId,
-                        bookId = bookId,
-                        lineIndex = idx,
-                        content = content,
-                        ref = refEntry?.ref,
-                        heRef = refEntry?.heRef
-                    )
+                lineBatch += Line(
+                    id = lineId,
+                    bookId = bookId,
+                    lineIndex = idx,
+                    content = content,
+                    ref = refEntry?.ref,
+                    heRef = refEntry?.heRef
                 )
                 lineKeyToId[bookPath to idx] = lineId
                 lineIdToBookId[lineId] = bookId
+
+                // Flush batch when full
+                if (lineBatch.size >= LINE_BATCH_SIZE) {
+                    repository.insertLinesBatch(lineBatch)
+                    lineBatch.clear()
+                }
             }
+
             // Insert TOC entries hierarchically and build line_toc mappings
             if (payload.headings.isNotEmpty()) {
-                val levelStack = ArrayDeque<Pair<Int, Long>>()
-                val headingLineToToc = mutableMapOf<Int, Long>()
-                val entriesByParent = mutableMapOf<Long?, MutableList<Long>>()
-                val allTocIds = mutableListOf<Long>()
-                val tocParentMap = mutableMapOf<Long, Long?>() // tocId -> parentId
-
-                payload.headings.sortedBy { it.lineIndex }.forEach { h ->
-                    while (levelStack.isNotEmpty() && levelStack.last().first >= h.level) levelStack.removeLast()
-                    val parent = levelStack.lastOrNull()?.second
-                    val lineIdForHeading = lineKeyToId[bookPath to h.lineIndex]
-                    val tocId = repository.insertTocEntry(
-                        TocEntry(
-                            id = 0,
-                            bookId = bookId,
-                            parentId = parent,
-                            textId = null,
-                            text = h.title,
-                            level = h.level,
-                            lineId = lineIdForHeading,
-                            isLastChild = false,
-                            hasChildren = false
-                        )
-                    )
-                    headingLineToToc[h.lineIndex] = tocId
-                    levelStack.addLast(h.level to tocId)
-                    allTocIds.add(tocId)
-                    tocParentMap[tocId] = parent
-                    entriesByParent.getOrPut(parent) { mutableListOf() }.add(tocId)
-                }
-
-                // DEUXIÈME PASSE: Mettre à jour hasChildren et isLastChild
-                val parentIds = tocParentMap.values.filterNotNull().toSet()
-                for (tocId in allTocIds) {
-                    if (tocId in parentIds) {
-                        repository.updateTocEntryHasChildren(tocId, true)
-                    }
-                }
-                for ((parentId, children) in entriesByParent) {
-                    if (children.isNotEmpty()) {
-                        val lastChildId = children.last()
-                        repository.updateTocEntryIsLastChild(lastChildId, true)
-                    }
-                }
-
-                // Build line_toc mappings
-                val sortedKeys = headingLineToToc.keys.sorted()
-                for (lineIdx in payload.lines.indices) {
-                    val key = sortedKeys.lastOrNull { it <= lineIdx } ?: continue
-                    val tocId = headingLineToToc[key] ?: continue
-                    val lineId = lineKeyToId[bookPath to lineIdx] ?: continue
-                    repository.executeRawQuery(
-                        "INSERT INTO line_toc(lineId, tocEntryId) VALUES ($lineId, $tocId)"
-                    )
-                }
+                insertTocEntriesOptimized(
+                    payload = payload,
+                    bookId = bookId,
+                    bookPath = bookPath,
+                    lineKeyToId = lineKeyToId,
+                    lineTocBatch = lineTocBatch
+                )
             }
-            // Alternative structures (e.g., Parasha/Aliyah)
+
+            // Alternative structures
             val generatedAltStructures = buildAltTocStructuresForBook(
                 payload = payload,
                 bookId = bookId,
@@ -469,10 +382,27 @@ class SefariaDirectImporter(
                 totalLines = payload.lines.size
             )
             repository.updateHasAltStructures(bookId, generatedAltStructures)
-            if (!generatedAltStructures && payload.altStructures.isNotEmpty()) {
-                logger.w { "Alternative structures defined for ${payload.heTitle} but none were generated" }
+
+            processedBooks++
+            if (processedBooks % 100 == 0) {
+                logger.i { "Processed $processedBooks/${orderedBookPayloads.size} books" }
             }
         }
+
+        // Flush remaining lines
+        if (lineBatch.isNotEmpty()) {
+            repository.insertLinesBatch(lineBatch)
+            lineBatch.clear()
+        }
+
+        // Flush line_toc mappings
+        if (lineTocBatch.isNotEmpty()) {
+            repository.insertLineTocBatch(lineTocBatch)
+            lineTocBatch.clear()
+        }
+
+        logger.i { "Inserted all books and lines" }
+
         // Build citation lookup for links
         val refsByCanonical = allRefsWithPath.groupBy { canonicalCitation(it.ref) }
         val refsByBase = mutableMapOf<String, RefEntry>()
@@ -484,78 +414,307 @@ class SefariaDirectImporter(
             }
         }
 
-        // Insert links directly
+        // OPTIMIZATION: Process links in parallel and batch insert
         val linksDir = dbRoot.resolve("links")
         if (linksDir.exists()) {
-            Files.list(linksDir)
-                .filter { it.fileName.toString().endsWith(".csv") }
-                .use { stream ->
-                    stream.forEach { file ->
-                        Files.newBufferedReader(file).use { reader ->
-                            val iter = reader.lineSequence().iterator()
-                            if (!iter.hasNext()) return@use
-                            val headers = parseCsvLine(iter.next()).map { normalizeCitation(it) }
-                            val idxC1 = headers.indexOf("Citation 1")
-                            val idxC2 = headers.indexOf("Citation 2")
-                            val idxConn = headers.indexOf("Conection Type")
-                            if (idxC1 < 0 || idxC2 < 0 || idxConn < 0) return@use
-
-                            while (iter.hasNext()) {
-                                val row = parseCsvLine(iter.next())
-                                if (row.isEmpty()) continue
-                                val c1 = normalizeCitation(row.getOrNull(idxC1).orEmpty())
-                                val c2 = normalizeCitation(row.getOrNull(idxC2).orEmpty())
-                                if (c1.isEmpty() || c2.isEmpty()) continue
-                                val conn = row.getOrNull(idxConn)?.trim().orEmpty()
-
-                                val fromRefs = resolveRefs(c1, refsByCanonical, refsByBase)
-                                val toRefs = resolveRefs(c2, refsByCanonical, refsByBase)
-                                if (fromRefs.isEmpty() || toRefs.isEmpty()) continue
-
-                                for (from in fromRefs) {
-                                    for (to in toRefs) {
-                                        val srcLine = lineKeyToId[from.path to (from.lineIndex - 1)] ?: continue
-                                        val tgtLine = lineKeyToId[to.path to (to.lineIndex - 1)] ?: continue
-                                        val baseConnectionType = ConnectionType.fromString(conn)
-                                        val (forwardType, reverseType) = resolveDirectionalConnectionTypes(
-                                            baseType = baseConnectionType,
-                                            sourceBookId = lineBookId(srcLine, lineIdToBookId),
-                                            targetBookId = lineBookId(tgtLine, lineIdToBookId),
-                                            bookMetaById = bookMetaById
-                                        )
-
-                                        // Create bidirectional links (from→to and to→from) like SefariaToOtzariaConverter
-                                        val linkForward = Link(
-                                            sourceBookId = lineBookId(srcLine, lineIdToBookId),
-                                            targetBookId = lineBookId(tgtLine, lineIdToBookId),
-                                            sourceLineId = srcLine,
-                                            targetLineId = tgtLine,
-                                            connectionType = forwardType
-                                        )
-                                        kotlinx.coroutines.runBlocking { repository.insertLink(linkForward) }
-
-                                        // Insert reverse link (to→from)
-                                        val linkReverse = Link(
-                                            sourceBookId = lineBookId(tgtLine, lineIdToBookId),
-                                            targetBookId = lineBookId(srcLine, lineIdToBookId),
-                                            sourceLineId = tgtLine,
-                                            targetLineId = srcLine,
-                                            connectionType = reverseType
-                                        )
-                                        kotlinx.coroutines.runBlocking { repository.insertLink(linkReverse) }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            logger.i { "Processing links..." }
+            processLinksInParallel(
+                linksDir = linksDir,
+                refsByCanonical = refsByCanonical,
+                refsByBase = refsByBase,
+                lineKeyToId = lineKeyToId,
+                lineIdToBookId = lineIdToBookId,
+                bookMetaById = bookMetaById
+            )
+            logger.i { "Links processed" }
         }
 
+        // Re-enable normal SQLite settings
+        repository.executeRawQuery("PRAGMA synchronous = NORMAL")
+        repository.executeRawQuery("PRAGMA journal_mode = DELETE")
+
         repository.rebuildCategoryClosure()
-        // book_has_links flags & connection flags
         updateBookHasLinks()
         buildAndSaveCatalog()
         logger.i { "Direct Sefaria import completed." }
+    }
+
+    /**
+     * OPTIMIZATION: Read and parse book files in parallel using coroutines
+     */
+    private suspend fun readBooksInParallel(
+        jsonDir: Path,
+        schemaDir: Path,
+        schemaLookup: Map<String, Path>
+    ): List<BookPayload> = coroutineScope {
+        val mergedFiles = Files.walk(jsonDir).use { stream ->
+            stream.filter { Files.isRegularFile(it) && it.fileName.name.equals("merged.json", ignoreCase = true) }
+                .toList()
+        }
+
+        logger.i { "Found ${mergedFiles.size} merged.json files to process" }
+
+        // Process files in parallel with limited concurrency
+        val semaphore = kotlinx.coroutines.sync.Semaphore(FILE_PARALLELISM)
+
+        mergedFiles.map { textPath ->
+            async(Dispatchers.IO) {
+                semaphore.withPermit {
+                    parseBookFile(textPath, schemaDir, schemaLookup)
+                }
+            }
+        }.awaitAll().filterNotNull()
+    }
+
+    private fun parseBookFile(
+        textPath: Path,
+        schemaDir: Path,
+        schemaLookup: Map<String, Path>
+    ): BookPayload? {
+        return runCatching {
+            val textJson = json.parseToJsonElement(textPath.readText()).jsonObject
+            val fileTitle = textJson["title"]?.stringOrNull()
+            val fileHeTitle = textJson["heTitle"]?.stringOrNull()
+            val folderName = textPath.parent?.fileName?.name
+
+            val schemaPath = resolveSchemaPath(
+                title = fileTitle,
+                heTitle = fileHeTitle,
+                folderName = folderName,
+                schemaDir = schemaDir,
+                lookup = schemaLookup
+            ) ?: return@runCatching null
+
+            val schemaJson = json.parseToJsonElement(schemaPath.readText()).jsonObject
+            val schemaObj = schemaJson["schema"]?.jsonObject ?: return@runCatching null
+            val englishTitle = schemaObj["title"]?.stringOrNull() ?: fileTitle ?: folderName ?: return@runCatching null
+            val hebrewTitle = schemaObj["heTitle"]?.stringOrNull() ?: fileHeTitle ?: englishTitle
+
+            val textElement = textJson["text"] ?: return@runCatching null
+            val categories = schemaJson["heCategories"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                ?: schemaObj["heCategories"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                ?: textJson["categories"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                ?: emptyList()
+
+            val authors = schemaJson["authors"]?.jsonArray?.mapNotNull { author ->
+                author.jsonObject["he"]?.stringOrNull()
+            } ?: emptyList()
+
+            val (lines, refs, headings) = buildBookContent(
+                schemaObj = schemaObj,
+                textElement = textElement,
+                bookHeTitle = hebrewTitle,
+                bookEnTitle = englishTitle,
+                authors = authors
+            )
+            val description = extractDescription(schemaJson, schemaObj)
+            val pubDates = extractPubDates(schemaJson, schemaObj)
+            val altStructures = parseAltStructures(schemaJson)
+
+            BookPayload(
+                heTitle = hebrewTitle,
+                enTitle = englishTitle,
+                categoriesHe = categories.map { sanitizeFolder(it) },
+                lines = lines,
+                refEntries = refs,
+                headings = headings,
+                authors = authors,
+                description = description,
+                pubDates = pubDates,
+                altStructures = altStructures
+            )
+        }.onFailure { e ->
+            logger.w(e) { "Failed to prepare book from $textPath" }
+        }.getOrNull()
+    }
+
+    /**
+     * OPTIMIZATION: Insert TOC entries with batch operations
+     */
+    private suspend fun insertTocEntriesOptimized(
+        payload: BookPayload,
+        bookId: Long,
+        bookPath: String,
+        lineKeyToId: Map<Pair<String, Int>, Long>,
+        lineTocBatch: MutableList<Pair<Long, Long>>
+    ) {
+        val levelStack = ArrayDeque<Pair<Int, Long>>()
+        val headingLineToToc = mutableMapOf<Int, Long>()
+        val entriesByParent = mutableMapOf<Long?, MutableList<Long>>()
+        val allTocIds = mutableListOf<Long>()
+        val tocParentMap = mutableMapOf<Long, Long?>()
+
+        payload.headings.sortedBy { it.lineIndex }.forEach { h ->
+            while (levelStack.isNotEmpty() && levelStack.last().first >= h.level) levelStack.removeLast()
+            val parent = levelStack.lastOrNull()?.second
+            val lineIdForHeading = lineKeyToId[bookPath to h.lineIndex]
+            val tocId = repository.insertTocEntry(
+                TocEntry(
+                    id = 0,
+                    bookId = bookId,
+                    parentId = parent,
+                    textId = null,
+                    text = h.title,
+                    level = h.level,
+                    lineId = lineIdForHeading,
+                    isLastChild = false,
+                    hasChildren = false
+                )
+            )
+            headingLineToToc[h.lineIndex] = tocId
+            levelStack.addLast(h.level to tocId)
+            allTocIds.add(tocId)
+            tocParentMap[tocId] = parent
+            entriesByParent.getOrPut(parent) { mutableListOf() }.add(tocId)
+        }
+
+        // Update hasChildren and isLastChild
+        val parentIds = tocParentMap.values.filterNotNull().toSet()
+        for (tocId in allTocIds) {
+            if (tocId in parentIds) {
+                repository.updateTocEntryHasChildren(tocId, true)
+            }
+        }
+        for ((_, children) in entriesByParent) {
+            if (children.isNotEmpty()) {
+                val lastChildId = children.last()
+                repository.updateTocEntryIsLastChild(lastChildId, true)
+            }
+        }
+
+        // Build line_toc mappings - add to batch instead of individual inserts
+        val sortedKeys = headingLineToToc.keys.sorted()
+        for (lineIdx in payload.lines.indices) {
+            val key = sortedKeys.lastOrNull { it <= lineIdx } ?: continue
+            val tocId = headingLineToToc[key] ?: continue
+            val lineId = lineKeyToId[bookPath to lineIdx] ?: continue
+            synchronized(lineTocBatch) {
+                lineTocBatch.add(lineId to tocId)
+            }
+        }
+    }
+
+    /**
+     * OPTIMIZATION: Process links in parallel with batch insertions
+     */
+    private suspend fun processLinksInParallel(
+        linksDir: Path,
+        refsByCanonical: Map<String, List<RefEntry>>,
+        refsByBase: Map<String, RefEntry>,
+        lineKeyToId: Map<Pair<String, Int>, Long>,
+        lineIdToBookId: Map<Long, Long>,
+        bookMetaById: Map<Long, BookMeta>
+    ) = coroutineScope {
+        val csvFiles = Files.list(linksDir)
+            .filter { it.fileName.toString().endsWith(".csv") }
+            .toList()
+
+        logger.i { "Processing ${csvFiles.size} link files..." }
+
+        // Channel for collecting links from parallel processors
+        val linkChannel = Channel<Link>(Channel.BUFFERED)
+
+        // Launch parallel file processors
+        val processors = csvFiles.map { file ->
+            launch(Dispatchers.IO) {
+                processLinkFile(
+                    file = file,
+                    refsByCanonical = refsByCanonical,
+                    refsByBase = refsByBase,
+                    lineKeyToId = lineKeyToId,
+                    lineIdToBookId = lineIdToBookId,
+                    bookMetaById = bookMetaById,
+                    linkChannel = linkChannel
+                )
+            }
+        }
+
+        // Launch batch inserter
+        val inserter = launch {
+            val batch = mutableListOf<Link>()
+            for (link in linkChannel) {
+                batch += link
+                if (batch.size >= LINK_BATCH_SIZE) {
+                    repository.insertLinksBatch(batch)
+                    batch.clear()
+                }
+            }
+            // Flush remaining
+            if (batch.isNotEmpty()) {
+                repository.insertLinksBatch(batch)
+            }
+        }
+
+        // Wait for all processors to finish
+        processors.joinAll()
+        linkChannel.close()
+
+        // Wait for inserter to finish
+        inserter.join()
+    }
+
+    private suspend fun processLinkFile(
+        file: Path,
+        refsByCanonical: Map<String, List<RefEntry>>,
+        refsByBase: Map<String, RefEntry>,
+        lineKeyToId: Map<Pair<String, Int>, Long>,
+        lineIdToBookId: Map<Long, Long>,
+        bookMetaById: Map<Long, BookMeta>,
+        linkChannel: Channel<Link>
+    ) {
+        Files.newBufferedReader(file).use { reader ->
+            val iter = reader.lineSequence().iterator()
+            if (!iter.hasNext()) return
+            val headers = parseCsvLine(iter.next()).map { normalizeCitation(it) }
+            val idxC1 = headers.indexOf("Citation 1")
+            val idxC2 = headers.indexOf("Citation 2")
+            val idxConn = headers.indexOf("Conection Type")
+            if (idxC1 < 0 || idxC2 < 0 || idxConn < 0) return
+
+            while (iter.hasNext()) {
+                val row = parseCsvLine(iter.next())
+                if (row.isEmpty()) continue
+                val c1 = normalizeCitation(row.getOrNull(idxC1).orEmpty())
+                val c2 = normalizeCitation(row.getOrNull(idxC2).orEmpty())
+                if (c1.isEmpty() || c2.isEmpty()) continue
+                val conn = row.getOrNull(idxConn)?.trim().orEmpty()
+
+                val fromRefs = resolveRefs(c1, refsByCanonical, refsByBase)
+                val toRefs = resolveRefs(c2, refsByCanonical, refsByBase)
+                if (fromRefs.isEmpty() || toRefs.isEmpty()) continue
+
+                for (from in fromRefs) {
+                    for (to in toRefs) {
+                        val srcLine = lineKeyToId[from.path to (from.lineIndex - 1)] ?: continue
+                        val tgtLine = lineKeyToId[to.path to (to.lineIndex - 1)] ?: continue
+                        val baseConnectionType = ConnectionType.fromString(conn)
+                        val (forwardType, reverseType) = resolveDirectionalConnectionTypes(
+                            baseType = baseConnectionType,
+                            sourceBookId = lineBookId(srcLine, lineIdToBookId),
+                            targetBookId = lineBookId(tgtLine, lineIdToBookId),
+                            bookMetaById = bookMetaById
+                        )
+
+                        // Send links to channel
+                        linkChannel.send(Link(
+                            sourceBookId = lineBookId(srcLine, lineIdToBookId),
+                            targetBookId = lineBookId(tgtLine, lineIdToBookId),
+                            sourceLineId = srcLine,
+                            targetLineId = tgtLine,
+                            connectionType = forwardType
+                        ))
+
+                        linkChannel.send(Link(
+                            sourceBookId = lineBookId(tgtLine, lineIdToBookId),
+                            targetBookId = lineBookId(srcLine, lineIdToBookId),
+                            sourceLineId = tgtLine,
+                            targetLineId = srcLine,
+                            connectionType = reverseType
+                        ))
+                    }
+                }
+            }
+        }
     }
 
     private suspend fun buildAltTocStructuresForBook(
@@ -569,14 +728,10 @@ class SefariaDirectImporter(
 
         var hasGeneratedAltStructures = false
 
-        // Treat Bavli/Yerushalmi tractates specially: only top-level alt nodes,
-        // clicking them should jump to the first child (no explicit pages shown).
         val isTalmudTractate = payload.categoriesHe.any { it.contains("תלמוד") }
-        // For Shulchan Arukh codes and Tur we also limit to top-level topics (no siman children in the alt tree)
         val isShulchanArukhCode = payload.categoriesHe.any { it.contains("שולחן ערוך") }
         val isTurCode = payload.categoriesHe.any { it.contains("טור") }
 
-        // Local lookup map for this book: canonical ref -> (lineId, lineIndex)
         val refsForBook = payload.refEntries.map { it.copy(path = bookPath) }
         val bookAliasKeys = buildSet {
             val titles = listOf(
@@ -592,6 +747,7 @@ class SefariaDirectImporter(
                 }
             }
         }.filterNot { it.isBlank() }.toSet()
+
         val canonicalToLine: Map<String, Pair<Long?, Int?>> = buildMap {
             refsForBook.forEach { entry ->
                 val lineIdx = entry.lineIndex - 1
@@ -602,7 +758,7 @@ class SefariaDirectImporter(
                     fun addKey(key: String?) {
                         if (key.isNullOrBlank()) return
                         val current = this[key]?.second
-                        if (current == null || (lineIdx >= 0 && lineIdx < current)) {
+                        if (current == null || (lineIdx in 0..<current)) {
                             put(key, lineId to lineIdx)
                         }
                     }
@@ -612,8 +768,8 @@ class SefariaDirectImporter(
                 }
             }
         }
+
         payload.altStructures.forEach { structure ->
-            // Psalms 30‑day cycle: only show days, not individual chapters
             val isPsalms30DayCycle = structure.key == "30 Day Cycle"
             val structureId = repository.upsertAltTocStructure(
                 AltTocStructure(
@@ -673,7 +829,7 @@ class SefariaDirectImporter(
                         val candidate = "$base:$n"
                         val candidates = listOf(candidate, stripBookAlias(candidate, bookAliasKeys))
                         candidates.forEach { key ->
-                            if (!key.isNullOrBlank()) {
+                            if (key.isNotBlank()) {
                                 canonicalToLine[key]?.let { return it }
                             }
                         }
@@ -691,7 +847,7 @@ class SefariaDirectImporter(
                         if (allowTailFallback) add(tail)
                     }
                     candidates.forEach { key ->
-                        if (!key.isNullOrBlank()) {
+                        if (key.isNotBlank()) {
                             canonicalToLine[key]?.let { return it }
                         }
                     }
@@ -703,7 +859,7 @@ class SefariaDirectImporter(
                             if (allowTailFallback) add(canonicalTail(rangeStart))
                         }
                         rangeCandidates.forEach { key ->
-                            if (!key.isNullOrBlank()) {
+                            if (key.isNotBlank()) {
                                 canonicalToLine[key]?.let { return it }
                             }
                         }
@@ -717,11 +873,11 @@ class SefariaDirectImporter(
                                 chapterStart,
                                 stripBookAlias(chapterStart, bookAliasKeys),
                                 canonicalTail(chapterStart),
-                                chapterKey, // allow bare chapter key
+                                chapterKey,
                                 stripBookAlias(chapterKey, bookAliasKeys)
                             )
                             chapterCandidates.forEach { key ->
-                                if (!key.isNullOrBlank()) {
+                                if (key.isNotBlank()) {
                                     canonicalToLine[key]?.let { return it }
                                 }
                             }
@@ -734,7 +890,6 @@ class SefariaDirectImporter(
                 lookup(citation)?.let { return it }
 
                 if (isChapterOrSimanLevel) {
-                    // Handle siman/chapter-level refs like "Tur, Orach Chayim 1-7" or "Psalms 10-17"
                     val canonical = canonicalCitation(citation)
                     val base = canonical.substringBefore('-').trim()
                     if (!base.contains(':')) {
@@ -779,7 +934,7 @@ class SefariaDirectImporter(
                 if (current?.second != null) return
                 val childWithLine = entriesByParent[tocId]
                     ?.firstNotNullOfOrNull { childId ->
-                        entryLineInfo[childId]?.second?.let { idx -> childId to (entryLineInfo[childId]!!) }
+                        entryLineInfo[childId]?.second?.let { _ -> childId to (entryLineInfo[childId]!!) }
                     }
                 val childLine = childWithLine?.second ?: return
                 val lineId = childLine.first ?: return
@@ -814,7 +969,6 @@ class SefariaDirectImporter(
                 }
                 val isDafNode = node.addressTypes.any { it.equals("Talmud", ignoreCase = true) }
 
-                // Try wholeRef first, then fall back to first child ref that resolves
                 val primaryCandidates = buildList {
                     node.wholeRef?.let { add(it) }
                     addAll(node.refs)
@@ -834,15 +988,12 @@ class SefariaDirectImporter(
                         break
                     }
                 }
-                // If we can't anchor the parent node at all, skip it
                 if (lineId == null || lineIndex == null) return 0L
                 val text = nodeLabel(node, position)
 
-                if (lineId != null) {
-                    val used = usedLineIdsByParent.getOrPut(parentId) { mutableSetOf() }
-                    if (lineId in used) return 0L
-                    used += lineId
-                }
+                val used = usedLineIdsByParent.getOrPut(parentId) { mutableSetOf() }
+                if (lineId in used) return 0L
+                used += lineId
 
                 val tocId = repository.insertAltTocEntry(
                     AltTocEntry(
@@ -859,13 +1010,8 @@ class SefariaDirectImporter(
                 hasGeneratedAltStructures = true
                 entryLineInfo[tocId] = lineId to lineIndex
                 entriesByParent.getOrPut(parentId) { mutableListOf() }.add(tocId)
-                if (lineIndex != null) {
-                    headingLineToToc[lineIndex] = tocId
-                }
+                headingLineToToc[lineIndex] = tocId
 
-                // One extra level: direct children from node.refs (except for Talmud tractates
-                // and Shulchan Arukh codes, where we only want the top-level structure and
-                // clicking it should go to the first child section).
                 var hasChild = false
                 if (!isTalmudTractate && !isShulchanArukhCode && !isTurCode && !isPsalms30DayCycle && node.refs.isNotEmpty()) {
                     for ((idx, ref) in node.refs.withIndex()) {
@@ -875,7 +1021,6 @@ class SefariaDirectImporter(
                             allowChapterFallback = !isDafNode,
                             allowTailFallback = !isDafNode
                         )
-                        // Only create entries that are anchored to a real line
                         if (childLineId == null || childLineIndex == null) continue
 
                         val used = usedLineIdsByParent.getOrPut(tocId) { mutableSetOf() }
@@ -916,8 +1061,8 @@ class SefariaDirectImporter(
                     !node.heTitle.isNullOrBlank() -> node.heTitle
                     position != null -> "פרק ${toGematria(position + 1)}"
                     !node.title.isNullOrBlank() -> node.title
-                    !structure.heTitle.isNullOrBlank() -> structure.heTitle!!
-                    !structure.title.isNullOrBlank() -> structure.title!!
+                    !structure.heTitle.isNullOrBlank() -> structure.heTitle
+                    !structure.title.isNullOrBlank() -> structure.title
                     else -> structure.key
                 }
                 val tocId = repository.insertAltTocEntry(
@@ -937,7 +1082,6 @@ class SefariaDirectImporter(
                 return tocId
             }
 
-            // Traverse the alt tree, keeping grouping nodes (with titles) as containers when they have children.
             suspend fun traverseAltNode(node: AltNodePayload, level: Int, parentId: Long?, position: Int?): Boolean {
                 val hasOwnRefs = node.wholeRef != null || node.refs.isNotEmpty()
                 val hasTitle = !node.heTitle.isNullOrBlank() || !node.title.isNullOrBlank()
@@ -957,9 +1101,9 @@ class SefariaDirectImporter(
                         val (childLineId, childLineIndex) = resolveLineForCitation(
                             ref,
                             isChapterOrSimanLevel = false,
-                        allowChapterFallback = false,
-                        allowTailFallback = false
-                    )
+                            allowChapterFallback = false,
+                            allowTailFallback = false
+                        )
                         if (childLineId == null || childLineIndex == null) return@forEachIndexed
                         val addressValue = computeAddressValue(node, idx)
                         val label = buildChildLabel(node.childLabel, idx, addressValue, node.addressTypes.firstOrNull())
@@ -1020,7 +1164,6 @@ class SefariaDirectImporter(
                             inserted = true
                         }
                     } else {
-                        // No anchored children, drop the container to avoid empty duplicates
                         repository.executeRawQuery("DELETE FROM alt_toc_entry WHERE id=$containerId")
                         entriesByParent[parentId]?.remove(containerId)
                         entryLineInfo.remove(containerId)
@@ -1034,7 +1177,6 @@ class SefariaDirectImporter(
                 traverseAltNode(node, level = 0, parentId = null, position = idx)
             }
 
-            // Mark last child flags (single-level tree)
             for ((_, children) in entriesByParent) {
                 if (children.isNotEmpty()) {
                     val lastChildId = children.last()
@@ -1042,7 +1184,6 @@ class SefariaDirectImporter(
                 }
             }
 
-            // Build line_alt_toc mappings based on nearest heading at or before each line
             val sortedKeys = headingLineToToc.keys.sorted()
             for (lineIdx in 0 until totalLines) {
                 val key = sortedKeys.lastOrNull { it <= lineIdx } ?: continue
@@ -1071,9 +1212,10 @@ class SefariaDirectImporter(
         bookEnTitle: String,
         authors: List<String>
     ): Triple<List<String>, List<RefEntry>, List<Heading>> {
-        val output = mutableListOf<String>()
-        val refs = mutableListOf<RefEntry>()
-        val headings = mutableListOf<Heading>()
+        // Pre-allocate with estimated capacity
+        val output = ArrayList<String>(1000)
+        val refs = ArrayList<RefEntry>(1000)
+        val headings = ArrayList<Heading>(100)
 
         fun headingTagForLevel(level: Int): Pair<String, String> = when (level) {
             0 -> "<h1>" to "</h1>"
@@ -1100,7 +1242,6 @@ class SefariaDirectImporter(
             val isDefault = key.equals("default", ignoreCase = true)
             val hasTitle = heTitle.isNotBlank()
 
-            // Only add heading if we have a title to display
             if (hasTitle) {
                 val tagNode = headingTagForLevel(level)
                 output += "${tagNode.first}$heTitle${tagNode.second}"
@@ -1130,7 +1271,6 @@ class SefariaDirectImporter(
                         append(heRefPrefix)
                         if (!childKey.equals("default", ignoreCase = true) && childHeTitle.isNotBlank()) append(childHeTitle).append(", ")
                     }
-                    // All direct children of a node should be at the same level
                     processNode(child, childText, level + 1, newRefPrefix, newHeRefPrefix)
                 }
             } else {
@@ -1138,7 +1278,6 @@ class SefariaDirectImporter(
                 val depth = node["depth"]?.jsonPrimitive?.intOrNullSafe() ?: sectionNames.size
                 val addressTypes = node["addressTypes"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
                 val referenceableSections = node["referenceableSections"]?.jsonArray?.mapNotNull { it.jsonPrimitive.booleanOrNull } ?: emptyList()
-                // Don't increment level for default nodes without title - they should be siblings, not children
                 val nextLevel = if (hasTitle) level + 1 else level
                 recursiveSections(
                     sectionNames = sectionNames,
@@ -1230,7 +1369,7 @@ class SefariaDirectImporter(
                     RefEntry(
                         ref = cleanRef,
                         heRef = cleanHeRef,
-                        path = "", // filled later when mapping lines
+                        path = "",
                         lineIndex = output.size
                     )
                 )
@@ -1241,7 +1380,6 @@ class SefariaDirectImporter(
         val index = (sectionNames.size - depth).coerceAtLeast(0)
         val sectionName = sectionNames.getOrNull(index) ?: ""
 
-        // Count non-empty items at this depth level to determine if numbering is needed
         val nonEmptyCount = if (depth == 1) {
             text.count { !it.isTriviallyEmpty() }
         } else {
@@ -1251,16 +1389,13 @@ class SefariaDirectImporter(
         text.forEachIndexed { idx, item ->
             if (item.isTriviallyEmpty()) return@forEachIndexed
 
-            // Use addressTypes from schema
             val currentAddressType = addressTypes.getOrNull(addressTypes.size - depth)
             val letter = when (currentAddressType) {
-                "Talmud" -> toDaf(idx + 1)            // Talmud pages use Daf notation
-                "Integer" -> toGematria(idx + 1)      // Prefer gematria even when schema marks Integer
-                else -> toGematria(idx + 1)           // Default to gematria for Hebrew numbering
+                "Talmud" -> toDaf(idx + 1)
+                "Integer" -> toGematria(idx + 1)
+                else -> toGematria(idx + 1)
             }
 
-            // Check if this level should show inline prefixes using schema's referenceableSections
-            // Only add prefix if there's more than one line in the section
             val sectionIndex = sectionNames.size - depth
             val isReferenceable = referenceableSections.getOrNull(sectionIndex) ?: true
             val nextLinePrefix = if (depth == 1 && isReferenceable && currentAddressType != "Integer" && nonEmptyCount > 1) {
@@ -1269,11 +1404,6 @@ class SefariaDirectImporter(
                 ""
             }
 
-            // Add intermediate section headings using schema's referenceableSections
-            // Only generate headings if:
-            // 1. depth > 1 (not the leaf level)
-            // 2. sectionName is not empty (schema defines a name for this level)
-            // 3. isReferenceable is true (schema marks this level as referenceable)
             if (depth > 1 && sectionName.isNotBlank() && isReferenceable) {
                 val tag = when (level) {
                     1 -> "<h2>" to "</h2>"
@@ -1291,17 +1421,16 @@ class SefariaDirectImporter(
 
             val newRefPrefix = buildString {
                 append(refPrefix)
-                // Use addressTypes for English reference format
                 val refNumber = when (currentAddressType) {
-                    "Talmud" -> toEnglishDaf(idx + 1)  // e.g., "2a", "2b"
-                    else -> (idx + 1).toString()  // Default to integer for English references
+                    "Talmud" -> toEnglishDaf(idx + 1)
+                    else -> (idx + 1).toString()
                 }
                 append(refNumber)
                 append(":")
             }
             val newHeRefPrefix = buildString {
                 append(heRefPrefix)
-                append(letter)  // Use the same letter variable we computed above
+                append(letter)
                 append(", ")
             }
 
@@ -1318,8 +1447,8 @@ class SefariaDirectImporter(
                 bookHeTitle = bookHeTitle,
                 headings = headings,
                 linePrefix = nextLinePrefix,
-                addressTypes = addressTypes,  // Pass addressTypes through recursion
-                referenceableSections = referenceableSections  // Pass referenceableSections through recursion
+                addressTypes = addressTypes,
+                referenceableSections = referenceableSections
             )
         }
     }
@@ -1358,7 +1487,7 @@ class SefariaDirectImporter(
     }
 
     private fun buildSchemaLookup(schemaDir: Path): Map<String, Path> {
-        val lookup = mutableMapOf<String, Path>()
+        val lookup = ConcurrentHashMap<String, Path>()
         Files.newDirectoryStream(schemaDir) { it.fileName.toString().endsWith(".json") }.use { ds ->
             for (schemaPath in ds) {
                 runCatching {
@@ -1402,8 +1531,6 @@ class SefariaDirectImporter(
 
     private fun sanitizeFolder(name: String?): String {
         if (name.isNullOrBlank()) return ""
-        // Convert ASCII double quotes to Hebrew guersayim (״) instead of removing them
-        // Sefaria uses " instead of ״ in their JSON
         return name.replace("\"", "״").trim()
     }
 
@@ -1480,8 +1607,15 @@ class SefariaDirectImporter(
     private fun trimTrailingSeparators(value: String): String =
         value.trimEnd(':', ' ', ',')
 
+    // OPTIMIZATION: Pre-computed gematria lookup table for common values
+    private val gematriaCache = ConcurrentHashMap<Int, String>()
+
     private fun toGematria(num: Int): String {
         if (num <= 0) return num.toString()
+
+        // Check cache first
+        gematriaCache[num]?.let { return it }
+
         val thousands = num / 1000
         var remainder = num % 1000
         val builder = StringBuilder()
@@ -1546,7 +1680,12 @@ class SefariaDirectImporter(
             }
         }
 
-        return builder.toString()
+        val result = builder.toString()
+        // Cache only small values to avoid memory bloat
+        if (num < 10000) {
+            gematriaCache[num] = result
+        }
+        return result
     }
 
     private fun toDaf(index: Int): String {
@@ -1640,11 +1779,9 @@ class SefariaDirectImporter(
 
     private fun canonicalBase(citation: String): String {
         val normalized = canonicalCitation(citation)
-        // For Talmud, keep daf+amud (e.g., "2a") as base; strip only the line/segment after colon
         val stripAfterColon = normalized.replace(Regex(":\\d+[ab]?(?:-\\d+[ab]?)?$"), "")
-        // If nothing left (e.g., no colon), fall back to removing trailing line numbers after space
         return stripAfterColon
-            .replace(Regex(" +(\\d+[ab]?)$"), " $1") // keep daf marker
+            .replace(Regex(" +(\\d+[ab]?)$"), " $1")
             .trim()
     }
 
@@ -1673,8 +1810,6 @@ class SefariaDirectImporter(
             }
         }
 
-        // If the citation stops one level early (e.g., "96:4" vs stored "96:4:1"),
-        // try to anchor to the first child by appending :1.
         if (canonical.count { it == ':' } == 1) {
             val canonicalWithOne = "$canonical:1"
             refsByCanonical[canonicalWithOne]?.let { if (it.isNotEmpty()) return it }
@@ -1695,7 +1830,6 @@ class SefariaDirectImporter(
         targetBookId: Long,
         bookMetaById: Map<Long, BookMeta>
     ): Pair<ConnectionType, ConnectionType> {
-        // Only COMMENTARY and TARGUM need directional normalization.
         if (baseType != ConnectionType.COMMENTARY && baseType != ConnectionType.TARGUM) {
             return baseType to baseType
         }
@@ -1707,19 +1841,15 @@ class SefariaDirectImporter(
             return when (baseType) {
                 ConnectionType.COMMENTARY ->
                     if (sourceIsSecondary) {
-                        // source = commentary, target = base/source text
                         ConnectionType.SOURCE to ConnectionType.COMMENTARY
                     } else {
-                        // source = base/source text, target = commentary
                         ConnectionType.COMMENTARY to ConnectionType.SOURCE
                     }
 
                 ConnectionType.TARGUM ->
                     if (sourceIsSecondary) {
-                        // source = targum, target = base/source text
                         ConnectionType.SOURCE to ConnectionType.TARGUM
                     } else {
-                        // source = base/source text, target = targum
                         ConnectionType.TARGUM to ConnectionType.SOURCE
                     }
 
@@ -1727,34 +1857,25 @@ class SefariaDirectImporter(
             }
         }
 
-        // Rule 1: Base book vs non-base book
         if (sourceMeta.isBaseBook && !targetMeta.isBaseBook) {
-            // target is secondary (commentary/targum)
             return typesFor(sourceIsSecondary = false)
         }
         if (!sourceMeta.isBaseBook && targetMeta.isBaseBook) {
-            // source is secondary (commentary/targum)
             return typesFor(sourceIsSecondary = true)
         }
 
-        // Rule 2: Both base books — use hierarchy (category level) then bookId as tie-breaker
         val sourceLevel = sourceMeta.categoryLevel
         val targetLevel = targetMeta.categoryLevel
         if (sourceLevel < targetLevel) {
-            // target is deeper in the tree -> treat as secondary
             return typesFor(sourceIsSecondary = false)
         }
         if (targetLevel < sourceLevel) {
-            // source is deeper in the tree -> treat as secondary
             return typesFor(sourceIsSecondary = true)
         }
 
-        // Tie-breaker: higher bookId is treated as the source
         return if (sourceBookId > targetBookId) {
-            // source comes later -> treat as secondary
             typesFor(sourceIsSecondary = true)
         } else {
-            // target comes later -> treat as secondary
             typesFor(sourceIsSecondary = false)
         }
     }
@@ -1831,7 +1952,6 @@ class SefariaDirectImporter(
         category: Category,
         booksByCategory: Map<Long, List<Book>>
     ): CatalogCategory {
-        // Get books in this category and sort by order
         val catBooks = booksByCategory[category.id]?.map { book ->
             CatalogBook(
                 id = book.id,
@@ -1850,7 +1970,6 @@ class SefariaDirectImporter(
             )
         }?.sortedBy { it.order } ?: emptyList()
 
-        // Get subcategories and build them recursively, sorted by order
         val subCategories = repository.getCategoryChildren(category.id)
             .sortedBy { it.order }
             .map {
@@ -1860,8 +1979,8 @@ class SefariaDirectImporter(
         return CatalogCategory(
             id = category.id,
             title = category.title,
-            level = category.level,      // Use DB value, not calculated!
-            parentId = category.parentId, // Use DB value, not calculated!
+            level = category.level,
+            parentId = category.parentId,
             books = catBooks,
             subcategories = subCategories
         )
@@ -1873,6 +1992,7 @@ class SefariaDirectImporter(
         return total
     }
 
+    @OptIn(ExperimentalSerializationApi::class)
     private fun saveCatalog(catalog: PrecomputedCatalog, outputPath: Path) {
         val bytes = ProtoBuf.encodeToByteArray(PrecomputedCatalog.serializer(), catalog)
         outputPath.toFile().parentFile?.mkdirs()
