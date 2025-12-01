@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.dao
 
 import io.github.kdroidfilter.seforimlibrary.core.models.PrecomputedCatalog
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.protobuf.ProtoBuf
 import java.io.File
 import java.nio.file.Path
@@ -19,6 +20,7 @@ object CatalogLoader {
      * @param dbPath Path to the database file. The catalog file should be in the same directory.
      * @return The precomputed catalog, or null if the file doesn't exist or can't be loaded
      */
+    @OptIn(ExperimentalSerializationApi::class)
     fun loadCatalog(dbPath: String): PrecomputedCatalog? {
         return try {
             val dbFile = File(dbPath)

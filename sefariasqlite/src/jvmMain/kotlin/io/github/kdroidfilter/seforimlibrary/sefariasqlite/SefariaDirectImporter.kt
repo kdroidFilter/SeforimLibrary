@@ -768,6 +768,7 @@ class SefariaDirectImporter(
                 }
             }
         }
+        val maxColonDepth = canonicalToLine.keys.maxOfOrNull { key -> key.count { it == ':' } } ?: 0
 
         payload.altStructures.forEach { structure ->
             val isPsalms30DayCycle = structure.key == "30 Day Cycle"
@@ -820,6 +821,19 @@ class SefariaDirectImporter(
             ): Pair<Long?, Int?> {
                 if (citation.isNullOrBlank()) return null to null
 
+                fun expandedCandidates(base: String): List<String> {
+                    if (base.isBlank() || maxColonDepth <= 0) return emptyList()
+                    val colonCount = base.count { it == ':' }
+                    if (colonCount >= maxColonDepth) return emptyList()
+                    val expansions = mutableListOf<String>()
+                    var current = base
+                    repeat(maxColonDepth - colonCount) {
+                        current += ":1"
+                        expansions += current
+                    }
+                    return expansions
+                }
+
                 fun fallbackWithinChapter(canonical: String): Pair<Long?, Int?>? {
                     if (!canonical.contains(':')) return null
                     val base = canonical.substringBefore(':')
@@ -849,6 +863,9 @@ class SefariaDirectImporter(
                     candidates.forEach { key ->
                         if (key.isNotBlank()) {
                             canonicalToLine[key]?.let { return it }
+                            for (expanded in expandedCandidates(key)) {
+                                canonicalToLine[expanded]?.let { return it }
+                            }
                         }
                     }
                     val rangeStart = citationRangeStart(canonical)
@@ -861,6 +878,9 @@ class SefariaDirectImporter(
                         rangeCandidates.forEach { key ->
                             if (key.isNotBlank()) {
                                 canonicalToLine[key]?.let { return it }
+                                for (expanded in expandedCandidates(key)) {
+                                    canonicalToLine[expanded]?.let { return it }
+                                }
                             }
                         }
                     }
@@ -879,6 +899,9 @@ class SefariaDirectImporter(
                             chapterCandidates.forEach { key ->
                                 if (key.isNotBlank()) {
                                     canonicalToLine[key]?.let { return it }
+                                    for (expanded in expandedCandidates(key)) {
+                                        canonicalToLine[expanded]?.let { return it }
+                                    }
                                 }
                             }
                         }
@@ -965,7 +988,8 @@ class SefariaDirectImporter(
                 val isChapterOrSimanLevel = node.addressTypes.any {
                     it.equals("Siman", ignoreCase = true) ||
                             it.equals("Perek", ignoreCase = true) ||
-                            it.equals("Chapter", ignoreCase = true)
+                            it.equals("Chapter", ignoreCase = true) ||
+                            it.equals("Integer", ignoreCase = true)
                 }
                 val isDafNode = node.addressTypes.any { it.equals("Talmud", ignoreCase = true) }
 
