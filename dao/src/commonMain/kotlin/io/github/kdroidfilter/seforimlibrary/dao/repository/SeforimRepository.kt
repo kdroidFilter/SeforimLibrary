@@ -134,6 +134,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     /**
+     * Returns all TOC entries for a book (flat list).
+     */
+    suspend fun getTocEntriesForBook(bookId: Long): List<TocEntry> = withContext(Dispatchers.IO) {
+        database.tocQueriesQueries.selectByBookId(bookId).executeAsList().map { it.toModel() }
+    }
+
+    /**
      * Returns the TOC entry whose heading line is the given line id, or null if not a TOC heading.
      */
     suspend fun getHeadingTocEntryByLineId(lineId: Long): TocEntry? = withContext(Dispatchers.IO) {
@@ -1190,6 +1197,10 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     suspend fun getAltTocChildren(parentId: Long): List<AltTocEntry> = withContext(Dispatchers.IO) {
         database.altTocEntryQueriesQueries.selectAltChildren(parentId).executeAsList().map { it.toModel() }
+    }
+
+    suspend fun getAltTocEntriesForStructure(structureId: Long): List<AltTocEntry> = withContext(Dispatchers.IO) {
+        database.altTocEntryQueriesQueries.selectAltEntriesByStructureId(structureId).executeAsList().map { it.toModel() }
     }
 
     // --- Alternative line ⇄ TOC mapping ---
