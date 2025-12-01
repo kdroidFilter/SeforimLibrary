@@ -302,3 +302,16 @@ CREATE TABLE IF NOT EXISTS book_acronym (
 
 -- Index to quickly find books by acronym term
 CREATE INDEX IF NOT EXISTS idx_book_acronym_term ON book_acronym(term);
+
+-- Default commentators table: stores per-book default commentator selections
+CREATE TABLE IF NOT EXISTS default_commentator (
+    bookId INTEGER NOT NULL,
+    commentatorBookId INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    PRIMARY KEY (bookId, commentatorBookId),
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
+    FOREIGN KEY (commentatorBookId) REFERENCES book(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_default_commentator_book ON default_commentator(bookId);
+CREATE INDEX IF NOT EXISTS idx_default_commentator_commentator ON default_commentator(commentatorBookId);

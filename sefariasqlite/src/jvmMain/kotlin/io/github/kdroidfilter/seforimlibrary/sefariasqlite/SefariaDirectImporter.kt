@@ -7,6 +7,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import kotlinx.serialization.protobuf.ProtoBuf
 import java.nio.file.Files
@@ -91,6 +92,12 @@ class SefariaDirectImporter(
         val startingAddress: String?,
         val offset: Int?,
         val children: List<AltNodePayload>
+    )
+
+    @Serializable
+    private data class DefaultCommentatorsEntry(
+        val book: String,
+        val commentators: List<String>
     )
 
     /**
@@ -199,6 +206,28 @@ class SefariaDirectImporter(
         emptyList()
     }
 
+    /**
+     * Loads default commentators configuration from bundled JSON.
+     * Returns a map keyed by normalized base-book title → ordered list of normalized commentator titles.
+     */
+    private fun loadDefaultCommentatorsConfig(): Map<String, List<String>> = try {
+        val stream = this::class.java.classLoader.getResourceAsStream("default_commentators.json") ?: return emptyMap()
+        val jsonText = stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        val entries = json.decodeFromString<List<DefaultCommentatorsEntry>>(jsonText)
+        entries.mapNotNull { entry ->
+            val bookKey = normalizeTitleKey(entry.book)
+            if (bookKey.isNullOrBlank()) return@mapNotNull null
+            val commentatorKeys = entry.commentators
+                .mapNotNull { normalizeTitleKey(it) }
+                .filter { it.isNotBlank() }
+            if (commentatorKeys.isEmpty()) return@mapNotNull null
+            bookKey to commentatorKeys
+        }.toMap()
+    } catch (e: Exception) {
+        logger.w(e) { "Unable to read default_commentators.json, continuing without default commentators" }
+        emptyMap()
+    }
+
     private fun applyPriorityOrdering(
         payloads: List<BookPayload>,
         priorityEntries: List<String>
@@ -243,6 +272,9 @@ class SefariaDirectImporter(
         val priorityEntries = loadPriorityList()
         val (orderedBookPayloads, missingPriorityEntries) = applyPriorityOrdering(bookPayloads, priorityEntries)
         val baseBookKeys = priorityEntries.toSet()
+
+        // Load default commentators configuration (per base-book title) from resources
+        val defaultCommentatorsConfig = loadDefaultCommentatorsConfig()
 
         if (priorityEntries.isNotEmpty()) {
             val matched = priorityEntries.size - missingPriorityEntries.size
@@ -296,6 +328,7 @@ class SefariaDirectImporter(
         val lineIdToBookId = ConcurrentHashMap<Long, Long>()
         val allRefsWithPath = mutableListOf<RefEntry>()
         val bookMetaById = ConcurrentHashMap<Long, BookMeta>()
+        val normalizedTitleToBookId = ConcurrentHashMap<String, Long>()
 
         // OPTIMIZATION: Batch line insertions
         val lineBatch = mutableListOf<Line>()
@@ -329,6 +362,15 @@ class SefariaDirectImporter(
                 hasAltStructures = false
             )
             repository.insertBook(book)
+
+            // Track normalized titles (Hebrew/English) for later default-commentator mapping
+            listOf(payload.heTitle, payload.enTitle).forEach { title ->
+                val normalized = normalizeTitleKey(title)
+                if (normalized != null) {
+                    normalizedTitleToBookId.putIfAbsent(normalized, bookId)
+                }
+            }
+
             val catLevel = categoryLevelsById[catId] ?: payload.categoriesHe.lastIndex.coerceAtLeast(0)
             bookMetaById[bookId] = BookMeta(isBaseBook = book.isBaseBook, categoryLevel = catLevel)
 
@@ -402,6 +444,11 @@ class SefariaDirectImporter(
         }
 
         logger.i { "Inserted all books and lines" }
+
+        // Apply default commentators mapping based on configuration and inserted books
+        if (defaultCommentatorsConfig.isNotEmpty()) {
+            applyDefaultCommentators(defaultCommentatorsConfig, normalizedTitleToBookId)
+        }
 
         // Build citation lookup for links
         val refsByCanonical = allRefsWithPath.groupBy { canonicalCitation(it.ref) }
@@ -1560,7 +1607,20 @@ class SefariaDirectImporter(
 
     private fun normalizeTitleKey(value: String?): String? {
         if (value.isNullOrBlank()) return null
-        return value.lowercase().replace("\\s+".toRegex(), " ").replace('_', ' ').trim()
+
+        // Normalize various quote styles (ASCII and Hebrew) so titles that differ
+        // only by גרש/גרשיים or straight quotes map to the same key.
+        val withoutQuotes = value
+            .replace("\"", "")
+            .replace("'", "")
+            .replace("\u05F3", "") // Hebrew geresh
+            .replace("\u05F4", "") // Hebrew gershayim
+
+        return withoutQuotes
+            .lowercase()
+            .replace("\\s+".toRegex(), " ")
+            .replace('_', ' ')
+            .trim()
     }
 
     private fun sanitizeFolder(name: String?): String {
@@ -1856,6 +1916,39 @@ class SefariaDirectImporter(
             refsByBase[baseWithOne]?.let { return listOf(it) }
         }
         return emptyList()
+    }
+
+    private suspend fun applyDefaultCommentators(
+        defaultsByBookKey: Map<String, List<String>>,
+        normalizedTitleToBookId: Map<String, Long>
+    ) {
+        if (defaultsByBookKey.isEmpty()) return
+
+        logger.i { "Applying default commentators for ${defaultsByBookKey.size} base books" }
+
+        // Clear previous mappings for a clean regeneration
+        repository.clearAllDefaultCommentators()
+
+        var totalRows = 0
+
+        defaultsByBookKey.forEach { (bookKey, commentatorKeys) ->
+            val baseBookId = normalizedTitleToBookId[bookKey] ?: return@forEach
+
+            val uniqueCommentatorIds = LinkedHashSet<Long>()
+            commentatorKeys.forEach { commentatorKey ->
+                val commentatorBookId = normalizedTitleToBookId[commentatorKey]
+                if (commentatorBookId != null && commentatorBookId != baseBookId) {
+                    uniqueCommentatorIds += commentatorBookId
+                }
+            }
+
+            if (uniqueCommentatorIds.isNotEmpty()) {
+                repository.setDefaultCommentatorsForBook(baseBookId, uniqueCommentatorIds.toList())
+                totalRows += uniqueCommentatorIds.size
+            }
+        }
+
+        logger.i { "Inserted $totalRows default commentator rows" }
     }
 
     private fun resolveDirectionalConnectionTypes(

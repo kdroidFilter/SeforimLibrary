@@ -1962,6 +1962,37 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         count
     }
 
+    // --- Default commentators ---
+
+    /**
+     * Returns the list of commentator book IDs configured as defaults for the given book.
+     */
+    suspend fun getDefaultCommentatorIdsForBook(bookId: Long): List<Long> = withContext(Dispatchers.IO) {
+        database.defaultCommentatorQueriesQueries.selectByBookId(bookId).executeAsList()
+    }
+
+    /**
+     * Replaces the default commentators list for a given book with the provided ordered IDs.
+     */
+    suspend fun setDefaultCommentatorsForBook(bookId: Long, commentatorBookIds: List<Long>) = withContext(Dispatchers.IO) {
+        database.defaultCommentatorQueriesQueries.deleteByBookId(bookId)
+        commentatorBookIds.forEachIndexed { index, commentatorBookId ->
+            database.defaultCommentatorQueriesQueries.insert(
+                bookId = bookId,
+                commentatorBookId = commentatorBookId,
+                position = index.toLong()
+            )
+        }
+    }
+
+    /**
+     * Deletes all default commentator mappings from the database.
+     * Intended for use during full database regeneration.
+     */
+    suspend fun clearAllDefaultCommentators() = withContext(Dispatchers.IO) {
+        database.defaultCommentatorQueriesQueries.deleteAll()
+    }
+
     // --- Acronyms ---
 
     /**

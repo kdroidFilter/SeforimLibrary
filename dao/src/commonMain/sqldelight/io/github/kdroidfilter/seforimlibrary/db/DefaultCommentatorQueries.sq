@@ -1,0 +1,20 @@
+-- Queries for default commentators per book
+
+selectByBookId:
+SELECT commentatorBookId
+FROM default_commentator
+WHERE bookId = ?
+ORDER BY position;
+
+insert:
+INSERT INTO default_commentator (bookId, commentatorBookId, position)
+VALUES (?, ?, ?)
+ON CONFLICT(bookId, commentatorBookId) DO UPDATE SET
+    position = excluded.position;
+
+deleteByBookId:
+DELETE FROM default_commentator
+WHERE bookId = ?;
+
+deleteAll:
+DELETE FROM default_commentator;
