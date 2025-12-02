@@ -406,6 +406,16 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     /**
+     * Lightweight helper for commentary flows: loads core book data and publication
+     * dates without joining authors, topics, or publication places.
+     */
+    suspend fun getBookWithPubDates(id: Long): Book? = withContext(Dispatchers.IO) {
+        val bookData = database.bookQueriesQueries.selectById(id).executeAsOneOrNull() ?: return@withContext null
+        val pubDates = getBookPubDates(bookData.id)
+        return@withContext bookData.toModel(json, pubDates = pubDates)
+    }
+
+    /**
      * Retrieves all books in a specific category.
      *
      * @param categoryId The ID of the category
@@ -1451,6 +1461,30 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             }
     }
 
+    /**
+     * Lightweight variant for prefetch/navigation use cases; omits target text content.
+     */
+    suspend fun getCommentarySummariesForLines(
+        lineIds: List<Long>,
+        activeCommentatorIds: Set<Long> = emptySet()
+    ): List<CommentarySummary> = withContext(Dispatchers.IO) {
+        database.linkQueriesQueries.selectLinkSummariesBySourceLineIds(lineIds).executeAsList()
+            .filter { activeCommentatorIds.isEmpty() || it.targetBookId in activeCommentatorIds }
+            .map {
+                CommentarySummary(
+                    link = Link(
+                        id = it.id,
+                        sourceBookId = it.sourceBookId,
+                        targetBookId = it.targetBookId,
+                        sourceLineId = it.sourceLineId,
+                        targetLineId = it.targetLineId,
+                        connectionType = ConnectionType.fromString(it.connectionType)
+                    ),
+                    targetBookTitle = it.targetBookTitle
+                )
+            }
+    }
+
     suspend fun getAvailableCommentators(bookId: Long): List<CommentatorInfo> =
         withContext(Dispatchers.IO) {
             database.linkQueriesQueries.selectCommentatorsByBook(bookId).executeAsList()
@@ -1471,12 +1505,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         offset: Int,
         limit: Int
     ): List<CommentaryWithText> = withContext(Dispatchers.IO) {
-        database.linkQueriesQueries.selectLinksBySourceLineIds(lineIds)
-            .executeAsList()
-            .filter { activeCommentatorIds.isEmpty() || it.targetBookId in activeCommentatorIds }
-            .drop(offset)
-            .take(limit)
-            .map {
+        if (lineIds.isEmpty()) return@withContext emptyList()
+        if (activeCommentatorIds.isEmpty()) {
+            database.linkQueriesQueries.selectLinksBySourceLineIdsPaged(
+                lineIds,
+                limit.toLong(),
+                offset.toLong()
+            ).executeAsList().map {
                 CommentaryWithText(
                     link = Link(
                         id = it.id,
@@ -1490,6 +1525,27 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                     targetText = it.targetText
                 )
             }
+        } else {
+            database.linkQueriesQueries.selectLinksBySourceLineIdsAndTargetsPaged(
+                lineIds,
+                activeCommentatorIds.toList(),
+                limit.toLong(),
+                offset.toLong()
+            ).executeAsList().map {
+                CommentaryWithText(
+                    link = Link(
+                        id = it.id,
+                        sourceBookId = it.sourceBookId,
+                        targetBookId = it.targetBookId,
+                        sourceLineId = it.sourceLineId,
+                        targetLineId = it.targetLineId,
+                        connectionType = ConnectionType.fromString(it.connectionType)
+                    ),
+                    targetBookTitle = it.targetBookTitle,
+                    targetText = it.targetText
+                )
+            }
+        }
     }
 
     suspend fun getAvailableCommentators(
@@ -2098,4 +2154,9 @@ data class CommentaryWithText(
     val link: Link,
     val targetBookTitle: String,
     val targetText: String
+)
+
+data class CommentarySummary(
+    val link: Link,
+    val targetBookTitle: String
 )

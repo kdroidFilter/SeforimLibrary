@@ -18,6 +18,34 @@ JOIN line tl ON l.targetLineId = tl.id
 WHERE l.sourceLineId IN ?
 ORDER BY b.orderIndex;
 
+selectLinksBySourceLineIdsPaged:
+SELECT l.*, ct.name AS connectionType, b.title AS targetBookTitle, tl.content AS targetText
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN book b ON l.targetBookId = b.id
+JOIN line tl ON l.targetLineId = tl.id
+WHERE l.sourceLineId IN ?
+ORDER BY b.orderIndex
+LIMIT ? OFFSET ?;
+
+selectLinksBySourceLineIdsAndTargetsPaged:
+SELECT l.*, ct.name AS connectionType, b.title AS targetBookTitle, tl.content AS targetText
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN book b ON l.targetBookId = b.id
+JOIN line tl ON l.targetLineId = tl.id
+WHERE l.sourceLineId IN ? AND l.targetBookId IN ?
+ORDER BY b.orderIndex
+LIMIT ? OFFSET ?;
+
+selectLinkSummariesBySourceLineIds:
+SELECT l.*, ct.name AS connectionType, b.title AS targetBookTitle
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN book b ON l.targetBookId = b.id
+WHERE l.sourceLineId IN ?
+ORDER BY b.orderIndex;
+
 selectLinksBySourceBook:
 SELECT l.*, ct.name AS connectionType
 FROM link l
