@@ -100,6 +100,12 @@ class SefariaDirectImporter(
         val commentators: List<String>
     )
 
+    @Serializable
+    private data class DefaultTargumEntry(
+        val book: String,
+        val targumim: List<String>
+    )
+
     /**
      * Parse table_of_contents.json to extract category and book orders
      */
@@ -228,6 +234,28 @@ class SefariaDirectImporter(
         emptyMap()
     }
 
+    /**
+     * Loads default targum configuration from bundled JSON.
+     * Returns a map keyed by normalized base-book title → ordered list of normalized targum titles.
+     */
+    private fun loadDefaultTargumConfig(): Map<String, List<String>> = try {
+        val stream = this::class.java.classLoader.getResourceAsStream("default_targumim.json") ?: return emptyMap()
+        val jsonText = stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        val entries = json.decodeFromString<List<DefaultTargumEntry>>(jsonText)
+        entries.mapNotNull { entry ->
+            val bookKey = normalizeTitleKey(entry.book)
+            if (bookKey.isNullOrBlank()) return@mapNotNull null
+            val targumKeys = entry.targumim
+                .mapNotNull { normalizeTitleKey(it) }
+                .filter { it.isNotBlank() }
+            if (targumKeys.isEmpty()) return@mapNotNull null
+            bookKey to targumKeys
+        }.toMap()
+    } catch (e: Exception) {
+        logger.w(e) { "Unable to read default_targumim.json, continuing without default targumim" }
+        emptyMap()
+    }
+
     private fun applyPriorityOrdering(
         payloads: List<BookPayload>,
         priorityEntries: List<String>
@@ -275,6 +303,8 @@ class SefariaDirectImporter(
 
         // Load default commentators configuration (per base-book title) from resources
         val defaultCommentatorsConfig = loadDefaultCommentatorsConfig()
+        // Load default targum configuration (per base-book title) from resources
+        val defaultTargumConfig = loadDefaultTargumConfig()
 
         if (priorityEntries.isNotEmpty()) {
             val matched = priorityEntries.size - missingPriorityEntries.size
@@ -448,6 +478,11 @@ class SefariaDirectImporter(
         // Apply default commentators mapping based on configuration and inserted books
         if (defaultCommentatorsConfig.isNotEmpty()) {
             applyDefaultCommentators(defaultCommentatorsConfig, normalizedTitleToBookId)
+        }
+
+        // Apply default targumim mapping based on configuration and inserted books
+        if (defaultTargumConfig.isNotEmpty()) {
+            applyDefaultTargumim(defaultTargumConfig, normalizedTitleToBookId)
         }
 
         // Build citation lookup for links
@@ -1949,6 +1984,38 @@ class SefariaDirectImporter(
         }
 
         logger.i { "Inserted $totalRows default commentator rows" }
+    }
+
+    private suspend fun applyDefaultTargumim(
+        defaultsByBookKey: Map<String, List<String>>,
+        normalizedTitleToBookId: Map<String, Long>
+    ) {
+        if (defaultsByBookKey.isEmpty()) return
+
+        logger.i { "Applying default targumim for ${defaultsByBookKey.size} base books" }
+
+        repository.clearAllDefaultTargum()
+
+        var totalRows = 0
+
+        defaultsByBookKey.forEach { (bookKey, targumKeys) ->
+            val baseBookId = normalizedTitleToBookId[bookKey] ?: return@forEach
+
+            val uniqueTargumIds = LinkedHashSet<Long>()
+            targumKeys.forEach { targumKey ->
+                val targumBookId = normalizedTitleToBookId[targumKey]
+                if (targumBookId != null && targumBookId != baseBookId) {
+                    uniqueTargumIds += targumBookId
+                }
+            }
+
+            if (uniqueTargumIds.isNotEmpty()) {
+                repository.setDefaultTargumForBook(baseBookId, uniqueTargumIds.toList())
+                totalRows += uniqueTargumIds.size
+            }
+        }
+
+        logger.i { "Inserted $totalRows default targum rows" }
     }
 
     private fun resolveDirectionalConnectionTypes(

@@ -2049,6 +2049,37 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         database.defaultCommentatorQueriesQueries.deleteAll()
     }
 
+    // --- Default targumim ---
+
+    /**
+     * Returns the list of targum book IDs configured as defaults for the given book.
+     */
+    suspend fun getDefaultTargumIdsForBook(bookId: Long): List<Long> = withContext(Dispatchers.IO) {
+        database.defaultTargumQueriesQueries.selectByBookId(bookId).executeAsList()
+    }
+
+    /**
+     * Replaces the default targum list for a given book with the provided ordered IDs.
+     */
+    suspend fun setDefaultTargumForBook(bookId: Long, targumBookIds: List<Long>) = withContext(Dispatchers.IO) {
+        database.defaultTargumQueriesQueries.deleteByBookId(bookId)
+        targumBookIds.forEachIndexed { index, targumBookId ->
+            database.defaultTargumQueriesQueries.insert(
+                bookId = bookId,
+                targumBookId = targumBookId,
+                position = index.toLong()
+            )
+        }
+    }
+
+    /**
+     * Deletes all default targum mappings from the database.
+     * Intended for use during full database regeneration.
+     */
+    suspend fun clearAllDefaultTargum() = withContext(Dispatchers.IO) {
+        database.defaultTargumQueriesQueries.deleteAll()
+    }
+
     // --- Acronyms ---
 
     /**

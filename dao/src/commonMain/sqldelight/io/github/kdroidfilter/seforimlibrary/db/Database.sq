@@ -315,3 +315,16 @@ CREATE TABLE IF NOT EXISTS default_commentator (
 
 CREATE INDEX IF NOT EXISTS idx_default_commentator_book ON default_commentator(bookId);
 CREATE INDEX IF NOT EXISTS idx_default_commentator_commentator ON default_commentator(commentatorBookId);
+
+-- Default targum table: stores per-book default targum selections
+CREATE TABLE IF NOT EXISTS default_targum (
+    bookId INTEGER NOT NULL,
+    targumBookId INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    PRIMARY KEY (bookId, targumBookId),
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
+    FOREIGN KEY (targumBookId) REFERENCES book(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_default_targum_book ON default_targum(bookId);
+CREATE INDEX IF NOT EXISTS idx_default_targum_target ON default_targum(targumBookId);

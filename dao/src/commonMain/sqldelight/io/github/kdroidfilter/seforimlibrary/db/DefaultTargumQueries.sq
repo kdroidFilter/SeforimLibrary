@@ -1,0 +1,20 @@
+-- Queries for default targumim per book
+
+selectByBookId:
+SELECT targumBookId
+FROM default_targum
+WHERE bookId = ?
+ORDER BY position;
+
+insert:
+INSERT INTO default_targum (bookId, targumBookId, position)
+VALUES (?, ?, ?)
+ON CONFLICT(bookId, targumBookId) DO UPDATE SET
+    position = excluded.position;
+
+deleteByBookId:
+DELETE FROM default_targum
+WHERE bookId = ?;
+
+deleteAll:
+DELETE FROM default_targum;
