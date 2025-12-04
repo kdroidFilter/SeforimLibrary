@@ -3,6 +3,9 @@ package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
+import io.github.kdroidfilter.seforimlibrary.generator.lucene.LookupIndexWriter
+import io.github.kdroidfilter.seforimlibrary.generator.lucene.TextIndexWriter
+import io.github.kdroidfilter.seforimlibrary.generator.utils.HebrewTextUtils
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.withPermit
@@ -10,6 +13,8 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import kotlinx.serialization.protobuf.ProtoBuf
+import org.jsoup.Jsoup
+import org.jsoup.safety.Safelist
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
@@ -29,6 +34,8 @@ class SefariaDirectImporter(
     private val exportRoot: Path,
     private val repository: SeforimRepository,
     private val catalogOutput: Path,
+    private val textIndex: TextIndexWriter? = null,
+    private val lookupIndex: LookupIndexWriter? = null,
     private val logger: Logger = Logger.withTag("SefariaDirectImporter")
 ) {
 
@@ -393,6 +400,25 @@ class SefariaDirectImporter(
             )
             repository.insertBook(book)
 
+            val titleTerms = buildSet {
+                add(payload.heTitle)
+                add(sanitizeIndexTerm(payload.heTitle))
+                add(payload.enTitle)
+                add(sanitizeIndexTerm(payload.enTitle))
+            }.filter { it.isNotBlank() }
+            textIndex?.let { writer ->
+                titleTerms.forEach { term ->
+                    writer.addBookTitleTerm(bookId, catId, payload.heTitle, term)
+                }
+            }
+            lookupIndex?.addBook(bookId, catId, payload.heTitle, titleTerms)
+
+            val orderIndexForBoost = if (book.isBaseBook) {
+                (book.order.toInt() - 5).coerceAtLeast(1)
+            } else {
+                book.order.toInt()
+            }
+
             // Track normalized titles (Hebrew/English) for later default-commentator mapping
             listOf(payload.heTitle, payload.enTitle).forEach { title ->
                 val normalized = normalizeTitleKey(title)
@@ -427,6 +453,22 @@ class SefariaDirectImporter(
                 lineKeyToId[bookPath to idx] = lineId
                 lineIdToBookId[lineId] = bookId
 
+                textIndex?.let { writer ->
+                    val normalized = normalizeForIndex(content)
+                    val plain = normalizePlainText(content)
+                    writer.addLine(
+                        bookId = bookId,
+                        bookTitle = payload.heTitle,
+                        categoryId = catId,
+                        lineId = lineId,
+                        lineIndex = idx,
+                        normalizedText = normalized,
+                        rawPlainText = plain,
+                        orderIndex = orderIndexForBoost,
+                        isBaseBook = book.isBaseBook
+                    )
+                }
+
                 // Flush batch when full
                 if (lineBatch.size >= LINE_BATCH_SIZE) {
                     repository.insertLinesBatch(lineBatch)
@@ -440,6 +482,8 @@ class SefariaDirectImporter(
                     payload = payload,
                     bookId = bookId,
                     bookPath = bookPath,
+                    categoryId = catId,
+                    bookTitle = payload.heTitle,
                     lineKeyToId = lineKeyToId,
                     lineTocBatch = lineTocBatch
                 )
@@ -518,6 +562,18 @@ class SefariaDirectImporter(
         repository.rebuildCategoryClosure()
         updateBookHasLinks()
         buildAndSaveCatalog()
+
+        textIndex?.let {
+            runCatching { it.commit() }
+                .onSuccess { logger.i { "Lucene text index commit completed" } }
+                .onFailure { e -> logger.w(e) { "Lucene text index commit failed" } }
+        }
+        lookupIndex?.let {
+            runCatching { it.commit() }
+                .onSuccess { logger.i { "Lookup index commit completed" } }
+                .onFailure { e -> logger.w(e) { "Lookup index commit failed" } }
+        }
+
         logger.i { "Direct Sefaria import completed." }
     }
 
@@ -617,6 +673,8 @@ class SefariaDirectImporter(
         payload: BookPayload,
         bookId: Long,
         bookPath: String,
+        categoryId: Long,
+        bookTitle: String,
         lineKeyToId: Map<Pair<String, Int>, Long>,
         lineTocBatch: MutableList<Pair<Long, Long>>
     ) {
@@ -648,6 +706,18 @@ class SefariaDirectImporter(
             allTocIds.add(tocId)
             tocParentMap[tocId] = parent
             entriesByParent.getOrPut(parent) { mutableListOf() }.add(tocId)
+
+            lookupIndex?.let { lookup ->
+                val norm = normalizeForIndex(h.title)
+                lookup.addToc(
+                    tocId = tocId,
+                    bookId = bookId,
+                    categoryId = categoryId,
+                    bookTitle = bookTitle,
+                    text = norm,
+                    level = h.level
+                )
+            }
         }
 
         // Update hasChildren and isLastChild
@@ -1662,6 +1732,41 @@ class SefariaDirectImporter(
         if (name.isNullOrBlank()) return ""
         return name.replace("\"", "״").trim()
     }
+
+    private fun normalizePlainText(html: String): String =
+        Jsoup.clean(html, Safelist.none())
+            .replace("\\s+".toRegex(), " ")
+            .trim()
+
+    private fun normalizeForIndex(html: String): String {
+        val cleaned = normalizePlainText(html)
+        val withoutMaqaf = HebrewTextUtils.replaceMaqaf(cleaned, " ")
+        val withoutGeresh = withoutMaqaf
+            .replace("\u05F4", "")
+            .replace("\u05F3", "")
+        val noFinals = normalizeFinalLetters(withoutGeresh)
+        return HebrewTextUtils.removeAllDiacritics(noFinals)
+            .replace("\\s+".toRegex(), " ")
+            .trim()
+    }
+
+    private fun sanitizeIndexTerm(raw: String): String {
+        var s = raw.trim()
+        if (s.isEmpty()) return ""
+        s = HebrewTextUtils.removeAllDiacritics(s)
+        s = HebrewTextUtils.replaceMaqaf(s, " ")
+        s = s.replace("\u05F4", "").replace("\u05F3", "")
+        s = normalizeFinalLetters(s)
+        s = s.replace("\\s+".toRegex(), " ").trim()
+        return s
+    }
+
+    private fun normalizeFinalLetters(text: String): String = text
+        .replace('\u05DA', '\u05DB') // ך -> כ
+        .replace('\u05DD', '\u05DE') // ם -> מ
+        .replace('\u05DF', '\u05E0') // ן -> נ
+        .replace('\u05E3', '\u05E4') // ף -> פ
+        .replace('\u05E5', '\u05E6') // ץ -> צ
 
     private fun extractDescription(schemaJson: JsonObject, schemaObj: JsonObject): String? {
         return schemaJson["heDesc"]?.stringOrNull()

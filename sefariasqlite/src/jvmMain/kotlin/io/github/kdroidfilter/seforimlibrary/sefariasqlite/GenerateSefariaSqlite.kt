@@ -5,9 +5,18 @@ import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
+import io.github.kdroidfilter.seforimlibrary.generator.lucene.LuceneLookupIndexWriter
+import io.github.kdroidfilter.seforimlibrary.generator.lucene.LuceneTextIndexWriter
 import io.github.kdroidfilter.seforimlibrary.sefaria.SefariaFetcher
 import kotlinx.coroutines.runBlocking
+import org.apache.lucene.analysis.Analyzer
+import org.apache.lucene.analysis.TokenStream
+import org.apache.lucene.analysis.core.LowerCaseFilter
+import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper
+import org.apache.lucene.analysis.ngram.NGramTokenFilter
+import org.apache.lucene.analysis.standard.StandardAnalyzer
 import java.io.File
+import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 
@@ -44,6 +53,10 @@ fun main(args: Array<String>) = runBlocking {
             ?: System.getenv("CATALOG_OUT")
             ?: persistDbPath
     ).resolveSibling("catalog.pb")
+    val textIndexDir = if (persistDbPath.endsWith(".db")) Paths.get("$persistDbPath.lucene") else Paths.get("$persistDbPath.luceneindex")
+    val lookupIndexDir = if (persistDbPath.endsWith(".db")) Paths.get("$persistDbPath.lookup.lucene") else Paths.get("$persistDbPath.lookupindex")
+    runCatching { Files.createDirectories(textIndexDir) }
+    runCatching { Files.createDirectories(lookupIndexDir) }
 
     // Prepare DB (optionally in-memory)
     if (!useMemoryDb) {
@@ -63,12 +76,21 @@ fun main(args: Array<String>) = runBlocking {
     val driver = JdbcSqliteDriver(url = jdbcUrl)
     runCatching { SeforimDb.Schema.create(driver) }
     val repository = SeforimRepository(dbPath, driver)
+    var analyzer: Analyzer? = null
+    var textIndexWriter: LuceneTextIndexWriter? = null
+    var lookupIndexWriter: LuceneLookupIndexWriter? = null
 
     try {
+        val localAnalyzer = buildDefaultAnalyzer()
+        analyzer = localAnalyzer
+        textIndexWriter = LuceneTextIndexWriter(textIndexDir, analyzer = localAnalyzer)
+        lookupIndexWriter = LuceneLookupIndexWriter(lookupIndexDir, analyzer = localAnalyzer)
         val importer = SefariaDirectImporter(
             exportRoot = exportRoot,
             repository = repository,
             catalogOutput = catalogOut,
+            textIndex = textIndexWriter,
+            lookupIndex = lookupIndexWriter,
             logger = Logger.withTag("SefariaDirect")
         )
         importer.import()
@@ -96,6 +118,28 @@ fun main(args: Array<String>) = runBlocking {
         logger.e(e) { "Error during Sefaria->SQLite generation" }
         throw e
     } finally {
+        runCatching { textIndexWriter?.close() }
+        runCatching { lookupIndexWriter?.close() }
+        runCatching { analyzer?.close() }
         repository.close()
     }
+}
+
+private fun buildDefaultAnalyzer(): Analyzer {
+    val defaultAnalyzer = StandardAnalyzer()
+    val ngram4Analyzer = object : Analyzer() {
+        override fun createComponents(fieldName: String): TokenStreamComponents {
+            val src = org.apache.lucene.analysis.standard.StandardTokenizer()
+            var ts: TokenStream = src
+            ts = LowerCaseFilter(ts)
+            ts = NGramTokenFilter(ts, 4, 4, false)
+            return TokenStreamComponents(src, ts)
+        }
+    }
+    return PerFieldAnalyzerWrapper(
+        defaultAnalyzer,
+        mapOf(
+            LuceneTextIndexWriter.FIELD_TEXT_NG4 to ngram4Analyzer
+        )
+    )
 }
