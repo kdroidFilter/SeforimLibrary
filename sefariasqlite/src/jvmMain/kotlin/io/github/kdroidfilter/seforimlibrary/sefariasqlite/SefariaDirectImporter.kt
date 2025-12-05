@@ -411,7 +411,14 @@ class SefariaDirectImporter(
                     writer.addBookTitleTerm(bookId, catId, payload.heTitle, term)
                 }
             }
-            lookupIndex?.addBook(bookId, catId, payload.heTitle, titleTerms)
+            lookupIndex?.addBook(
+                bookId = bookId,
+                categoryId = catId,
+                displayTitle = payload.heTitle,
+                terms = titleTerms,
+                isBaseBook = isBaseBook,
+                orderIndex = bookOrder.toInt()
+            )
 
             val orderIndexForBoost = if (book.isBaseBook) {
                 (book.order.toInt() - 5).coerceAtLeast(1)

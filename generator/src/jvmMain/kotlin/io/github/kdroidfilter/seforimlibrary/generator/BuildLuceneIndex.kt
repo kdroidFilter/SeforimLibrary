@@ -180,7 +180,14 @@ fun main() = runBlocking {
                                 addAll(acronyms)
                                 addAll(topicTerms)
                             }.filter { it.isNotBlank() }
-                            lookup.addBook(book.id, book.categoryId, book.title, terms)
+                            lookup.addBook(
+                                bookId = book.id,
+                                categoryId = book.categoryId,
+                                displayTitle = book.title,
+                                terms = terms,
+                                isBaseBook = book.isBaseBook,
+                                orderIndex = book.order.toInt()
+                            )
                         }
 
                         // Lines: process sequentially per book; workers run per-book in parallel

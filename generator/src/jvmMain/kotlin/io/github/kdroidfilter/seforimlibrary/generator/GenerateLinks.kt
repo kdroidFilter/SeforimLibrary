@@ -82,7 +82,8 @@ fun main(args: Array<String>) = runBlocking {
             repository = repository,
             acronymDbPath = null,
             textIndex = null,
-            lookupIndex = null
+            lookupIndex = null,
+            filterSourcesForLinks = false
         )
         generator.generateLinksOnly()
         if (useMemoryDb) {

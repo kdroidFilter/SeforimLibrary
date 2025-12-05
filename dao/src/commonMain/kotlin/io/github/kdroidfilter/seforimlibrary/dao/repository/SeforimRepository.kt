@@ -2,6 +2,8 @@ package io.github.kdroidfilter.seforimlibrary.dao.repository
 
 
 
+import app.cash.sqldelight.db.QueryResult
+import app.cash.sqldelight.db.SqlCursor
 import app.cash.sqldelight.db.SqlDriver
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
@@ -80,6 +82,44 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     // Use SQLDelight's default behavior (per‑statement auto-commit) at call sites.
     // Keep signature for compatibility with existing callers.
     suspend fun <T> runInTransaction(block: suspend () -> T): T = block()
+
+    // --- ID helpers ---
+
+    suspend fun getMaxBookId(): Long = withContext(Dispatchers.IO) {
+        driver.executeQuery(
+            identifier = null,
+            sql = "SELECT COALESCE(MAX(id),0) FROM book",
+            mapper = { c: SqlCursor ->
+                val v = if (c.next().value) c.getLong(0) else null
+                QueryResult.Value(v ?: 0L)
+            },
+            parameters = 0
+        ).value
+    }
+
+    suspend fun getMaxLineId(): Long = withContext(Dispatchers.IO) {
+        driver.executeQuery(
+            identifier = null,
+            sql = "SELECT COALESCE(MAX(id),0) FROM line",
+            mapper = { c: SqlCursor ->
+                val v = if (c.next().value) c.getLong(0) else null
+                QueryResult.Value(v ?: 0L)
+            },
+            parameters = 0
+        ).value
+    }
+
+    suspend fun getMaxTocEntryId(): Long = withContext(Dispatchers.IO) {
+        driver.executeQuery(
+            identifier = null,
+            sql = "SELECT COALESCE(MAX(id),0) FROM tocEntry",
+            mapper = { c: SqlCursor ->
+                val v = if (c.next().value) c.getLong(0) else null
+                QueryResult.Value(v ?: 0L)
+            },
+            parameters = 0
+        ).value
+    }
 
     suspend fun setSynchronous(mode: String) = withContext(Dispatchers.IO) {
         driver.execute(null, "PRAGMA synchronous=$mode", 0)
@@ -932,6 +972,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     /**
+     * Returns a Source by id, or null if not found.
+     */
+    suspend fun getSourceById(id: Long): Source? = withContext(Dispatchers.IO) {
+        database.sourceQueriesQueries.selectById(id).executeAsOneOrNull()?.toModel()
+    }
+
+    /**
      * Inserts a source if missing and returns its id.
      */
     suspend fun insertSource(name: String): Long = withContext(Dispatchers.IO) {
@@ -1572,6 +1619,26 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         logger.d{"Link details - sourceLineId: ${link.sourceLineId}, targetLineId: ${link.targetLineId}, connectionType: ${link.connectionType.name}"}
 
         try {
+            // Dedup: return existing link id if already present
+            val existingId = driver.executeQuery(
+                identifier = null,
+                sql = "SELECT id FROM link WHERE sourceBookId=? AND targetBookId=? AND sourceLineId=? AND targetLineId=? LIMIT 1",
+                mapper = { c: SqlCursor ->
+                    val v = if (c.next().value) c.getLong(0) else null
+                    QueryResult.Value(v)
+                },
+                parameters = 4
+            ) {
+                bindLong(0, link.sourceBookId)
+                bindLong(1, link.targetBookId)
+                bindLong(2, link.sourceLineId)
+                bindLong(3, link.targetLineId)
+            }.value
+            if (existingId != null) {
+                logger.d { "Link already exists with ID $existingId, skipping insert." }
+                return@withContext existingId
+            }
+
             // Get or create the connection type
             val connectionTypeId = getOrCreateConnectionType(link.connectionType.name)
             logger.d{"Using connection type ID: $connectionTypeId for type: ${link.connectionType.name}"}

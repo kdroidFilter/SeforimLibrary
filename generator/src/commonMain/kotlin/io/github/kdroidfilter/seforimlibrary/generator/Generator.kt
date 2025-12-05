@@ -37,7 +37,8 @@ class DatabaseGenerator(
     private val repository: SeforimRepository,
     private val acronymDbPath: String? = null,
     private val textIndex: io.github.kdroidfilter.seforimlibrary.generator.lucene.TextIndexWriter? = null,
-    private val lookupIndex: io.github.kdroidfilter.seforimlibrary.generator.lucene.LookupIndexWriter? = null
+    private val lookupIndex: io.github.kdroidfilter.seforimlibrary.generator.lucene.LookupIndexWriter? = null,
+    private val filterSourcesForLinks: Boolean = true
 ) {
 
     private val logger = Logger.withTag("DatabaseGenerator")
@@ -81,8 +82,125 @@ class DatabaseGenerator(
     private var totalBooksToProcess: Int = 0
     private var processedBooksCount: Int = 0
 
+    // Normalization helpers for categories/titles
+    private fun normalizeHebrewLabel(raw: String): String {
+        var s = raw.trim()
+        // Normalize common quote variants to Hebrew gershayim/geresh
+        s = s.replace('\u201C', '"').replace('\u201D', '"')
+        s = s.replace('\u2018', '\'').replace('\u2019', '\'')
+        s = s.replace("\"", "״")
+        s = s.replace("''", "״")
+        s = s.replace("׳׳", "״")
+        s = s.replace("`", "׳")
+        s = s.replace("\u05f3", "׳")
+        s = s.replace("\\s+".toRegex(), " ").trim()
+        return s
+    }
+
+    private fun comparableLabel(raw: String): String {
+        fun stripCorpusSuffix(s: String): String {
+            val pattern = "(?i)\\s+על\\s+(התנ\"ך|התורה|התלמוד|המשנה|תנך|תורה|תלמוד|משנה)$".toRegex()
+            return s.replace(pattern, "").trim()
+        }
+
+        val base = normalizeHebrewLabel(raw)
+            .replace("״", "")
+            .replace("\"", "")
+            .replace("׳", "")
+            .replace("'", "")
+            .replace("\\s+".toRegex(), " ")
+            .trim()
+        return stripCorpusSuffix(base)
+    }
+
+    private fun normalizeCategorySegments(rawTitle: String): List<String> {
+        val cleaned = normalizeHebrewLabel(rawTitle)
+        return when (cleaned) {
+            "תלמוד בבלי" -> listOf("תלמוד", "בבלי")
+            "תלמוד ירושלמי", "תלמוד ירושלים" -> listOf("תלמוד", "ירושלמי")
+            "תנך", "תנ\"ך", "תנ״ך" -> listOf("תנ״ך")
+            "שות", "שו\"ת", "שו״ת" -> listOf("שו״ת")
+            else -> listOf(cleaned)
+        }
+    }
+
+    private data class CategoryPlacement(
+        val id: Long,
+        val leafLevel: Int,
+        val normalizedPath: List<String>
+    )
+
+    private suspend fun findExistingCategory(parentId: Long?, title: String): Category? {
+        val targetKey = comparableLabel(title)
+        val candidates = if (parentId == null) repository.getRootCategories() else repository.getCategoryChildren(parentId)
+        return candidates.firstOrNull { comparableLabel(it.title) == targetKey }
+    }
+
+    private suspend fun ensureCategoryHierarchy(rawTitle: String, parentId: Long?, startLevel: Int): CategoryPlacement {
+        val normalizedSegments = normalizeCategorySegments(rawTitle)
+        var currentParent = parentId
+        var currentLevel = startLevel
+        var lastId: Long? = null
+
+        for (title in normalizedSegments) {
+            val existing = findExistingCategory(currentParent, title)
+            val categoryId = existing?.id ?: repository.insertCategory(
+                Category(
+                    parentId = currentParent,
+                    title = title,
+                    level = currentLevel
+                )
+            )
+            lastId = categoryId
+            currentParent = categoryId
+            currentLevel += 1
+        }
+
+        val finalId = lastId ?: throw IllegalStateException("Failed to ensure category hierarchy for $rawTitle")
+        return CategoryPlacement(
+            id = finalId,
+            leafLevel = currentLevel - 1,
+            normalizedPath = normalizedSegments
+        )
+    }
+
+    private fun normalizeBookTitle(rawTitle: String): String {
+        val base = normalizeHebrewLabel(rawTitle)
+        return when (base) {
+            "תנך", "תנ\"ך" -> "תנ״ך"
+            else -> base
+        }
+    }
+
+    private fun stripQuotesForLookup(title: String): String {
+        return title.replace("״", "")
+            .replace("\"", "")
+            .replace("׳", "")
+            .replace("'", "")
+            .trim()
+    }
+
     // Book contents cache: maps library-relative key -> list of lines
     private val bookContentCache = mutableMapOf<String, List<String>>()
+
+    // Tracks whether ID counters have been initialized from an existing DB
+    private var idCountersInitialized = false
+
+    private suspend fun initializeIdCountersFromExistingDb() {
+        if (idCountersInitialized) return
+        idCountersInitialized = true
+        val maxBookId = try { repository.getMaxBookId() } catch (_: Exception) { 0L }
+        val maxLineId = try { repository.getMaxLineId() } catch (_: Exception) { 0L }
+        val maxTocEntryId = try { repository.getMaxTocEntryId() } catch (_: Exception) { 0L }
+        nextBookId = (maxBookId + 1).coerceAtLeast(1)
+        nextLineId = (maxLineId + 1).coerceAtLeast(1)
+        nextTocEntryId = (maxTocEntryId + 1).coerceAtLeast(1)
+        if (maxBookId > 0 || maxLineId > 0 || maxTocEntryId > 0) {
+            logger.i { "Continuing from existing DB ids: nextBookId=$nextBookId, nextLineId=$nextLineId, nextTocEntryId=$nextTocEntryId" }
+        } else {
+            logger.d { "No existing rows found; starting ID counters at 1" }
+        }
+    }
 
 
     /**
@@ -94,6 +212,8 @@ class DatabaseGenerator(
         logger.i { "Source directory: $sourceDirectory" }
 
         try {
+            // Continue IDs from existing DB if present (append/incremental)
+            initializeIdCountersFromExistingDb()
             // Disable foreign keys for better performance during bulk insertion
             logger.i { "Disabling foreign keys for better performance..." }
             disableForeignKeys()
@@ -113,6 +233,7 @@ class DatabaseGenerator(
                 // Load sources from files_manifest.json and upsert source table
                 loadSourcesFromManifest()
                 precreateSourceEntries()
+                backfillAcronymsForExistingBooks()
 
                 // Process hierarchy
                 val libraryPath = sourceDirectory.resolve("אוצריא")
@@ -199,6 +320,7 @@ class DatabaseGenerator(
     suspend fun generateLinesOnly(): Unit = coroutineScope {
         logger.i { "Starting phase 1: categories/books/lines generation..." }
         try {
+            initializeIdCountersFromExistingDb()
             // Performance PRAGMAs
             disableForeignKeys()
             repository.setSynchronousOff()
@@ -209,6 +331,7 @@ class DatabaseGenerator(
                 // Load sources and create entries upfront
                 loadSourcesFromManifest()
                 precreateSourceEntries()
+                backfillAcronymsForExistingBooks()
                 val libraryPath = sourceDirectory.resolve("אוצריא")
                 if (!libraryPath.exists()) {
                     throw IllegalStateException("The directory אוצריא does not exist in $sourceDirectory")
@@ -271,9 +394,24 @@ class DatabaseGenerator(
     private suspend fun ensureCachesLoaded() {
         if (booksByTitle.isEmpty()) {
             val allBooks = repository.getAllBooks()
-            booksByTitle = allBooks.associateBy { it.title }
-            booksById = allBooks.associateBy { it.id }
-            logger.i { "Preloaded ${allBooks.size} books into memory for fast link processing" }
+            val filtered = if (filterSourcesForLinks) {
+                allBooks.filter { book ->
+                    val src = runCatching { repository.getSourceById(book.sourceId) }.getOrNull()
+                    val name = src?.name ?: "Unknown"
+                    val normalized = comparableLabel(name)
+                    !sourceBlacklist.any { comparableLabel(it) == normalized }
+                }
+            } else {
+                allBooks
+            }
+            booksByTitle = filtered.associateBy { it.title }
+            booksById = filtered.associateBy { it.id }
+            val skipped = allBooks.size - filtered.size
+            if (filterSourcesForLinks && skipped > 0) {
+                logger.i { "Preloaded ${filtered.size} books into memory for fast link processing (skipped $skipped by source blacklist)" }
+            } else {
+                logger.i { "Preloaded ${filtered.size} books into memory for fast link processing" }
+            }
         }
     }
 
@@ -464,9 +602,10 @@ class DatabaseGenerator(
                 when {
                     Files.isDirectory(entry) -> {
                         logger.d { "Processing subdirectory: ${entry.fileName} with parentId: $parentCategoryId" }
-                        val categoryId = createCategory(entry, parentCategoryId, level)
-                        logger.i { "✅ Created category '${entry.fileName}' with ID: $categoryId (parent: $parentCategoryId)" }
-                        processDirectory(entry, categoryId, level + 1, metadata)
+                        val placement = ensureCategoryHierarchy(entry.fileName.toString(), parentCategoryId, level)
+                        val normalizedPath = placement.normalizedPath.joinToString(" / ")
+                        logger.i { "✅ Category '${entry.fileName}' normalized to '$normalizedPath' with ID: ${placement.id} (parent: $parentCategoryId)" }
+                        processDirectory(entry, placement.id, placement.leafLevel + 1, metadata)
                     }
 
                     Files.isRegularFile(entry) && entry.extension == "txt" -> {
@@ -505,43 +644,6 @@ class DatabaseGenerator(
         logger.i { "=== Finished processing directory: ${directory.fileName} ===" }
     }
 
-    /**
-     * Creates a category in the database.
-     *
-     * @param path The path representing the category
-     * @param parentId The ID of the parent category, if any
-     * @param level The level in the category hierarchy
-     * @return The ID of the created category
-     */
-    private suspend fun createCategory(
-        path: Path,
-        parentId: Long?,
-        level: Int
-    ): Long {
-        val title = path.fileName.toString()
-        logger.i { "🏗️ Creating category: '$title' (level $level, parent: $parentId)" }
-
-        val category = Category(
-            parentId = parentId,
-            title = title,
-            level = level
-        )
-
-        val insertedId = repository.insertCategory(category)
-        logger.i { "✅ Category '$title' created with ID: $insertedId" }
-
-        // Additional verification
-        val insertedCategory = repository.getCategory(insertedId)
-        if (insertedCategory == null) {
-            // Changed from error to warning level to reduce unnecessary error logs
-            logger.w { "❌ WARNING: Unable to retrieve the category that was just inserted (ID: $insertedId)" }
-        } else {
-            logger.d { "✅ Verification: category retrieved with ID: ${insertedCategory.id}, parent: ${insertedCategory.parentId}" }
-        }
-
-        return insertedId
-    }
-
 
     /**
      * Creates a book in the database and processes its content.
@@ -557,8 +659,9 @@ class DatabaseGenerator(
         isBaseBook: Boolean = false
     ) {
         val filename = path.fileName.toString()
-        val title = filename.substringBeforeLast('.')
-        val meta = metadata[title]
+        val rawTitle = filename.substringBeforeLast('.')
+        val title = normalizeBookTitle(rawTitle)
+        val meta = metadata[rawTitle] ?: metadata[title] ?: metadata[stripQuotesForLookup(rawTitle)]
 
         logger.i { "Processing book: $title with categoryId: $categoryId" }
 
@@ -594,15 +697,15 @@ class DatabaseGenerator(
         // Detect companion notes file named 'הערות על <title>.txt' in the same directory
         val notesContent: String? = runCatching {
             val dir = path.parent
-            val notesTitle = "הערות על $title"
-            val candidate = dir.resolve("$notesTitle.txt")
-            // Skip notes file completely if it is explicitly blacklisted by name
-            if (fileNameBlacklist.contains(candidate.fileName.toString())) {
-                logger.i { "📝 Notes file '${candidate.fileName}' is blacklisted by name; skipping attachment" }
-                return@runCatching null
-            }
-            if (Files.isRegularFile(candidate)) {
-                // Prefer preloaded cache if available
+            val possibleTitles = listOf(title, rawTitle).distinct()
+            val candidate = possibleTitles
+                .map { dir.resolve("הערות על $it.txt") }
+                .firstOrNull { Files.isRegularFile(it) }
+            if (candidate != null) {
+                if (fileNameBlacklist.contains(candidate.fileName.toString())) {
+                    logger.i { "📝 Notes file '${candidate.fileName}' is blacklisted by name; skipping attachment" }
+                    return@runCatching null
+                }
                 val key = toLibraryRelativeKey(candidate)
                 val lines = bookContentCache[key]
                 if (lines != null) lines.joinToString("\n") else candidate.readText(Charsets.UTF_8)
@@ -692,7 +795,14 @@ class DatabaseGenerator(
                         .toList()
                 )
             }
-            lookupIndex?.addBook(insertedBookId, categoryId, title, terms)
+            lookupIndex?.addBook(
+                bookId = insertedBookId,
+                categoryId = categoryId,
+                displayTitle = title,
+                terms = terms,
+                isBaseBook = isBaseBook,
+                orderIndex = book.order.toInt()
+            )
         }.onFailure { e -> logger.w(e) { "Failed to index book lookup for '$title'" } }
 
         // Process content of the book
@@ -1016,11 +1126,10 @@ class DatabaseGenerator(
             // Ensure categories exist and get the final parent category id
             var parentId: Long? = null
             var level = 0
-            var catPath = libraryRoot
             for (cat in categories) {
-                catPath = catPath.resolve(cat)
-                parentId = createCategory(catPath, parentId, level)
-                level += 1
+                val placement = ensureCategoryHierarchy(cat, parentId, level)
+                parentId = placement.id
+                level = placement.leafLevel + 1
             }
 
             if (parentId == null) {
@@ -1455,33 +1564,70 @@ class DatabaseGenerator(
             }
             val conn = acronymDb ?: return emptyList()
 
-            conn.prepareStatement(
-                "SELECT terms FROM AcronymResults WHERE book_title = ? ORDER BY id DESC LIMIT 1"
-            ).use { ps ->
-                ps.setString(1, title)
-                ps.executeQuery().use { rs ->
-                    if (!rs.next()) return emptyList()
-                    val raw = rs.getString(1) ?: return emptyList()
-                    val parts = raw.split(',')
-                    val clean = parts
-                        .map { sanitizeAcronymTerm(it) }
-                        .map { it.trim() }
-                        .filter { it.isNotEmpty() }
-
-                    // De-duplicate and drop items identical to the title after normalization
-                    val titleNormalized = sanitizeAcronymTerm(title)
-                    return clean
-                        .map { it.trim() }
-                        .filter { it.isNotEmpty() }
-                        .filter { !it.equals(title, ignoreCase = true) }
-                        .filter { !it.equals(titleNormalized, ignoreCase = true) }
-                        .distinct()
+            val lookupTitles = buildList {
+                add(title)
+                val stripped = stripQuotesForLookup(title)
+                if (stripped.isNotBlank()) add(stripped)
+                val noComma = title.replace(",", " ").trim()
+                if (noComma.isNotBlank()) add(noComma)
+                val noPunct = title.replace("[\\p{Punct}]".toRegex(), " ").replace("\\s+".toRegex(), " ").trim()
+                if (noPunct.isNotBlank()) add(noPunct)
+                val sanitized = sanitizeAcronymTerm(title)
+                if (sanitized.isNotBlank()) add(sanitized)
+            }.distinct()
+            var rawTerms: String? = null
+            for (candidate in lookupTitles) {
+                conn.prepareStatement(
+                    "SELECT terms FROM AcronymResults WHERE book_title = ? ORDER BY id DESC LIMIT 1"
+                ).use { ps ->
+                    ps.setString(1, candidate)
+                    ps.executeQuery().use { rs ->
+                        if (rs.next()) {
+                            rawTerms = rs.getString(1)
+                            if (!rawTerms.isNullOrBlank()) break
+                        }
+                    }
                 }
             }
+
+            val raw = rawTerms ?: return emptyList()
+            val parts = raw.split(',')
+            val clean = parts
+                .map { sanitizeAcronymTerm(it) }
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+
+            // De-duplicate and drop items identical to the title after normalization
+            val titleNormalized = sanitizeAcronymTerm(title)
+            return clean
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .filter { !it.equals(title, ignoreCase = true) }
+                .filter { !it.equals(titleNormalized, ignoreCase = true) }
+                .distinct()
         } catch (e: Exception) {
             logger.w(e) { "Error reading acronyms for '$title' from $path" }
             return emptyList()
         }
+    }
+
+    private suspend fun backfillAcronymsForExistingBooks() {
+        val path = acronymDbPath ?: return
+        logger.i { "Backfilling missing acronyms from $path for existing books..." }
+        val books = runCatching { repository.getAllBooks() }.getOrDefault(emptyList())
+        var insertedCount = 0
+        var touchedBooks = 0
+        for (book in books) {
+            val existing = runCatching { repository.getAcronymsForBook(book.id) }.getOrDefault(emptyList())
+            if (existing.isNotEmpty()) continue
+            val terms = fetchAcronymsForTitle(book.title)
+            if (terms.isNotEmpty()) {
+                repository.bulkInsertBookAcronyms(book.id, terms)
+                insertedCount += terms.size
+                touchedBooks += 1
+            }
+        }
+        logger.i { "Backfill complete: added $insertedCount acronyms to $touchedBooks books" }
     }
 
     // Clean an acronym using HebrewTextUtils and remove gershayim

@@ -5,7 +5,9 @@ interface LookupIndexWriter : AutoCloseable {
         bookId: Long,
         categoryId: Long,
         displayTitle: String,
-        terms: Collection<String>
+        terms: Collection<String>,
+        isBaseBook: Boolean = false,
+        orderIndex: Int? = null
     )
 
     fun addToc(
@@ -19,4 +21,3 @@ interface LookupIndexWriter : AutoCloseable {
 
     fun commit()
 }
-
