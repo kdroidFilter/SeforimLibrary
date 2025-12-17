@@ -1,6 +1,6 @@
 [versions]
 
-kotlin = "2.3.0-RC"
+kotlin = "2.3.0"
 agp = "8.12.3"
 jvmToolchain = "25"
 luceneCore = "10.3.2"
@@ -14,9 +14,9 @@ kotlinx-datetime = "0.7.1"
 kermit = "2.0.8"
 sqlDelight = "2.1.0"
 compose = "1.9.3"
-androidx-activityCompose = "1.12.0"
-commons-compress = "1.27.1"
-zstd-jni = "1.5.7-1"
+androidx-activityCompose = "1.12.1"
+commons-compress = "1.28.0"
+zstd-jni = "1.5.7-6"
 
 [libraries]
 
