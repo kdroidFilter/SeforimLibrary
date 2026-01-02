@@ -1,6 +1,6 @@
 # SeforimLibrary
 
-A Kotlin Multiplatform library for converting and accessing the Otzaria database in SQLite format with FTS5 full-text search capabilities.
+A Kotlin Multiplatform library + JVM tooling to build and query a unified SQLite database of Jewish texts (Sefaria + Otzaria), with Lucene-based full-text search.
 
 ## Overview
 
@@ -10,7 +10,13 @@ The library is structured as a set of modules that can be imported via Maven:
 
 - **core**: Contains data models representing entities like books, authors, categories, and lines of text
 - **dao**: Provides database access objects and repositories for interacting with the SQLite database
-- **generator**: Handles the conversion of the original Otzaria database to SQLite format
+- **otzariasqlite**: Otzaria import/enrichment tooling (append into an existing DB)
+- **catalog**: Precomputed catalog builder (`catalog.pb`)
+- **searchindex**: Lucene index builders (text + lookup)
+- **packaging**: Release/bundling tooling (release info + `.tar.zst` bundle)
+- **sefariasqlite**: One-step Sefaria export → SQLite importer
+
+Generation tooling modules are grouped under `generator/` on disk (Gradle module names stay `:sefariasqlite`, `:otzariasqlite`, etc.).
 
 ## Features
 
@@ -21,10 +27,9 @@ The library is structured as a set of modules that can be imported via Maven:
 - Support for links between related texts
 - Comprehensive data model for Jewish religious texts
 
-## Run Sample App
+## Demo / App
 
-- Desktop JVM: `./gradlew :sample:composeApp:run`
-- Android: `open project in Android Studio and run the sample app`
+SeforimLibrary is typically consumed from the `SeforimApp/` project in the parent repo.
 
 
 ## Requirements
@@ -85,18 +90,37 @@ val toc = repository.getBookToc(bookId)
 
 ## Database Generation
 
-To convert the original Otzaria database to SQLite format:
+### Recommended pipeline (Sefaria → SQLite → Otzaria)
 
-```kotlin
-// Initialize repository
-val repository = SeforimRepository(dbPath, driver)
+```bash
+./gradlew generateSeforimDb
+```
 
-// Create generator with source directory
-val sourcePath = Path("/path/to/otzaria_source")
-val generator = DatabaseGenerator(sourcePath, repository)
+Outputs (by default): `build/seforim.db` + `build/catalog.pb`
 
-// Generate the database
-generator.generate()
+### Full pipeline (DB + indexes + bundle)
+
+```bash
+./gradlew packageSeforimBundle
+```
+
+### Manual steps
+
+```bash
+# 1) Base DB from Sefaria
+./gradlew :sefariasqlite:generateSefariaSqlite
+
+# 2) Append Otzaria (lines + links)
+./gradlew :otzariasqlite:appendOtzaria
+
+# 3) Build precomputed catalog
+./gradlew :catalog:buildCatalog
+
+# 4) Build Lucene indexes (creates build/seforim.db.lucene + build/seforim.db.lookup.lucene)
+./gradlew :searchindex:buildLuceneIndexDefault
+
+# 5) Package everything into a single .tar.zst (plus split parts)
+./gradlew :packaging:packageArtifacts
 ```
 
 ## Project Structure
@@ -110,6 +134,21 @@ generator.generate()
   - `extensions`: Extensions for converting between database and model objects
   - `sqldelight`: SQL queries and database schema
 
-- **generator**: Database generation tools
-  - `DatabaseGenerator`: Main class for converting Otzaria data to SQLite
-  - `Main`: Entry point for running the generator as a standalone application
+- **generator/**: Grouping folder for JVM generation tooling modules
+
+- **otzariasqlite**: Otzaria enrichment tools
+  - `DatabaseGenerator`: Converts Otzaria sources into SQLite rows
+  - `GenerateLines` / `GenerateLinks`: phase tasks (see Gradle tasks)
+
+- **catalog**: Precomputed catalog tools
+  - `BuildCatalog`: builds `catalog.pb` from a SQLite DB
+
+- **searchindex**: Lucene indexing tools
+  - `LuceneTextIndexWriter` / `LuceneLookupIndexWriter`: JVM Lucene writers
+  - `BuildLuceneIndex`: CLI entrypoint used by Gradle tasks
+
+- **packaging**: Release/bundling tools
+  - `WriteReleaseInfo` / `PackageArtifacts`: bundle `.tar.zst` for distribution
+
+- **sefariasqlite**: Sefaria direct importer
+  - `SefariaDirectImporter` / `GenerateSefariaSqlite`: Sefaria export → SQLite
