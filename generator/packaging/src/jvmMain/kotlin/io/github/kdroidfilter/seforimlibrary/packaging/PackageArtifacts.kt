@@ -41,6 +41,7 @@ import kotlin.system.exitProcess
  *   Catalog expected at same location as DB (catalog.pb)
  *   Indexes expected next to DB (.lucene, .lookup.lucene)
  *   Release info expected next to DB (release_info.txt)
+ *   Lexical DB expected next to DB (lexical.db)
  */
 fun main(args: Array<String>) {
     Logger.setMinSeverity(Severity.Info)
@@ -67,6 +68,9 @@ fun main(args: Array<String>) {
     // Resolve release info file next to the DB
     val releaseInfoPath: Path = dbPath.resolveSibling("release_info.txt")
 
+    // Resolve lexical DB next to the DB
+    val lexicalDbPath: Path = dbPath.resolveSibling("lexical.db")
+
     if (!textIndexDir.toFile().isDirectory) {
         logger.w { "Lucene text index directory missing: $textIndexDir (will skip)" }
     }
@@ -78,6 +82,9 @@ fun main(args: Array<String>) {
     }
     if (!releaseInfoPath.exists()) {
         logger.w { "Release info file missing: $releaseInfoPath (will skip)" }
+    }
+    if (!lexicalDbPath.exists()) {
+        logger.w { "Lexical DB missing: $lexicalDbPath (will skip)" }
     }
 
     // Output: single bundle tar.zst
@@ -117,6 +124,7 @@ fun main(args: Array<String>) {
             " - DB: $dbPath\n" +
             " - Catalog: $catalogPath\n" +
             " - Release info: $releaseInfoPath\n" +
+            " - Lexical DB: $lexicalDbPath\n" +
             " - Text index: $textIndexDir\n" +
             " - Lookup index: $lookupIndexDir\n" +
             " -> Bundle .tar.zst: $bundleOutputPath\n" +
@@ -138,6 +146,7 @@ fun main(args: Array<String>) {
                         val haveLookup = lookupIndexDir.toFile().isDirectory
                         val haveCatalog = catalogPath.exists()
                         val haveReleaseInfo = releaseInfoPath.exists()
+                        val haveLexicalDb = lexicalDbPath.exists()
 
                         if (haveLookup) {
                             addDirectoryToTar(tar, lookupIndexDir, lookupIndexDir.fileName.toString(), logger)
@@ -152,6 +161,14 @@ fun main(args: Array<String>) {
 
                         // Add the database file itself
                         addFileToTar(tar, dbPath, dbPath.fileName.toString(), logger)
+
+                        // Add lexical DB if available
+                        if (haveLexicalDb) {
+                            addFileToTar(tar, lexicalDbPath, lexicalDbPath.fileName.toString(), logger)
+                            logger.i { "Added lexical DB to bundle" }
+                        } else {
+                            logger.w { "Lexical DB missing: $lexicalDbPath (skipped)" }
+                        }
 
                         // Add the precomputed catalog if available
                         if (haveCatalog) {

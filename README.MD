@@ -119,7 +119,10 @@ Outputs (by default): `build/seforim.db` + `build/catalog.pb`
 # 4) Build Lucene indexes (creates build/seforim.db.lucene + build/seforim.db.lookup.lucene)
 ./gradlew :searchindex:buildLuceneIndexDefault
 
-# 5) Package everything into a single .tar.zst (plus split parts)
+# 5) Download lexical.db next to the DB (used by the app; auto-run by packaging)
+./gradlew :packaging:downloadLexicalDb
+
+# 6) Package everything into a single .tar.zst (plus split parts)
 ./gradlew :packaging:packageArtifacts
 ```
 
