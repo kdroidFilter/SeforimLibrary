@@ -9,8 +9,7 @@ import kotlinx.serialization.Serializable
  * @property bookId The identifier of the book this line belongs to
  * @property lineIndex The index of the line within the book
  * @property content The original HTML content of the line
- * @property ref The English reference/citation from Sefaria (e.g., "Genesis 1:1")
- * @property heRef The Hebrew reference/citation from Sefaria (e.g., "בראשית א, א")
+ * @property heRef The Hebrew reference/citation (e.g., "בראשית א, א")
  */
 @Serializable
 data class Line(
@@ -18,6 +17,5 @@ data class Line(
     val bookId: Long,
     val lineIndex: Int,
     val content: String,
-    val ref: String? = null,
     val heRef: String? = null
 )

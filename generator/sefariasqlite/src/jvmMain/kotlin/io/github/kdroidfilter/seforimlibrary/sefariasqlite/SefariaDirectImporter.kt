@@ -201,7 +201,6 @@ class SefariaDirectImporter(
                     bookId = bookId,
                     lineIndex = idx,
                     content = content,
-                    ref = refEntry?.ref,
                     heRef = refEntry?.heRef
                 )
                 lineKeyToId[bookPath to idx] = lineId

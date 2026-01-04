@@ -144,7 +144,6 @@ CREATE TABLE IF NOT EXISTS line (
     bookId INTEGER NOT NULL,
     lineIndex INTEGER NOT NULL,
     content TEXT NOT NULL,
-    ref TEXT,
     heRef TEXT,
     tocEntryId INTEGER,
     FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
@@ -153,7 +152,6 @@ CREATE TABLE IF NOT EXISTS line (
 
 CREATE INDEX IF NOT EXISTS idx_line_book_index ON line(bookId, lineIndex);
 CREATE INDEX IF NOT EXISTS idx_line_toc ON line(tocEntryId);
-CREATE INDEX IF NOT EXISTS idx_line_ref ON line(ref);
 CREATE INDEX IF NOT EXISTS idx_line_heref ON line(heRef);
 
 -- TOC texts table

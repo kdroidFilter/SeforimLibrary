@@ -872,7 +872,8 @@ class DatabaseGenerator(
                         id = currentLineId,
                         bookId = bookId,
                         lineIndex = lineIndex,
-                        content = line
+                        content = line,
+                        heRef = buildOtzariaRef(bookTitle, lineIndex)
                     )
                 )
                 // Buffer mapping for regular line if there is a current owner
@@ -928,6 +929,12 @@ class DatabaseGenerator(
             .replace("\\s+".toRegex(), " ")
         val withoutMaqaf = HebrewTextUtils.replaceMaqaf(cleaned, " ")
         return HebrewTextUtils.removeAllDiacritics(withoutMaqaf)
+    }
+
+    private fun buildOtzariaRef(bookTitle: String, lineIndex: Int): String {
+        val safeTitle = bookTitle.trim()
+        val oneBasedIndex = lineIndex + 1
+        return "$safeTitle $oneBasedIndex"
     }
 
 

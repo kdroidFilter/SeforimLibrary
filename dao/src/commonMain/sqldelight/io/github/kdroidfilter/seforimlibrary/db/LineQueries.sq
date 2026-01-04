@@ -20,12 +20,12 @@ selectByIds:
 SELECT * FROM line WHERE id IN ?;
 
 insert:
-INSERT INTO line (bookId, lineIndex, content, ref, heRef, tocEntryId)
-VALUES (?, ?, ?, ?, ?, ?);
+INSERT INTO line (bookId, lineIndex, content, heRef, tocEntryId)
+VALUES (?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO line (id, bookId, lineIndex, content, ref, heRef, tocEntryId)
-VALUES (?, ?, ?, ?, ?, ?, ?);
+INSERT INTO line (id, bookId, lineIndex, content, heRef, tocEntryId)
+VALUES (?, ?, ?, ?, ?, ?);
 
 updateTocEntryId:
 UPDATE line SET tocEntryId = ? WHERE id = ?;

@@ -132,7 +132,8 @@ fun io.github.kdroidfilter.seforimlibrary.db.Line.toModel(): Line {
         id = id,
         bookId = bookId,
         lineIndex = lineIndex.toInt(),
-        content = content
+        content = content,
+        heRef = heRef
     )
 }
 

@@ -148,7 +148,6 @@ CREATE TABLE line (
     bookId INTEGER NOT NULL,
     lineIndex INTEGER NOT NULL,     -- Sequential position in book
     content TEXT NOT NULL,          -- HTML-formatted text
-    ref TEXT,                       -- English Sefaria reference (e.g., "Genesis 1:1")
     heRef TEXT,                     -- Hebrew Sefaria reference (e.g., "בראשית א, א")
     tocEntryId INTEGER,             -- Associated TOC entry
     FOREIGN KEY (bookId) REFERENCES book(id),
@@ -162,17 +161,16 @@ CREATE TABLE line (
 - Plain text for content
 
 **Reference Format:**
-- `ref`: English citation (e.g., `"Genesis 1:1"`, `"Berakhot 2a:5"`)
 - `heRef`: Hebrew citation (e.g., `"בראשית א, א"`, `"ברכות ב., ה"`)
 - Only content lines have references; heading lines have `NULL` values
 
 **Example:**
 ```
-lineIndex=0: <h1>בראשית</h1>                    | ref=NULL             | heRef=NULL
-lineIndex=1: משה                                | ref=NULL             | heRef=NULL
-lineIndex=2: <h2>פרק א</h2>                     | ref=NULL             | heRef=NULL
-lineIndex=3: (א) בראשית ברא אלהים                | ref="Genesis 1:1"    | heRef="בראשית א, א"
-lineIndex=4: (ב) והארץ היתה תהו                 | ref="Genesis 1:2"    | heRef="בראשית א, ב"
+lineIndex=0: <h1>בראשית</h1>                    | heRef=NULL
+lineIndex=1: משה                                | heRef=NULL
+lineIndex=2: <h2>פרק א</h2>                     | heRef=NULL
+lineIndex=3: (א) בראשית ברא אלהים                | heRef="בראשית א, א"
+lineIndex=4: (ב) והארץ היתה תהו                 | heRef="בראשית א, ב"
 ```
 
 #### 5. toc_entry (Table of Contents)
@@ -270,7 +268,7 @@ lineIndex=6: (ב) and the earth
 
 ### 2. Reference Generation
 
-For each text segment, create English and Hebrew citations:
+For each text segment, create English and Hebrew citations (English is kept in-memory for link/structure resolution; only Hebrew is persisted in SQLite):
 
 **English:** Uses book title + numeric indices
 - `"Genesis 1:1"` (standard)
@@ -283,7 +281,7 @@ For each text segment, create English and Hebrew citations:
 **Storage:** References are stored in two places:
 
 1. **In the line table** (lines 289-307):
-   - Each line has `ref` and `heRef` columns
+   - Each line has a single `heRef` column
    - Heading lines have `NULL` values
    - Content lines have their specific citations
 
@@ -454,29 +452,23 @@ Reason: Sefaria JSON uses ASCII `"` instead of proper Hebrew punctuation `״`.
 
 ### Accessing Line References
 
-Once imported, you can query lines with their Sefaria references:
+Once imported, lines expose a single (Hebrew) citation:
 
 ```kotlin
-// Get a specific line with its references
+// Get a specific line with its Hebrew reference
 val line = repository.getLineById(lineId)
-println("English: ${line.ref}")   // "Genesis 1:1"
-println("Hebrew: ${line.heRef}")  // "בראשית א, א"
+println("Ref: ${line.heRef}")  // "בראשית א, א"
+```
 
-// Find lines by reference
-val lines = repository.executeRawQuery(
-    "SELECT * FROM line WHERE ref = 'Genesis 1:1'"
-)
-
-// Search for lines in a specific chapter
-val chapter1Lines = repository.executeRawQuery(
-    "SELECT * FROM line WHERE ref LIKE 'Genesis 1:%'"
-)
+SQLite examples:
+```sql
+SELECT * FROM line WHERE heRef = 'בראשית א, א';
+SELECT * FROM line WHERE heRef LIKE 'בראשית א,%';
 ```
 
 ### Index Performance
 
-The schema includes indexes on both reference columns for fast lookups:
-- `idx_line_ref` - Index on English references
+The schema includes an index on the Hebrew reference column for fast lookups:
 - `idx_line_heref` - Index on Hebrew references
 
 These enable efficient queries like:

@@ -1080,7 +1080,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                     bookId = line.bookId,
                     lineIndex = line.lineIndex.toLong(),
                     content = line.content,
-                    ref = line.ref,
                     heRef = line.heRef,
                     tocEntryId = null
                 )
@@ -1098,7 +1097,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 bookId = line.bookId,
                 lineIndex = line.lineIndex.toLong(),
                 content = line.content,
-                ref = line.ref,
                 heRef = line.heRef,
                 tocEntryId = null
             )
@@ -1110,7 +1108,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 bookId = line.bookId,
                 lineIndex = line.lineIndex.toLong(),
                 content = line.content,
-                ref = line.ref,
                 heRef = line.heRef,
                 tocEntryId = null
             )
