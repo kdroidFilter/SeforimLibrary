@@ -45,8 +45,33 @@ class SefariaDirectImporter(
         logger.i { "Parsed ${bookPayloads.size} books" }
 
         val classLoader = javaClass.classLoader
+        val blacklists = loadSefariaBlacklists(classLoader, logger)
+        if (!blacklists.isEmpty()) {
+            logger.i {
+                "Loaded blacklists: authors=${blacklists.authorKeys.size}, " +
+                    "bookTitles=${blacklists.bookTitleKeys.size}, bookPaths=${blacklists.bookPathKeys.size}"
+            }
+        }
+        val blacklistResult = filterBlacklistedPayloads(bookPayloads, blacklists)
+        if (blacklistResult.skippedTotal > 0) {
+            logger.i {
+                "Skipped ${blacklistResult.skippedTotal} books by blacklist " +
+                    "(books=${blacklistResult.skippedByBook}, authors=${blacklistResult.skippedByAuthor})"
+            }
+            if (blacklistResult.skippedBookExamples.isNotEmpty()) {
+                logger.i { "Book blacklist examples: ${blacklistResult.skippedBookExamples}" }
+            }
+            if (blacklistResult.skippedAuthorExamples.isNotEmpty()) {
+                logger.i { "Author blacklist examples: ${blacklistResult.skippedAuthorExamples}" }
+            }
+        }
+
         val priorityEntries = loadPriorityList(classLoader, logger)
-        val (orderedBookPayloads, missingPriorityEntries) = applyPriorityOrdering(bookPayloads, priorityEntries)
+        val (orderedBookPayloads, missingPriorityEntriesRaw) =
+            applyPriorityOrdering(blacklistResult.payloads, priorityEntries)
+        val (blacklistedPriorityEntries, missingPriorityEntries) = missingPriorityEntriesRaw.partition {
+            normalizePriorityEntry(it) in blacklistResult.skippedNormalizedPaths
+        }
         val baseBookKeys = priorityEntries.toSet()
 
         // Load default configuration (per base-book title) from resources
@@ -54,10 +79,15 @@ class SefariaDirectImporter(
         val defaultTargumConfig = loadDefaultTargumConfig(classLoader, json, logger)
 
         if (priorityEntries.isNotEmpty()) {
-            val matched = priorityEntries.size - missingPriorityEntries.size
+            val matched = priorityEntries.size - missingPriorityEntriesRaw.size
             logger.i { "Applied priority ordering for $matched/${priorityEntries.size} entries" }
+            if (blacklistedPriorityEntries.isNotEmpty()) {
+                logger.i { "Priority entries skipped by blacklist (first 5): ${blacklistedPriorityEntries.take(5)}" }
+            }
             if (missingPriorityEntries.isNotEmpty()) {
-                logger.w { "Priority entries not found in Sefaria export (first 5): ${missingPriorityEntries.take(5)}" }
+                logger.w {
+                    "Priority entries not found in Sefaria export (first 5): ${missingPriorityEntries.take(5)}"
+                }
             }
         }
 
