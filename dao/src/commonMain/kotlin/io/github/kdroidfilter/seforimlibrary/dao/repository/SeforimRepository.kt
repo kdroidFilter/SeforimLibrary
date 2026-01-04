@@ -1030,7 +1030,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 lineIndex_ = endIndex.toLong()
             ).executeAsList().map { it.toModel() }
         }
-        
+
+    suspend fun getLinesByIds(ids: Collection<Long>): List<Line> =
+        withContext(Dispatchers.IO) {
+            if (ids.isEmpty()) return@withContext emptyList()
+            database.lineQueriesQueries.selectByIds(ids).executeAsList().map { it.toModel() }
+        }
+
     /**
      * Gets the previous line for a given book and line index.
      * 

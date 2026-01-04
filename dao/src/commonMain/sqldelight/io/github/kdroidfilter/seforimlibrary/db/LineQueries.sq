@@ -16,6 +16,9 @@ ORDER BY lineIndex;
 selectByBookIdAndIndex:
 SELECT * FROM line WHERE bookId = ? AND lineIndex = ?;
 
+selectByIds:
+SELECT * FROM line WHERE id IN ?;
+
 insert:
 INSERT INTO line (bookId, lineIndex, content, ref, heRef, tocEntryId)
 VALUES (?, ?, ?, ?, ?, ?);

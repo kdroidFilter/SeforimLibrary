@@ -26,8 +26,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 
-private const val SNIPPET_NEIGHBOR_WINDOW = 4
-private const val SNIPPET_MIN_LENGTH = 280
+// SNIPPET_NEIGHBOR_WINDOW and SNIPPET_MIN_LENGTH removed - snippet source is now
+// computed at query time by RepositorySnippetSourceProvider in the app module.
 
 /**
  * Build Lucene indexes using Lucene's StandardAnalyzer and an extra 4-gram field for substring search.
@@ -185,24 +185,12 @@ fun main() = runBlocking {
                         val total = book.totalLines
                         if (total > 0) {
                             val allLines = runCatching { localRepo.getLines(book.id, 0, total - 1) }.getOrDefault(emptyList())
-                            val plainLines = allLines.map { ln ->
-                                Jsoup.clean(ln.content, Safelist.none())
-                                    .replace("\\s+".toRegex(), " ")
-                                    .trim()
-                            }
+                            // Note: rawPlainText is no longer stored in the index.
+                            // Snippet source is fetched from DB at query time by RepositorySnippetSourceProvider.
                             var processed = 0
                             var nextLogPct = 10
                             for (ln in allLines) {
                                 val normalized = normalizeForIndexDefault(ln.content)
-                                val idx = ln.lineIndex.coerceIn(0, plainLines.lastIndex)
-                                val basePlain = plainLines.getOrNull(idx).orEmpty()
-                                val snippetSource = if (basePlain.length >= SNIPPET_MIN_LENGTH) {
-                                    basePlain
-                                } else {
-                                    val start = (idx - SNIPPET_NEIGHBOR_WINDOW).coerceAtLeast(0)
-                                    val end = (idx + SNIPPET_NEIGHBOR_WINDOW).coerceAtMost(plainLines.lastIndex)
-                                    plainLines.subList(start, end + 1).joinToString(" ")
-                                }
                                 writer.addLine(
                                     bookId = book.id,
                                     bookTitle = book.title,
@@ -210,7 +198,6 @@ fun main() = runBlocking {
                                     lineId = ln.id,
                                     lineIndex = ln.lineIndex,
                                     normalizedText = normalized,
-                                    rawPlainText = snippetSource,
                                     orderIndex = orderIndexForBoost,
                                     isBaseBook = book.isBaseBook
                                 )

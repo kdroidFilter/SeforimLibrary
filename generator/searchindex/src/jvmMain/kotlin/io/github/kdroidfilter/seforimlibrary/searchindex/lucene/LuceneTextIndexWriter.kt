@@ -37,7 +37,7 @@ class LuceneTextIndexWriter(
         const val FIELD_LINE_ID = "line_id"
         const val FIELD_LINE_INDEX = "line_index"
         const val FIELD_TEXT = "text"
-        const val FIELD_TEXT_RAW = "text_raw"
+        // FIELD_TEXT_RAW removed - snippet source is now fetched from DB at query time
         const val FIELD_TEXT_HE = "text_he"
         const val FIELD_TEXT_NG4 = "text_ng4"
         const val FIELD_TITLE = "title" // analyzed suggestion term
@@ -95,7 +95,7 @@ class LuceneTextIndexWriter(
             hebText?.let { add(TextField(FIELD_TEXT_HE, it, Field.Store.NO)) }
             // Index 4-gram tokens for substring search (per-field analyzer applies NGram filter)
             add(TextField(FIELD_TEXT_NG4, normalizedText, Field.Store.NO))
-            rawPlainText?.let { add(StoredField(FIELD_TEXT_RAW, it)) }
+            // rawPlainText is no longer stored - snippet source is fetched from DB at query time
         }
         writer.addDocument(doc)
     }
