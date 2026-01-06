@@ -132,13 +132,8 @@ fun main(args: Array<String>) = runBlocking {
                 val outFile = File(persistDbPath)
                 outFile.parentFile?.mkdirs()
                 if (outFile.exists()) {
-                    val backup = File(persistDbPath + ".bak")
-                    if (backup.exists()) backup.delete()
-                    if (!outFile.renameTo(backup)) {
-                        // If rename fails, delete to allow VACUUM INTO
-                        outFile.delete()
-                    }
-                    logger.i { "Existing DB moved to ${backup.absolutePath}" }
+                    outFile.delete()
+                    logger.i { "Existing DB removed to allow VACUUM INTO" }
                 }
                 val escaped = persistDbPath.replace("'", "''")
                 logger.i { "Persisting in-memory DB to $persistDbPath via VACUUM INTO..." }
