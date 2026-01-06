@@ -9,11 +9,14 @@ plugins {
 
 tasks.register("generateSeforimDb") {
     group = "application"
-    description = "Generate build/seforim.db from Sefaria, then append Otzaria and rebuild catalog.pb."
+    description = "Generate build/seforim.db from Sefaria, append Otzaria, build catalog, Lucene indexes, and release info."
 
     dependsOn(":sefariasqlite:generateSefariaSqlite")
     dependsOn(":otzariasqlite:appendOtzaria")
     dependsOn(":catalog:buildCatalog")
+    dependsOn(":searchindex:buildLuceneIndexDefault")
+    dependsOn(":packaging:writeReleaseInfo")
+    dependsOn(":packaging:downloadLexicalDb")
 }
 
 // Ensure ordering inside the pipeline task graph
@@ -32,21 +35,23 @@ project(":otzariasqlite").tasks.matching {
 project(":catalog").tasks.matching { it.name == "buildCatalog" }.configureEach {
     mustRunAfter(":otzariasqlite:appendOtzaria")
 }
+project(":searchindex").tasks.matching { it.name == "buildLuceneIndexDefault" }.configureEach {
+    mustRunAfter(":catalog:buildCatalog")
+}
+project(":packaging").tasks.matching { it.name == "writeReleaseInfo" }.configureEach {
+    mustRunAfter(":searchindex:buildLuceneIndexDefault")
+}
 
 tasks.register("packageSeforimBundle") {
     group = "application"
-    description = "Generate DB + catalog, build Lucene indexes, then package a bundle (.tar.zst)."
+    description = "Generate DB + catalog + indexes + release info, then package a bundle (.tar.zst)."
 
     dependsOn("generateSeforimDb")
-    dependsOn(":searchindex:buildLuceneIndexDefault")
     dependsOn(":packaging:packageArtifacts")
 }
 
-project(":searchindex").tasks.matching { it.name == "buildLuceneIndexDefault" }.configureEach {
-    mustRunAfter(":generateSeforimDb")
-}
 project(":packaging").tasks.matching { it.name == "packageArtifacts" }.configureEach {
-    mustRunAfter(":searchindex:buildLuceneIndexDefault")
+    mustRunAfter("generateSeforimDb")
 }
 
 tasks.register<Delete>("cleanGeneratedData") {
