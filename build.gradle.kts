@@ -58,10 +58,10 @@ tasks.register<Delete>("cleanGeneratedData") {
     group = "application"
     description = "Delete all downloaded sources and generated databases/indexes."
 
-    // Downloaded sources
-    delete(layout.buildDirectory.dir("sefaria"))
-    delete(layout.buildDirectory.dir("otzaria"))
-    delete(layout.buildDirectory.dir("acronymizer"))
+    // Downloaded sources (in submodule build directories)
+    delete(project(":sefariasqlite").layout.buildDirectory.dir("sefaria"))
+    delete(project(":otzariasqlite").layout.buildDirectory.dir("otzaria"))
+    delete(project(":otzariasqlite").layout.buildDirectory.dir("acronymizer"))
 
     // Generated databases
     delete(layout.buildDirectory.file("seforim.db"))
