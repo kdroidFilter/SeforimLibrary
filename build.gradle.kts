@@ -48,3 +48,29 @@ project(":searchindex").tasks.matching { it.name == "buildLuceneIndexDefault" }.
 project(":packaging").tasks.matching { it.name == "packageArtifacts" }.configureEach {
     mustRunAfter(":searchindex:buildLuceneIndexDefault")
 }
+
+tasks.register<Delete>("cleanGeneratedData") {
+    group = "application"
+    description = "Delete all downloaded sources and generated databases/indexes."
+
+    // Downloaded sources
+    delete(layout.buildDirectory.dir("sefaria"))
+    delete(layout.buildDirectory.dir("otzaria"))
+    delete(layout.buildDirectory.dir("acronymizer"))
+
+    // Generated databases
+    delete(layout.buildDirectory.file("seforim.db"))
+    delete(layout.buildDirectory.file("seforim.db.bak"))
+    delete(layout.buildDirectory.file("seforim.db-shm"))
+    delete(layout.buildDirectory.file("seforim.db-wal"))
+    delete(layout.buildDirectory.file("lexical.db"))
+    delete(layout.buildDirectory.file("catalog.pb"))
+    delete(layout.buildDirectory.file("release_info.txt"))
+
+    // Lucene indexes
+    delete(layout.buildDirectory.dir("seforim.db.lucene"))
+    delete(layout.buildDirectory.dir("seforim.db.lookup.lucene"))
+
+    // Packaged bundle
+    delete(layout.buildDirectory.dir("package"))
+}
