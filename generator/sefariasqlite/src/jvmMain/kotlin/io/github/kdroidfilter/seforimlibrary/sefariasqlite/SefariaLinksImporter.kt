@@ -22,7 +22,8 @@ internal class SefariaLinksImporter(
         refsByBase: Map<String, RefEntry>,
         lineKeyToId: Map<Pair<String, Int>, Long>,
         lineIdToBookId: Map<Long, Long>,
-        bookMetaById: Map<Long, BookMeta>
+        bookMetaById: Map<Long, BookMeta>,
+        headingLineIds: Set<Long> = emptySet()
     ) = coroutineScope {
         val csvFiles = Files.list(linksDir)
             .filter { it.fileName.toString().endsWith(".csv") }
@@ -43,6 +44,7 @@ internal class SefariaLinksImporter(
                     lineKeyToId = lineKeyToId,
                     lineIdToBookId = lineIdToBookId,
                     bookMetaById = bookMetaById,
+                    headingLineIds = headingLineIds,
                     linkChannel = linkChannel
                 )
             }
@@ -79,6 +81,7 @@ internal class SefariaLinksImporter(
         lineKeyToId: Map<Pair<String, Int>, Long>,
         lineIdToBookId: Map<Long, Long>,
         bookMetaById: Map<Long, BookMeta>,
+        headingLineIds: Set<Long>,
         linkChannel: Channel<Link>
     ) {
         Files.newBufferedReader(file).use { reader ->
@@ -106,6 +109,8 @@ internal class SefariaLinksImporter(
                     for (to in toRefs) {
                         val srcLine = lineKeyToId[from.path to (from.lineIndex - 1)] ?: continue
                         val tgtLine = lineKeyToId[to.path to (to.lineIndex - 1)] ?: continue
+                        // Skip links where source or target is a heading line
+                        if (srcLine in headingLineIds || tgtLine in headingLineIds) continue
                         val baseConnectionType = ConnectionType.fromString(conn)
                         val (forwardType, reverseType) = resolveDirectionalConnectionTypes(
                             baseType = baseConnectionType,

@@ -2219,6 +2219,32 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     /**
+     * Returns all line IDs that are heading lines (content starts with <h1, <h2, <h3, or <h4).
+     * Used during link processing to filter out links to heading lines.
+     */
+    suspend fun getHeadingLineIds(): Set<Long> = withContext(Dispatchers.IO) {
+        val result = mutableSetOf<Long>()
+        driver.executeQuery(
+            identifier = null,
+            sql = """
+                SELECT id FROM line
+                WHERE content LIKE '<h1%'
+                   OR content LIKE '<h2%'
+                   OR content LIKE '<h3%'
+                   OR content LIKE '<h4%'
+            """.trimIndent(),
+            mapper = { cursor: SqlCursor ->
+                while (cursor.next().value) {
+                    cursor.getLong(0)?.let { result.add(it) }
+                }
+                QueryResult.Value(Unit)
+            },
+            parameters = 0
+        ).await()
+        result
+    }
+
+    /**
      * Closes the database connection.
      * Should be called when the repository is no longer needed.
      */

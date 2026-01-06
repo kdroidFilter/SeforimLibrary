@@ -68,6 +68,8 @@ class DatabaseGenerator(
     private var booksById: Map<Long, Book> = emptyMap()
     // For each bookId, maps lineIndex -> lineId (0 means missing)
     private val lineIdCache = mutableMapOf<Long, LongArray>()
+    // Track line IDs that are headings (contain <h1>, <h2>, etc.)
+    private val headingLineIds = mutableSetOf<Long>()
 
     // Tracks books processed from the priority list to avoid double insertion
     private val processedPriorityBookKeys = mutableSetOf<String>()
@@ -856,6 +858,8 @@ class DatabaseGenerator(
                         content = line
                     )
                 )
+                // Track this as a heading line for link filtering
+                headingLineIds.add(lineId)
                 repository.updateTocEntryLineId(tocEntryId, lineId)
                 repository.updateLineTocEntry(lineId, tocEntryId)
                 // Buffer this mapping instead of writing immediately
@@ -1137,6 +1141,14 @@ class DatabaseGenerator(
     private suspend fun processLinks() {
         // Load caches once so most lookups stay in memory
         ensureCachesLoaded()
+        // If headingLineIds is empty (e.g., running generateLinksOnly separately),
+        // load heading line IDs from the database
+        if (headingLineIds.isEmpty()) {
+            logger.i { "Loading heading line IDs from database..." }
+            val headingIds = repository.getHeadingLineIds()
+            headingLineIds.addAll(headingIds)
+        }
+        logger.i { "Heading lines tracked for filtering: ${headingLineIds.size}" }
         val linksDir = sourceDirectory.resolve("links")
         if (!linksDir.exists()) {
             logger.w { "Links directory not found" }
@@ -1262,6 +1274,12 @@ class DatabaseGenerator(
                     }
                     logger.d { "Using target line with ID: $targetLineId" }
 
+                    // Skip links where source or target is a heading line
+                    if (sourceLineId in headingLineIds || targetLineId in headingLineIds) {
+                        logger.d { "Skipping link to heading line" }
+                        continue
+                    }
+
                     val link = Link(
                         sourceBookId = sourceBook.id,
                         targetBookId = targetBook.id,
@@ -1326,6 +1344,9 @@ class DatabaseGenerator(
 
                 val targetLineId = getLineIdCached(targetBook.id, targetLineIndex)
                 if (targetLineId == null) continue
+
+                // Skip links where source or target is a heading line
+                if (sourceLineId in headingLineIds || targetLineId in headingLineIds) continue
 
                 val link = Link(
                     sourceBookId = sourceBook.id,

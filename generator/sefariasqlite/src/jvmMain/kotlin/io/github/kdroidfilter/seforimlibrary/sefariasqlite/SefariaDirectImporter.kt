@@ -136,6 +136,7 @@ class SefariaDirectImporter(
         val allRefsWithPath = mutableListOf<RefEntry>()
         val bookMetaById = ConcurrentHashMap<Long, BookMeta>()
         val normalizedTitleToBookId = ConcurrentHashMap<String, Long>()
+        val headingLineIds = ConcurrentHashMap.newKeySet<Long>()
 
         // Batch insertions
         val lineBatch = mutableListOf<Line>()
@@ -205,6 +206,11 @@ class SefariaDirectImporter(
                 )
                 lineKeyToId[bookPath to idx] = lineId
                 lineIdToBookId[lineId] = bookId
+                // Track heading lines (contain <h1>, <h2>, etc. tags)
+                if (content.contains("<h1>") || content.contains("<h2>") ||
+                    content.contains("<h3>") || content.contains("<h4>")) {
+                    headingLineIds.add(lineId)
+                }
 
                 // Flush batch when full
                 if (lineBatch.size >= SefariaImportTuning.LINE_BATCH_SIZE) {
@@ -278,14 +284,15 @@ class SefariaDirectImporter(
         // Process links in parallel and batch insert
         val linksDir = dbRoot.resolve("links")
         if (linksDir.exists()) {
-            logger.i { "Processing links..." }
+            logger.i { "Processing links (${headingLineIds.size} heading lines will be excluded from link targets)..." }
             linksImporter.processLinksInParallel(
                 linksDir = linksDir,
                 refsByCanonical = refsByCanonical,
                 refsByBase = refsByBase,
                 lineKeyToId = lineKeyToId,
                 lineIdToBookId = lineIdToBookId,
-                bookMetaById = bookMetaById
+                bookMetaById = bookMetaById,
+                headingLineIds = headingLineIds
             )
             logger.i { "Links processed" }
         }
