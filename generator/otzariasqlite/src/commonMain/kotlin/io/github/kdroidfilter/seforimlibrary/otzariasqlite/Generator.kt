@@ -1523,17 +1523,34 @@ class DatabaseGenerator(
         // Reset book per-connection-type flags
         runCatching {
             repository.executeRawQuery(
-                "UPDATE book SET hasTargumConnection=0, hasReferenceConnection=0, hasCommentaryConnection=0, hasOtherConnection=0"
+                "UPDATE book SET hasTargumConnection=0, hasReferenceConnection=0, hasSourceConnection=0, " +
+                    "hasCommentaryConnection=0, hasOtherConnection=0"
             )
         }
 
         // Helper to set a type flag in one statement
-        suspend fun setConnFlag(typeName: String, column: String) {
+        suspend fun setConnFlag(
+            typeName: String,
+            column: String,
+            includeTargets: Boolean = true,
+            excludeSelfLinks: Boolean = false
+        ) {
+            val selfFilter = if (excludeSelfLinks) " AND l.sourceBookId != l.targetBookId" else ""
+            val sourceSelect =
+                "SELECT sourceBookId AS bId FROM link l " +
+                    "JOIN connection_type ct ON ct.id = l.connectionTypeId " +
+                    "WHERE ct.name='$typeName'$selfFilter"
+            val targetSelect = if (includeTargets) {
+                " UNION SELECT targetBookId AS bId FROM link l " +
+                    "JOIN connection_type ct ON ct.id = l.connectionTypeId " +
+                    "WHERE ct.name='$typeName'$selfFilter"
+            } else {
+                ""
+            }
             val sql = "UPDATE book SET $column=1 WHERE id IN (" +
                     "SELECT DISTINCT bId FROM (" +
-                    "SELECT sourceBookId AS bId FROM link l JOIN connection_type ct ON ct.id = l.connectionTypeId WHERE ct.name='$typeName' " +
-                    "UNION " +
-                    "SELECT targetBookId AS bId FROM link l JOIN connection_type ct ON ct.id = l.connectionTypeId WHERE ct.name='$typeName'" +
+                    sourceSelect +
+                    targetSelect +
                     ")" +
                     ")"
             repository.executeRawQuery(sql)
@@ -1541,6 +1558,7 @@ class DatabaseGenerator(
 
         runCatching { setConnFlag("TARGUM", "hasTargumConnection") }
         runCatching { setConnFlag("REFERENCE", "hasReferenceConnection") }
+        runCatching { setConnFlag("SOURCE", "hasSourceConnection", includeTargets = false, excludeSelfLinks = true) }
         runCatching { setConnFlag("COMMENTARY", "hasCommentaryConnection") }
         runCatching { setConnFlag("OTHER", "hasOtherConnection") }
 
