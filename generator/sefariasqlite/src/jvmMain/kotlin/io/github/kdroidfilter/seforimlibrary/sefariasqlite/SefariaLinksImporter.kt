@@ -160,6 +160,10 @@ internal class SefariaLinksImporter(
 
         val sourceMeta = bookMetaById[sourceBookId] ?: return baseType to baseType
         val targetMeta = bookMetaById[targetBookId] ?: return baseType to baseType
+        if (!sourceMeta.isBaseBook && !targetMeta.isBaseBook) {
+            // Avoid emitting SOURCE links for supercommentary-to-supercommentary relations.
+            return baseType to baseType
+        }
 
         fun typesFor(sourceIsSecondary: Boolean): Pair<ConnectionType, ConnectionType> {
             return when (baseType) {
@@ -241,4 +245,3 @@ internal class SefariaLinksImporter(
         setConnFlag("OTHER", "hasOtherConnection")
     }
 }
-
