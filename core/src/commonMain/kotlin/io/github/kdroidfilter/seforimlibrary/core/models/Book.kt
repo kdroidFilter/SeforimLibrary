@@ -17,6 +17,8 @@ import kotlinx.serialization.Serializable
  * @property order The display order of the book within its category
  * @property totalLines The total number of lines in the book
  * @property hasAltStructures Indicates if the book has alternative TOC structures (e.g., Parasha)
+ * @property hasTeamim Indicates if the book contains biblical cantillation marks (teamim)
+ * @property hasNekudot Indicates if the book contains vowel points (nikud/nekudot)
  */
 @Serializable
 data class Book(
@@ -41,4 +43,6 @@ data class Book(
     val hasCommentaryConnection: Boolean = false,
     val hasOtherConnection: Boolean = false,
     val hasAltStructures: Boolean = false,
+    val hasTeamim: Boolean = false,
+    val hasNekudot: Boolean = false,
 )
