@@ -73,6 +73,14 @@ class SefariaDirectImporter(
             normalizePriorityEntry(it) in blacklistResult.skippedNormalizedPaths
         }
         val baseBookKeys = priorityEntries.toSet()
+        val priorityIndexByPath = buildMap {
+            priorityEntries.forEachIndexed { index, entry ->
+                val normalized = normalizePriorityEntry(entry)
+                if (normalized.isNotBlank() && !containsKey(normalized)) {
+                    put(normalized, index)
+                }
+            }
+        }
 
         // Load default configuration (per base-book title) from resources
         val defaultCommentatorsConfig = loadDefaultCommentatorsConfig(classLoader, json, logger)
@@ -184,7 +192,12 @@ class SefariaDirectImporter(
             }
 
             val catLevel = categoryLevelsById[catId] ?: payload.categoriesHe.lastIndex.coerceAtLeast(0)
-            bookMetaById[bookId] = BookMeta(isBaseBook = book.isBaseBook, categoryLevel = catLevel)
+            val priorityRank = priorityIndexByPath[normalizedPath]
+            bookMetaById[bookId] = BookMeta(
+                isBaseBook = book.isBaseBook,
+                categoryLevel = catLevel,
+                priorityRank = priorityRank
+            )
 
             val refsForBook = payload.refEntries.map { it.copy(path = bookPath) }
             synchronized(allRefsWithPath) {

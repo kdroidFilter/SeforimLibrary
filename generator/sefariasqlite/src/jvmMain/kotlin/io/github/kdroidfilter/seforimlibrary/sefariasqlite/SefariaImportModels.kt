@@ -11,7 +11,8 @@ internal object SefariaImportTuning {
 
 internal data class BookMeta(
     val isBaseBook: Boolean,
-    val categoryLevel: Int
+    val categoryLevel: Int,
+    val priorityRank: Int?
 )
 
 internal data class BookPayload(
@@ -72,4 +73,3 @@ internal data class DefaultTargumEntry(
     val book: String,
     val targumim: List<String>
 )
-

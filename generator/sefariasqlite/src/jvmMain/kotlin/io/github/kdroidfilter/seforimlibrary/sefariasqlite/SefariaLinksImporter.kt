@@ -154,58 +154,13 @@ internal class SefariaLinksImporter(
         targetBookId: Long,
         bookMetaById: Map<Long, BookMeta>
     ): Pair<ConnectionType, ConnectionType> {
-        if (baseType != ConnectionType.COMMENTARY && baseType != ConnectionType.TARGUM) {
-            return baseType to baseType
-        }
-
-        val sourceMeta = bookMetaById[sourceBookId] ?: return baseType to baseType
-        val targetMeta = bookMetaById[targetBookId] ?: return baseType to baseType
-        if (!sourceMeta.isBaseBook && !targetMeta.isBaseBook) {
-            // Avoid emitting SOURCE links for supercommentary-to-supercommentary relations.
-            return baseType to baseType
-        }
-
-        fun typesFor(sourceIsSecondary: Boolean): Pair<ConnectionType, ConnectionType> {
-            return when (baseType) {
-                ConnectionType.COMMENTARY ->
-                    if (sourceIsSecondary) {
-                        ConnectionType.SOURCE to ConnectionType.COMMENTARY
-                    } else {
-                        ConnectionType.COMMENTARY to ConnectionType.SOURCE
-                    }
-
-                ConnectionType.TARGUM ->
-                    if (sourceIsSecondary) {
-                        ConnectionType.SOURCE to ConnectionType.TARGUM
-                    } else {
-                        ConnectionType.TARGUM to ConnectionType.SOURCE
-                    }
-
-                else -> baseType to baseType
-            }
-        }
-
-        if (sourceMeta.isBaseBook && !targetMeta.isBaseBook) {
-            return typesFor(sourceIsSecondary = false)
-        }
-        if (!sourceMeta.isBaseBook && targetMeta.isBaseBook) {
-            return typesFor(sourceIsSecondary = true)
-        }
-
-        val sourceLevel = sourceMeta.categoryLevel
-        val targetLevel = targetMeta.categoryLevel
-        if (sourceLevel < targetLevel) {
-            return typesFor(sourceIsSecondary = false)
-        }
-        if (targetLevel < sourceLevel) {
-            return typesFor(sourceIsSecondary = true)
-        }
-
-        return if (sourceBookId > targetBookId) {
-            typesFor(sourceIsSecondary = true)
-        } else {
-            typesFor(sourceIsSecondary = false)
-        }
+        return resolveDirectionalConnectionTypesForMeta(
+            baseType = baseType,
+            sourceBookId = sourceBookId,
+            targetBookId = targetBookId,
+            sourceMeta = bookMetaById[sourceBookId],
+            targetMeta = bookMetaById[targetBookId]
+        )
     }
 
     suspend fun updateBookHasLinks() {
@@ -260,4 +215,61 @@ internal class SefariaLinksImporter(
         setConnFlag("COMMENTARY", "hasCommentaryConnection")
         setConnFlag("OTHER", "hasOtherConnection")
     }
+}
+
+internal fun resolveDirectionalConnectionTypesForMeta(
+    baseType: ConnectionType,
+    sourceBookId: Long,
+    targetBookId: Long,
+    sourceMeta: BookMeta?,
+    targetMeta: BookMeta?
+): Pair<ConnectionType, ConnectionType> {
+    if (baseType != ConnectionType.COMMENTARY && baseType != ConnectionType.TARGUM) {
+        return baseType to baseType
+    }
+
+    if (sourceMeta == null || targetMeta == null) {
+        return baseType to baseType
+    }
+    if (!sourceMeta.isBaseBook && !targetMeta.isBaseBook) {
+        return baseType to baseType
+    }
+
+    fun typesFor(sourceIsSecondary: Boolean): Pair<ConnectionType, ConnectionType> {
+        return when (baseType) {
+            ConnectionType.COMMENTARY ->
+                if (sourceIsSecondary) {
+                    ConnectionType.SOURCE to ConnectionType.COMMENTARY
+                } else {
+                    ConnectionType.COMMENTARY to ConnectionType.SOURCE
+                }
+
+            ConnectionType.TARGUM ->
+                if (sourceIsSecondary) {
+                    ConnectionType.SOURCE to ConnectionType.TARGUM
+                } else {
+                    ConnectionType.TARGUM to ConnectionType.SOURCE
+                }
+
+            else -> baseType to baseType
+        }
+    }
+
+    if (sourceMeta.isBaseBook && !targetMeta.isBaseBook) {
+        return typesFor(sourceIsSecondary = false)
+    }
+    if (!sourceMeta.isBaseBook && targetMeta.isBaseBook) {
+        return typesFor(sourceIsSecondary = true)
+    }
+
+    val sourceRank = sourceMeta.priorityRank
+    val targetRank = targetMeta.priorityRank
+    if (sourceRank != null || targetRank != null) {
+        if (sourceRank == null) return typesFor(sourceIsSecondary = true)
+        if (targetRank == null) return typesFor(sourceIsSecondary = false)
+        if (sourceRank < targetRank) return typesFor(sourceIsSecondary = false)
+        if (targetRank < sourceRank) return typesFor(sourceIsSecondary = true)
+    }
+
+    return baseType to baseType
 }
