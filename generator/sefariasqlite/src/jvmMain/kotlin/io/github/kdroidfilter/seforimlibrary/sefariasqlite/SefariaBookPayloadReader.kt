@@ -259,20 +259,17 @@ internal class SefariaBookPayloadReader(
             refPrefix: String,
             heRefPrefix: String
         ) {
-            val hasTitle = node.containsKey("title") || node.containsKey("heTitle")
+            val nodeTitle = node["heTitle"]?.stringOrNull()?.takeIf { it.isNotBlank() }
+                ?: node["title"]?.stringOrNull()?.takeIf { it.isNotBlank() }
+            val hasTitle = nodeTitle != null
             if (hasTitle && level > 0) {
-                val nodeTitle = node["heTitle"]?.stringOrNull()
-                    ?: node["title"]?.stringOrNull()
-                    ?: ""
-                if (nodeTitle.isNotBlank()) {
-                    val tag = headingTagForLevel(level)
-                    output += "${tag.first}$nodeTitle${tag.second}"
-                    headings += Heading(
-                        title = nodeTitle,
-                        level = level,
-                        lineIndex = output.size - 1
-                    )
-                }
+                val tag = headingTagForLevel(level)
+                output += "${tag.first}$nodeTitle${tag.second}"
+                headings += Heading(
+                    title = nodeTitle,
+                    level = level,
+                    lineIndex = output.size - 1
+                )
             }
 
             if (text !is JsonArray && text !is JsonPrimitive && text !is JsonObject) return
