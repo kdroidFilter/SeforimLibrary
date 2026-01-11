@@ -214,6 +214,7 @@ CREATE INDEX IF NOT EXISTS idx_link_source_line ON link(sourceLineId);
 CREATE INDEX IF NOT EXISTS idx_link_target_book ON link(targetBookId);
 CREATE INDEX IF NOT EXISTS idx_link_target_line ON link(targetLineId);
 CREATE INDEX IF NOT EXISTS idx_link_type ON link(connectionTypeId);
+CREATE INDEX IF NOT EXISTS idx_link_type_source_line ON link(connectionTypeId, sourceLineId);
 
 -- Removed legacy FTS view/table in favor of Lucene (10.x)
 

@@ -1552,13 +1552,17 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     suspend fun getCommentariesForLineRange(
         lineIds: List<Long>,
         activeCommentatorIds: Set<Long> = emptySet(),
+        connectionTypes: Set<ConnectionType> = setOf(ConnectionType.COMMENTARY),
         offset: Int,
         limit: Int
     ): List<CommentaryWithText> = withContext(Dispatchers.IO) {
         if (lineIds.isEmpty()) return@withContext emptyList()
+        if (connectionTypes.isEmpty()) return@withContext emptyList()
+        val typeNames = connectionTypes.map { it.name }
         if (activeCommentatorIds.isEmpty()) {
-            database.linkQueriesQueries.selectLinksBySourceLineIdsPaged(
+            database.linkQueriesQueries.selectLinksBySourceLineIdsAndTypesPaged(
                 lineIds,
+                typeNames,
                 limit.toLong(),
                 offset.toLong()
             ).executeAsList().map {
@@ -1576,9 +1580,10 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 )
             }
         } else {
-            database.linkQueriesQueries.selectLinksBySourceLineIdsAndTargetsPaged(
+            database.linkQueriesQueries.selectLinksBySourceLineIdsTargetsAndTypesPaged(
                 lineIds,
                 activeCommentatorIds.toList(),
+                typeNames,
                 limit.toLong(),
                 offset.toLong()
             ).executeAsList().map {
