@@ -253,18 +253,11 @@ internal class SefariaAltTocBuilder(
             }
 
             suspend fun updateParentLineIfMissing(tocId: Long) {
-                val current = entryLineInfo[tocId]
-                if (current?.second != null) return
-                val childWithLine = entriesByParent[tocId]
-                    ?.firstNotNullOfOrNull { childId ->
-                        entryLineInfo[childId]?.second?.let { _ -> childId to (entryLineInfo[childId]!!) }
-                    }
-                val childLine = childWithLine?.second ?: return
-                val lineId = childLine.first ?: return
-                val lineIndex = childLine.second ?: return
-                repository.updateAltTocEntryLineId(tocId, lineId)
-                entryLineInfo[tocId] = lineId to lineIndex
-                headingLineToToc[lineIndex] = tocId
+                // Container entries (parents without their own refs) should NOT inherit
+                // the lineId from their first child. This was causing duplicate headings
+                // to appear when both parent and first child pointed to the same line.
+                // The parent will remain with lineId = null, which means it won't appear
+                // as a heading in the content, but will still be navigable via the TOC panel.
             }
 
             fun nodeLabel(node: AltNodePayload, position: Int?): String {
