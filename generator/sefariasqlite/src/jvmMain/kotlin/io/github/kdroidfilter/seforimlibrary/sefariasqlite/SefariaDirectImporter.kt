@@ -5,6 +5,7 @@ import io.github.kdroidfilter.seforimlibrary.core.models.Author
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
 import io.github.kdroidfilter.seforimlibrary.core.models.Line
+import io.github.kdroidfilter.seforimlibrary.core.text.HebrewTextUtils
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
@@ -165,6 +166,9 @@ class SefariaDirectImporter(
             val normalizedPath = normalizedBookPath(payload.categoriesHe, payload.heTitle)
             val isBaseBook = normalizedPath in baseBookKeys
 
+            // Detect teamim and nekudot in book lines
+            val (hasTeamim, hasNekudot) = detectTeamimAndNekudot(payload.lines)
+
             val book = Book(
                 id = bookId,
                 categoryId = catId,
@@ -179,7 +183,9 @@ class SefariaDirectImporter(
                 topics = emptyList(),
                 isBaseBook = isBaseBook,
                 totalLines = payload.lines.size,
-                hasAltStructures = false
+                hasAltStructures = false,
+                hasTeamim = hasTeamim,
+                hasNekudot = hasNekudot
             )
             repository.insertBook(book)
 
@@ -319,4 +325,22 @@ class SefariaDirectImporter(
 
         logger.i { "Direct Sefaria import completed." }
     }
+}
+
+/**
+ * Detects whether any line in the list contains teamim (cantillation marks) or nekudot (vowel points).
+ * Uses early exit optimization - stops scanning once both are found.
+ *
+ * @param lines The list of line contents (HTML strings) to scan
+ * @return A pair of (hasTeamim, hasNekudot) booleans
+ */
+private fun detectTeamimAndNekudot(lines: List<String>): Pair<Boolean, Boolean> {
+    var hasTeamim = false
+    var hasNekudot = false
+    for (line in lines) {
+        if (!hasTeamim && HebrewTextUtils.containsTeamim(line)) hasTeamim = true
+        if (!hasNekudot && HebrewTextUtils.containsNikud(line)) hasNekudot = true
+        if (hasTeamim && hasNekudot) break // Early exit once both are found
+    }
+    return hasTeamim to hasNekudot
 }

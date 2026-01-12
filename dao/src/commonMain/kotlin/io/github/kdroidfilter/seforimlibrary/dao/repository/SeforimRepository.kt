@@ -858,7 +858,9 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 totalLines = book.totalLines.toLong(),
                 isBaseBook = if (book.isBaseBook) 1 else 0,
                 hasSourceConnection = if (book.hasSourceConnection) 1 else 0,
-                hasAltStructures = if (book.hasAltStructures) 1 else 0
+                hasAltStructures = if (book.hasAltStructures) 1 else 0,
+                hasTeamim = if (book.hasTeamim) 1 else 0,
+                hasNekudot = if (book.hasNekudot) 1 else 0
             )
             logger.d{"Used insertWithId for book '${book.title}' with ID: ${book.id} and categoryId: ${book.categoryId}"}
 
@@ -913,7 +915,9 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 totalLines = book.totalLines.toLong(),
                 isBaseBook = if (book.isBaseBook) 1 else 0,
                 hasSourceConnection = if (book.hasSourceConnection) 1 else 0,
-                hasAltStructures = if (book.hasAltStructures) 1 else 0
+                hasAltStructures = if (book.hasAltStructures) 1 else 0,
+                hasTeamim = if (book.hasTeamim) 1 else 0,
+                hasNekudot = if (book.hasNekudot) 1 else 0
             )
             val id = database.bookQueriesQueries.lastInsertRowId().executeAsOne()
             logger.d{"Used insert for book '${book.title}', got ID: $id with categoryId: ${book.categoryId}"}
