@@ -46,13 +46,13 @@ tasks.register("packageSeforimBundle") {
     group = "application"
     description = "Generate DB + catalog + indexes + release info, then package a bundle (.tar.zst)."
 
-    dependsOn("generateSeforimDb")
+//    dependsOn("generateSeforimDb")
     dependsOn(":packaging:packageArtifacts")
 }
 
-project(":packaging").tasks.matching { it.name == "packageArtifacts" }.configureEach {
-    mustRunAfter("generateSeforimDb")
-}
+//project(":packaging").tasks.matching { it.name == "packageArtifacts" }.configureEach {
+//    mustRunAfter("generateSeforimDb")
+//}
 
 tasks.register<Delete>("cleanGeneratedData") {
     group = "application"
