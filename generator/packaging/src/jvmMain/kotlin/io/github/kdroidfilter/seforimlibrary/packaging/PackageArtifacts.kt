@@ -21,6 +21,7 @@ import kotlin.system.exitProcess
  *  - SQLite DB (seforim.db)
  *  - Precomputed catalog (catalog.pb)
  *  - Lucene indexes (text and lookup)
+ *  - Lexical DB (lexical.db)
  *  All packaged into a single .tar.zst bundle
  *
  * Usage:

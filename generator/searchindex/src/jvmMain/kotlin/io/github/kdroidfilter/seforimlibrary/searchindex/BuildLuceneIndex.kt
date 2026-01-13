@@ -158,7 +158,11 @@ fun main() = runBlocking {
 
                         // Lookup: acronyms + topics + title variants
                         runCatching {
-                            val acronyms = runCatching { localRepo.getAcronymsForBook(book.id) }.getOrDefault(emptyList())
+                            val acronyms = runCatching { localRepo.getAcronymsForBook(book.id) }
+                                .getOrDefault(emptyList())
+                                .map { sanitizeAcronymTerm(it) }  // ← SANITIZE ACRONYMS!
+                                .filter { it.isNotBlank() }
+                                .distinct()
                             val topicTerms = book.topics.asSequence()
                                 .map { sanitizeAcronymTerm(it.name) }
                                 .map { it.trim() }
