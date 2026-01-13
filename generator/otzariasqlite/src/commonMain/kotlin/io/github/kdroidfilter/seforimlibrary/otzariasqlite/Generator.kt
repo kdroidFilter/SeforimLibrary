@@ -70,6 +70,8 @@ class DatabaseGenerator(
     private val lineIdCache = mutableMapOf<Long, LongArray>()
     // Track line IDs that are headings (contain <h1>, <h2>, etc.)
     private val headingLineIds = mutableSetOf<Long>()
+    // Track book IDs that come from Sefaria sources (skip Otzaria links for these)
+    private val sefariaBookIds = mutableSetOf<Long>()
 
     // Tracks books processed from the priority list to avoid double insertion
     private val processedPriorityBookKeys = mutableSetOf<String>()
@@ -386,12 +388,24 @@ class DatabaseGenerator(
             }
             booksByTitle = filtered.associateBy { it.title }
             booksById = filtered.associateBy { it.id }
+
+            // Build set of Sefaria book IDs to skip Otzaria links for these books
+            sefariaBookIds.clear()
+            for (book in filtered) {
+                val src = runCatching { repository.getSourceById(book.sourceId) }.getOrNull()
+                val sourceName = src?.name ?: ""
+                if (sourceName.contains("sefaria", ignoreCase = true)) {
+                    sefariaBookIds.add(book.id)
+                }
+            }
+
             val skipped = allBooks.size - filtered.size
             if (filterSourcesForLinks && skipped > 0) {
                 logger.i { "Preloaded ${filtered.size} books into memory for fast link processing (skipped $skipped by source blacklist)" }
             } else {
                 logger.i { "Preloaded ${filtered.size} books into memory for fast link processing" }
             }
+            logger.i { "Identified ${sefariaBookIds.size} Sefaria books (Otzaria links will be skipped for these)" }
         }
     }
 
@@ -1213,6 +1227,12 @@ class DatabaseGenerator(
             logger.w { "Source book not found for links: $bookTitle" }
             return 0
         }
+
+        // Skip Otzaria links for books that come from Sefaria (Sefaria links are more accurate)
+        if (sourceBook.id in sefariaBookIds) {
+            return 0
+        }
+
         logger.d { "Found source book with ID: ${sourceBook.id}" }
 
         try {
@@ -1317,6 +1337,12 @@ class DatabaseGenerator(
             logger.w { "Source book not found for links: $bookTitle" }
             return 0
         }
+
+        // Skip Otzaria links for books that come from Sefaria (Sefaria links are more accurate)
+        if (sourceBook.id in sefariaBookIds) {
+            return 0
+        }
+
         var processed = 0
         for ((index, linkData) in links.withIndex()) {
             try {
