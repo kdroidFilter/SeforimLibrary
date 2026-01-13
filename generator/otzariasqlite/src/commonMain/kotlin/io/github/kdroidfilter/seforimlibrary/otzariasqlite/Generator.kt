@@ -1383,6 +1383,7 @@ class DatabaseGenerator(
 
     /**
      * Fetch and sanitize acronym terms for a given book title from the Acronymizer DB.
+     * Uses the new relational structure (Books, Acronyms, BookAcronyms).
      */
     private fun fetchAcronymsForTitle(title: String): List<String> {
         val path = acronymDbPath ?: return emptyList()
@@ -1403,24 +1404,38 @@ class DatabaseGenerator(
                 val sanitized = sanitizeAcronymTerm(title)
                 if (sanitized.isNotBlank()) add(sanitized)
             }.distinct()
-            var rawTerms: String? = null
+
+            val acronyms = mutableListOf<String>()
+
+            // Query using the new relational structure
             for (candidate in lookupTitles) {
                 conn.prepareStatement(
-                    "SELECT terms FROM AcronymResults WHERE book_title = ? ORDER BY id DESC LIMIT 1"
+                    """
+                    SELECT a.acronym
+                    FROM Books b
+                    JOIN BookAcronyms ba ON b.id = ba.book_id
+                    JOIN Acronyms a ON ba.acronym_id = a.id
+                    WHERE b.title = ?
+                    ORDER BY a.acronym
+                    """.trimIndent()
                 ).use { ps ->
                     ps.setString(1, candidate)
                     ps.executeQuery().use { rs ->
-                        if (rs.next()) {
-                            rawTerms = rs.getString(1)
-                            if (!rawTerms.isNullOrBlank()) break
+                        while (rs.next()) {
+                            val acronym = rs.getString(1)
+                            if (!acronym.isNullOrBlank()) {
+                                acronyms.add(acronym)
+                            }
                         }
                     }
                 }
+                if (acronyms.isNotEmpty()) break
             }
 
-            val raw = rawTerms ?: return emptyList()
-            val parts = raw.split(',')
-            val clean = parts
+            if (acronyms.isEmpty()) return emptyList()
+
+            // Sanitize and de-duplicate
+            val clean = acronyms
                 .map { sanitizeAcronymTerm(it) }
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
@@ -1428,8 +1443,6 @@ class DatabaseGenerator(
             // De-duplicate and drop items identical to the title after normalization
             val titleNormalized = sanitizeAcronymTerm(title)
             return clean
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
                 .filter { !it.equals(title, ignoreCase = true) }
                 .filter { !it.equals(titleNormalized, ignoreCase = true) }
                 .distinct()
