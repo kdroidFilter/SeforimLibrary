@@ -625,9 +625,10 @@ class DatabaseGenerator(
                             continue
                         }
                         // Skip companion notes files named 'הערות על <title>.txt'.
+                        // Exception: "הערות על חברותא" files are standalone books, not companion notes.
                         val fname = entry.fileName.toString()
                         val titleNoExt = fname.substringBeforeLast('.')
-                        if (titleNoExt.startsWith("הערות על ")) {
+                        if (titleNoExt.startsWith("הערות על ") && !titleNoExt.startsWith("הערות על חברותא")) {
                             logger.i { "📝 Skipping notes file '$fname' (will be attached to base book if present)" }
                             continue
                         }
