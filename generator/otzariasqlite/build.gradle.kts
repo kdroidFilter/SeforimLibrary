@@ -259,3 +259,27 @@ tasks.register("appendOtzaria") {
     description = "Append Otzaria lines + links into an existing DB (wrapper task)."
     dependsOn("appendOtzariaLinks")
 }
+
+// Generate links between Havrouta commentaries and Talmud tractates
+// Usage:
+//   ./gradlew :otzariasqlite:generateHavroutaLinks -PseforimDb=/path/to.db
+tasks.register<JavaExec>("generateHavroutaLinks") {
+    group = "application"
+    description = "Generate links between Havrouta commentaries and their corresponding Talmud tractates."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.otzariasqlite.GenerateHavroutaLinksKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    val defaultDbPath = if (project.hasProperty("seforimDb")) {
+        project.property("seforimDb") as String
+    } else {
+        rootProject.layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+    }
+    args(defaultDbPath)
+
+    jvmArgs = listOf(
+        "-Xmx4g",
+        "-XX:+UseG1GC"
+    )
+}
