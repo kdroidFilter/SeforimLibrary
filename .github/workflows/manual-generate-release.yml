@@ -32,33 +32,6 @@ jobs:
       - name: Gradle version
         run: ./gradlew --version
 
-      # Run tasks sequentially
-      - name: downloadAcronymizer
-        run: ./gradlew :generator:downloadAcronymizer --no-daemon --stacktrace
-
-      - name: downloadOtzaria
-        run: ./gradlew :generator:downloadOtzaria --no-daemon --stacktrace
-
-      - name: generateLines
-        run: ./gradlew :generator:generateLines --no-daemon --stacktrace
-
-      - name: generateLinks
-        run: ./gradlew :generator:generateLinks --no-daemon --stacktrace
-
-      - name: Cleanup Otzaria source and zip
-        run: |
-          set -euo pipefail
-          echo "Cleaning up Otzaria artifacts..."
-          rm -f generator/build/otzaria/otzaria.zip || true
-          rm -rf generator/build/otzaria/source || true
-          echo "Cleanup complete."
-
-      - name: buildLuceneIndexDefault
-        run: ./gradlew :generator:buildLuceneIndexDefault --no-daemon --stacktrace
-
-      - name: buildCatalog
-        run: ./gradlew :generator:buildCatalog --no-daemon --stacktrace
-
       - name: Compute tag name (UTC) for release info
         id: release_meta
         shell: bash
@@ -67,24 +40,24 @@ jobs:
           echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Computed release tag: ${TAG}"
 
-      - name: writeReleaseInfo
-        run: ./gradlew :generator:writeReleaseInfo -PreleaseName=${{ steps.release_meta.outputs.release_tag }} --no-daemon --stacktrace
+      - name: Generate Seforim Database
+        run: ./gradlew generateSeforimDb -PreleaseName=${{ steps.release_meta.outputs.release_tag }} --no-daemon --stacktrace
 
-      - name: packageArtifacts
-        run: ./gradlew :generator:packageArtifacts --no-daemon --stacktrace
+      - name: Package Seforim Bundle
+        run: ./gradlew packageSeforimBundle --no-daemon --stacktrace
 
       - name: List split parts
         run: |
           set -euo pipefail
           echo "Looking for split parts..."
-          PARTS=(generator/build/package/seforim_bundle.tar.zst.part*)
-          if [ ${#PARTS[@]} -eq 0 ] || [ "${PARTS[0]}" = "generator/build/package/seforim_bundle.tar.zst.part*" ]; then
+          PARTS=(generator/packaging/build/package/seforim_bundle.tar.zst.part*)
+          if [ ${#PARTS[@]} -eq 0 ] || [ "${PARTS[0]}" = "generator/packaging/build/package/seforim_bundle.tar.zst.part*" ]; then
             echo "No split parts found. Did packageArtifacts run and split the bundle?" >&2
             exit 1
           fi
           if [ ${#PARTS[@]} -ne 2 ]; then
             echo "Expected 2 split parts, found ${#PARTS[@]}" >&2
-            ls -lh generator/build/package/ || true
+            ls -lh generator/packaging/build/package/ || true
             exit 1
           fi
           echo "Found ${#PARTS[@]} part file(s):"
@@ -98,6 +71,6 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            generator/build/package/seforim_bundle.tar.zst.part*
+            generator/packaging/build/package/seforim_bundle.tar.zst.part*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
