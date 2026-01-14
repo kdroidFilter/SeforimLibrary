@@ -7,6 +7,10 @@ import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
 import io.github.kdroidfilter.seforimlibrary.core.models.Link
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import java.io.File
 import java.nio.file.Paths
 
 /**
@@ -31,10 +35,20 @@ fun main(args: Array<String>) = runBlocking {
     val driver = JdbcSqliteDriver(url = jdbcUrl)
     val repository = SeforimRepository(dbPath, driver)
 
+    val sourceDir = System.getProperty("sourceDir")
+        ?: System.getenv("OTZARIA_SOURCE_DIR")
+        ?: OtzariaFetcher.ensureLocalSource(logger).toString()
+
     try {
         logger.i { "Starting Havrouta-Talmud link generation..." }
-        val linksCreated = generateHavroutaLinks(repository, logger)
-        logger.i { "Havrouta link generation completed. Created $linksCreated links." }
+        val talmudLinksCreated = generateHavroutaLinks(repository, logger)
+        logger.i { "Havrouta-Talmud link generation completed. Created $talmudLinksCreated links." }
+
+        logger.i { "Starting Havrouta-Hearot link generation from Otzaria files..." }
+        val hearotLinksCreated = generateHavroutaHearotLinks(repository, logger, sourceDir)
+        logger.i { "Havrouta-Hearot link generation completed. Created $hearotLinksCreated links." }
+
+        logger.i { "Total links created: ${talmudLinksCreated + hearotLinksCreated}" }
     } catch (e: Exception) {
         logger.e(e) { "Error generating Havrouta links" }
         throw e
@@ -415,4 +429,151 @@ private suspend fun updateBookHasLinks(repository: SeforimRepository, logger: Lo
     )
 
     logger.i { "book_has_links table updated" }
+}
+
+/**
+ * Data class for parsing Otzaria link JSON files.
+ */
+@Serializable
+private data class OtzariaLinkData(
+    val line_index_1: Long,
+    val line_index_2: Long,
+    val heRef_2: String,
+    val path_2: String,
+    @SerialName("Conection Type")
+    val connectionType: String
+)
+
+private val json = Json {
+    ignoreUnknownKeys = true
+    coerceInputValues = true
+}
+
+/**
+ * Generates links between Havrouta and Hearot al Havrouta using Otzaria link files.
+ */
+private suspend fun generateHavroutaHearotLinks(
+    repository: SeforimRepository,
+    logger: Logger,
+    sourceDir: String
+): Int {
+    val linksDir = File(sourceDir, "links")
+    if (!linksDir.exists()) {
+        logger.w { "Links directory not found: ${linksDir.absolutePath}" }
+        return 0
+    }
+
+    // Get all Havrouta books
+    val allBooks = repository.getAllBooks()
+    val havroutaBooks = allBooks.filter { it.title.startsWith("חברותא על ") }
+    val booksByTitle = allBooks.associateBy { it.title }
+
+    logger.i { "Found ${havroutaBooks.size} Havrouta books" }
+
+    var totalLinksCreated = 0
+
+    for (havroutaBook in havroutaBooks) {
+        val linkFileName = "${havroutaBook.title}_links.json"
+        val linkFile = File(linksDir, linkFileName)
+
+        if (!linkFile.exists()) {
+            logger.d { "No link file found for ${havroutaBook.title}" }
+            continue
+        }
+
+        logger.i { "Processing links for ${havroutaBook.title}" }
+
+        try {
+            val content = linkFile.readText()
+            val links: List<OtzariaLinkData> = json.decodeFromString(content)
+
+            // Filter for links to הערות על חברותא
+            val hearotLinks = links.filter { it.path_2.contains("הערות על חברותא") }
+
+            if (hearotLinks.isEmpty()) {
+                logger.d { "No Hearot links found in ${linkFileName}" }
+                continue
+            }
+
+            logger.i { "Found ${hearotLinks.size} links to Hearot" }
+
+            // Get lines for the Havrouta book
+            val havroutaLines = repository.getLines(havroutaBook.id, 0, havroutaBook.totalLines - 1)
+            val havroutaLinesByIndex = havroutaLines.associateBy { it.lineIndex }
+
+            var linksCreated = 0
+            val linkBatch = mutableListOf<Link>()
+
+            for (linkData in hearotLinks) {
+                // Extract target book title from path
+                val targetTitle = linkData.path_2.split('\\').last().substringBeforeLast('.')
+                val targetBook = booksByTitle[targetTitle]
+
+                if (targetBook == null) {
+                    logger.d { "Target book not found: $targetTitle" }
+                    continue
+                }
+
+                // Get line indices (Otzaria uses 1-based indices)
+                val sourceLineIndex = (linkData.line_index_1.toInt() - 1).coerceAtLeast(0)
+                val targetLineIndex = (linkData.line_index_2.toInt() - 1).coerceAtLeast(0)
+
+                val sourceLine = havroutaLinesByIndex[sourceLineIndex]
+                if (sourceLine == null) {
+                    logger.d { "Source line not found at index $sourceLineIndex" }
+                    continue
+                }
+
+                // Get target line
+                val targetLines = repository.getLines(targetBook.id, targetLineIndex, targetLineIndex)
+                if (targetLines.isEmpty()) {
+                    logger.d { "Target line not found at index $targetLineIndex in ${targetBook.title}" }
+                    continue
+                }
+                val targetLine = targetLines.first()
+
+                // Create link: Havrouta -> Hearot (COMMENTARY)
+                linkBatch.add(Link(
+                    sourceBookId = havroutaBook.id,
+                    targetBookId = targetBook.id,
+                    sourceLineId = sourceLine.id,
+                    targetLineId = targetLine.id,
+                    connectionType = ConnectionType.COMMENTARY
+                ))
+
+                // Create reverse link: Hearot -> Havrouta (SOURCE)
+                linkBatch.add(Link(
+                    sourceBookId = targetBook.id,
+                    targetBookId = havroutaBook.id,
+                    sourceLineId = targetLine.id,
+                    targetLineId = sourceLine.id,
+                    connectionType = ConnectionType.SOURCE
+                ))
+
+                linksCreated += 2
+
+                // Batch insert
+                if (linkBatch.size >= 1000) {
+                    for (link in linkBatch) {
+                        repository.insertLink(link)
+                    }
+                    linkBatch.clear()
+                }
+            }
+
+            // Insert remaining links
+            for (link in linkBatch) {
+                repository.insertLink(link)
+            }
+            linkBatch.clear()
+
+            totalLinksCreated += linksCreated
+            logger.i { "Created $linksCreated links for ${havroutaBook.title}" }
+
+        } catch (e: Exception) {
+            logger.e(e) { "Error processing links for ${havroutaBook.title}" }
+        }
+    }
+
+    return totalLinksCreated
 }
