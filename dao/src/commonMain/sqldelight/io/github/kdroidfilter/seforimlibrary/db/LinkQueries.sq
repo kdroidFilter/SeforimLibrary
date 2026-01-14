@@ -48,6 +48,17 @@ WHERE l.sourceLineId IN ? AND ct.name IN ?
 ORDER BY b.orderIndex
 LIMIT ? OFFSET ?;
 
+selectLinksBySourceLineIdsAndTypesPagedDistinct:
+SELECT MIN(l.id) AS id, MIN(l.sourceBookId) AS sourceBookId, l.targetBookId, MIN(l.sourceLineId) AS sourceLineId, l.targetLineId, MIN(l.connectionTypeId) AS connectionTypeId, ct.name AS connectionType, b.title AS targetBookTitle, tl.content AS targetText
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN book b ON l.targetBookId = b.id
+JOIN line tl ON l.targetLineId = tl.id
+WHERE l.sourceLineId IN ? AND ct.name IN ?
+GROUP BY l.targetLineId
+ORDER BY b.orderIndex
+LIMIT ? OFFSET ?;
+
 selectLinksBySourceLineIdsTargetsAndTypesPaged:
 SELECT l.*, ct.name AS connectionType, b.title AS targetBookTitle, tl.content AS targetText
 FROM link l
@@ -55,6 +66,17 @@ JOIN connection_type ct ON l.connectionTypeId = ct.id
 JOIN book b ON l.targetBookId = b.id
 JOIN line tl ON l.targetLineId = tl.id
 WHERE l.sourceLineId IN ? AND l.targetBookId IN ? AND ct.name IN ?
+ORDER BY b.orderIndex
+LIMIT ? OFFSET ?;
+
+selectLinksBySourceLineIdsTargetsAndTypesPagedDistinct:
+SELECT MIN(l.id) AS id, MIN(l.sourceBookId) AS sourceBookId, l.targetBookId, MIN(l.sourceLineId) AS sourceLineId, l.targetLineId, MIN(l.connectionTypeId) AS connectionTypeId, ct.name AS connectionType, b.title AS targetBookTitle, tl.content AS targetText
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN book b ON l.targetBookId = b.id
+JOIN line tl ON l.targetLineId = tl.id
+WHERE l.sourceLineId IN ? AND l.targetBookId IN ? AND ct.name IN ?
+GROUP BY l.targetLineId
 ORDER BY b.orderIndex
 LIMIT ? OFFSET ?;
 
