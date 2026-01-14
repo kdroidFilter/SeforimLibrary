@@ -54,10 +54,14 @@ fun main(args: Array<String>) = runBlocking {
         val hearotLinksCreated = generateHavroutaHearotLinks(repository, logger, sourceDir)
         logger.i { "Havrouta-Hearot link generation completed. Created $hearotLinksCreated links." }
 
+        logger.i { "Creating transitive Talmud-Hearot links..." }
+        val transitiveLinksCreated = generateTalmudHearotTransitiveLinks(repository, logger)
+        logger.i { "Transitive Talmud-Hearot link generation completed. Created $transitiveLinksCreated links." }
+
         logger.i { "Setting Hearot as default commentators for Havrouta books..." }
         setHearotAsDefaultCommentators(repository, logger)
 
-        logger.i { "Total links created: ${talmudLinksCreated + hearotLinksCreated}" }
+        logger.i { "Total links created: ${talmudLinksCreated + hearotLinksCreated + transitiveLinksCreated}" }
 
         // Restore PRAGMAs
         logger.i { "Restoring PRAGMA settings..." }
@@ -547,9 +551,9 @@ private suspend fun generateHavroutaHearotLinks(
                 continue
             }
 
-            // Get line indices (Otzaria uses 0-based, our DB uses 1-based)
-            val sourceLineIndex = linkData.line_index_1.toInt() + 1
-            val targetLineIndex = linkData.line_index_2.toInt() + 1
+            // Get line indices (Otzaria links use 1-based, our DB uses 0-based)
+            val sourceLineIndex = linkData.line_index_1.toInt() - 1
+            val targetLineIndex = linkData.line_index_2.toInt() - 1
 
             val sourceLineId = sourceLineIds[sourceLineIndex]
             if (sourceLineId == null) {
@@ -624,4 +628,69 @@ private suspend fun setHearotAsDefaultCommentators(
     }
 
     logger.i { "Set default commentators for $count Havrouta books" }
+}
+
+/**
+ * Creates transitive links from Talmud directly to Hearot al Havrouta.
+ *
+ * For each path: Talmud line → Havrouta line → Hearot line,
+ * this creates a direct link: Talmud line → Hearot line (COMMENTARY).
+ *
+ * Uses a single SQL query to efficiently find all transitive relationships.
+ */
+private suspend fun generateTalmudHearotTransitiveLinks(
+    repository: SeforimRepository,
+    logger: Logger
+): Int {
+    val allBooks = repository.getAllBooks()
+    val talmudBooks = allBooks.filter { book ->
+        book.sourceId == 1L &&
+            !book.title.startsWith("משנה") &&
+            !book.title.startsWith("תלמוד ירושלמי") &&
+            !book.title.startsWith("תוספתא")
+    }
+    val havroutaBooks = allBooks.filter { it.title.startsWith("חברותא על ") }
+    val hearotBooks = allBooks.filter { it.title.startsWith("הערות על חברותא") }
+
+    val talmudBookIds = talmudBooks.map { it.id }.joinToString(",")
+    val havroutaBookIds = havroutaBooks.map { it.id }.joinToString(",")
+    val hearotBookIds = hearotBooks.map { it.id }.joinToString(",")
+
+    if (talmudBookIds.isEmpty() || havroutaBookIds.isEmpty() || hearotBookIds.isEmpty()) {
+        logger.w { "Missing books for transitive link generation" }
+        return 0
+    }
+
+    logger.i { "Found ${talmudBooks.size} Talmud, ${havroutaBooks.size} Havrouta, ${hearotBooks.size} Hearot books" }
+
+    // Use a single SQL query to find all transitive links:
+    // Talmud (l1.source) -> Havrouta (l1.target = l2.source) -> Hearot (l2.target)
+    // Insert directly into link table
+    logger.i { "Creating transitive Talmud->Hearot links via SQL..." }
+
+    val insertSql = """
+        INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, connectionTypeId)
+        SELECT DISTINCT
+            l1.sourceBookId,
+            l2.targetBookId,
+            l1.sourceLineId,
+            l2.targetLineId,
+            ct.id
+        FROM link l1
+        JOIN link l2 ON l1.targetLineId = l2.sourceLineId
+        JOIN connection_type ct ON ct.name = 'COMMENTARY'
+        JOIN connection_type ct1 ON l1.connectionTypeId = ct1.id AND ct1.name = 'COMMENTARY'
+        JOIN connection_type ct2 ON l2.connectionTypeId = ct2.id AND ct2.name = 'COMMENTARY'
+        WHERE l1.sourceBookId IN ($talmudBookIds)
+          AND l1.targetBookId IN ($havroutaBookIds)
+          AND l2.sourceBookId IN ($havroutaBookIds)
+          AND l2.targetBookId IN ($hearotBookIds)
+    """.trimIndent()
+
+    repository.executeRawQuery(insertSql)
+
+    logger.i { "Transitive Talmud->Hearot links created successfully" }
+
+    // Return 0 since we can't easily get the count from executeRawQuery
+    return 0
 }
