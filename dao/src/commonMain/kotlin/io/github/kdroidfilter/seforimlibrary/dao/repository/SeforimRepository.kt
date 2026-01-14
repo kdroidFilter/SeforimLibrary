@@ -1558,51 +1558,99 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         activeCommentatorIds: Set<Long> = emptySet(),
         connectionTypes: Set<ConnectionType> = setOf(ConnectionType.COMMENTARY),
         offset: Int,
-        limit: Int
+        limit: Int,
+        distinctByTargetLine: Boolean = false
     ): List<CommentaryWithText> = withContext(Dispatchers.IO) {
         if (lineIds.isEmpty()) return@withContext emptyList()
         if (connectionTypes.isEmpty()) return@withContext emptyList()
         val typeNames = connectionTypes.map { it.name }
+        // Use distinct queries when dealing with multiple source lines to avoid duplicate target lines
+        val useDistinct = distinctByTargetLine && lineIds.size > 1
         if (activeCommentatorIds.isEmpty()) {
-            database.linkQueriesQueries.selectLinksBySourceLineIdsAndTypesPaged(
-                lineIds,
-                typeNames,
-                limit.toLong(),
-                offset.toLong()
-            ).executeAsList().map {
-                CommentaryWithText(
-                    link = Link(
-                        id = it.id,
-                        sourceBookId = it.sourceBookId,
-                        targetBookId = it.targetBookId,
-                        sourceLineId = it.sourceLineId,
-                        targetLineId = it.targetLineId,
-                        connectionType = ConnectionType.fromString(it.connectionType)
-                    ),
-                    targetBookTitle = it.targetBookTitle,
-                    targetText = it.targetText
-                )
+            if (useDistinct) {
+                database.linkQueriesQueries.selectLinksBySourceLineIdsAndTypesPagedDistinct(
+                    lineIds,
+                    typeNames,
+                    limit.toLong(),
+                    offset.toLong()
+                ).executeAsList().map {
+                    CommentaryWithText(
+                        link = Link(
+                            id = it.id ?: 0L,
+                            sourceBookId = it.sourceBookId ?: 0L,
+                            targetBookId = it.targetBookId,
+                            sourceLineId = it.sourceLineId ?: 0L,
+                            targetLineId = it.targetLineId,
+                            connectionType = ConnectionType.fromString(it.connectionType)
+                        ),
+                        targetBookTitle = it.targetBookTitle,
+                        targetText = it.targetText
+                    )
+                }
+            } else {
+                database.linkQueriesQueries.selectLinksBySourceLineIdsAndTypesPaged(
+                    lineIds,
+                    typeNames,
+                    limit.toLong(),
+                    offset.toLong()
+                ).executeAsList().map {
+                    CommentaryWithText(
+                        link = Link(
+                            id = it.id,
+                            sourceBookId = it.sourceBookId,
+                            targetBookId = it.targetBookId,
+                            sourceLineId = it.sourceLineId,
+                            targetLineId = it.targetLineId,
+                            connectionType = ConnectionType.fromString(it.connectionType)
+                        ),
+                        targetBookTitle = it.targetBookTitle,
+                        targetText = it.targetText
+                    )
+                }
             }
         } else {
-            database.linkQueriesQueries.selectLinksBySourceLineIdsTargetsAndTypesPaged(
-                lineIds,
-                activeCommentatorIds.toList(),
-                typeNames,
-                limit.toLong(),
-                offset.toLong()
-            ).executeAsList().map {
-                CommentaryWithText(
-                    link = Link(
-                        id = it.id,
-                        sourceBookId = it.sourceBookId,
-                        targetBookId = it.targetBookId,
-                        sourceLineId = it.sourceLineId,
-                        targetLineId = it.targetLineId,
-                        connectionType = ConnectionType.fromString(it.connectionType)
-                    ),
-                    targetBookTitle = it.targetBookTitle,
-                    targetText = it.targetText
-                )
+            if (useDistinct) {
+                database.linkQueriesQueries.selectLinksBySourceLineIdsTargetsAndTypesPagedDistinct(
+                    lineIds,
+                    activeCommentatorIds.toList(),
+                    typeNames,
+                    limit.toLong(),
+                    offset.toLong()
+                ).executeAsList().map {
+                    CommentaryWithText(
+                        link = Link(
+                            id = it.id ?: 0L,
+                            sourceBookId = it.sourceBookId ?: 0L,
+                            targetBookId = it.targetBookId,
+                            sourceLineId = it.sourceLineId ?: 0L,
+                            targetLineId = it.targetLineId,
+                            connectionType = ConnectionType.fromString(it.connectionType)
+                        ),
+                        targetBookTitle = it.targetBookTitle,
+                        targetText = it.targetText
+                    )
+                }
+            } else {
+                database.linkQueriesQueries.selectLinksBySourceLineIdsTargetsAndTypesPaged(
+                    lineIds,
+                    activeCommentatorIds.toList(),
+                    typeNames,
+                    limit.toLong(),
+                    offset.toLong()
+                ).executeAsList().map {
+                    CommentaryWithText(
+                        link = Link(
+                            id = it.id,
+                            sourceBookId = it.sourceBookId,
+                            targetBookId = it.targetBookId,
+                            sourceLineId = it.sourceLineId,
+                            targetLineId = it.targetLineId,
+                            connectionType = ConnectionType.fromString(it.connectionType)
+                        ),
+                        targetBookTitle = it.targetBookTitle,
+                        targetText = it.targetText
+                    )
+                }
             }
         }
     }
