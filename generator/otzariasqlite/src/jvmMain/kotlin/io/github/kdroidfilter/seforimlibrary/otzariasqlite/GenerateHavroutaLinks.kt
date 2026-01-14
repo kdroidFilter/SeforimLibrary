@@ -544,9 +544,9 @@ private suspend fun generateHavroutaHearotLinks(
                 continue
             }
 
-            // Get line indices (Otzaria uses 1-based indices)
-            val sourceLineIndex = (linkData.line_index_1.toInt() - 1).coerceAtLeast(0)
-            val targetLineIndex = (linkData.line_index_2.toInt() - 1).coerceAtLeast(0)
+            // Get line indices (Otzaria uses 0-based, our DB uses 1-based)
+            val sourceLineIndex = linkData.line_index_1.toInt() + 1
+            val targetLineIndex = linkData.line_index_2.toInt() + 1
 
             val sourceLineId = sourceLineIds[sourceLineIndex]
             if (sourceLineId == null) {
