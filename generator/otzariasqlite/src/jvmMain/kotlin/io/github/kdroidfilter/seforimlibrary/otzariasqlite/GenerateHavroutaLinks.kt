@@ -54,6 +54,9 @@ fun main(args: Array<String>) = runBlocking {
         val hearotLinksCreated = generateHavroutaHearotLinks(repository, logger, sourceDir)
         logger.i { "Havrouta-Hearot link generation completed. Created $hearotLinksCreated links." }
 
+        logger.i { "Setting Hearot as default commentators for Havrouta books..." }
+        setHearotAsDefaultCommentators(repository, logger)
+
         logger.i { "Total links created: ${talmudLinksCreated + hearotLinksCreated}" }
 
         // Restore PRAGMAs
@@ -588,4 +591,37 @@ private suspend fun generateHavroutaHearotLinks(
 
     logger.i { "Inserted ${allLinks.size} Havrouta-Hearot links" }
     return allLinks.size
+}
+
+/**
+ * Sets Hearot al Havrouta as the default commentator for each Havrouta book.
+ */
+private suspend fun setHearotAsDefaultCommentators(
+    repository: SeforimRepository,
+    logger: Logger
+) {
+    val allBooks = repository.getAllBooks()
+    val havroutaBooks = allBooks.filter { it.title.startsWith("חברותא על ") }
+    val hearotBooks = allBooks.filter { it.title.startsWith("הערות על חברותא") }
+
+    // Build a map from tractate name to Hearot book
+    // "הערות על חברותא ברכות" -> extract "ברכות"
+    val hearotByTractate = hearotBooks.associateBy { book ->
+        book.title.removePrefix("הערות על חברותא").trim()
+    }
+
+    var count = 0
+    for (havroutaBook in havroutaBooks) {
+        // "חברותא על ברכות" -> extract "ברכות"
+        val tractateName = havroutaBook.title.removePrefix("חברותא על ").trim()
+        val hearotBook = hearotByTractate[tractateName]
+
+        if (hearotBook != null) {
+            repository.setDefaultCommentatorsForBook(havroutaBook.id, listOf(hearotBook.id))
+            count++
+            logger.d { "Set ${hearotBook.title} as default for ${havroutaBook.title}" }
+        }
+    }
+
+    logger.i { "Set default commentators for $count Havrouta books" }
 }
