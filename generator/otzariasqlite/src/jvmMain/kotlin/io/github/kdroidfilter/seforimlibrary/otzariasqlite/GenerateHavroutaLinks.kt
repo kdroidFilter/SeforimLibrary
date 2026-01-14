@@ -40,6 +40,12 @@ fun main(args: Array<String>) = runBlocking {
         ?: OtzariaFetcher.ensureLocalSource(logger).toString()
 
     try {
+        // Performance optimizations
+        logger.i { "Setting PRAGMA for bulk operations..." }
+        repository.executeRawQuery("PRAGMA foreign_keys = OFF")
+        repository.executeRawQuery("PRAGMA synchronous = OFF")
+        repository.executeRawQuery("PRAGMA journal_mode = OFF")
+
         logger.i { "Starting Havrouta-Talmud link generation..." }
         val talmudLinksCreated = generateHavroutaLinks(repository, logger)
         logger.i { "Havrouta-Talmud link generation completed. Created $talmudLinksCreated links." }
@@ -49,6 +55,12 @@ fun main(args: Array<String>) = runBlocking {
         logger.i { "Havrouta-Hearot link generation completed. Created $hearotLinksCreated links." }
 
         logger.i { "Total links created: ${talmudLinksCreated + hearotLinksCreated}" }
+
+        // Restore PRAGMAs
+        logger.i { "Restoring PRAGMA settings..." }
+        repository.executeRawQuery("PRAGMA foreign_keys = ON")
+        repository.executeRawQuery("PRAGMA synchronous = NORMAL")
+        repository.executeRawQuery("PRAGMA journal_mode = WAL")
     } catch (e: Exception) {
         logger.e(e) { "Error generating Havrouta links" }
         throw e
@@ -570,13 +582,9 @@ private suspend fun generateHavroutaHearotLinks(
 
     logger.i { "Prepared ${allLinks.size} links (skipped: $skippedBook book not found, $skippedSource source line, $skippedTarget target line)" }
 
-    // Batch insert all links
+    // Batch insert all links using optimized method
     logger.i { "Inserting ${allLinks.size} links into database..." }
-    repository.runInTransaction {
-        for (link in allLinks) {
-            repository.insertLink(link)
-        }
-    }
+    repository.insertLinksBatch(allLinks)
 
     logger.i { "Inserted ${allLinks.size} Havrouta-Hearot links" }
     return allLinks.size
