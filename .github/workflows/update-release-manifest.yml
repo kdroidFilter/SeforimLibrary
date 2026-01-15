@@ -33,26 +33,16 @@ jobs:
           # Get all releases for history
           ALL_RELEASES=$(gh release list --json tagName,name,publishedAt --limit 100)
 
-          # Build the manifest JSON
-          cat > release-manifest.json << 'INNEREOF'
-          {
-            "generatedAt": "GENERATED_AT_PLACEHOLDER",
-            "latest": LATEST_PLACEHOLDER,
-            "releases": RELEASES_PLACEHOLDER
-          }
-          INNEREOF
-
           # Get current timestamp
           GENERATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          # Replace placeholders using jq
-          jq --arg generatedAt "$GENERATED_AT" \
+          # Build the manifest JSON directly with jq
+          jq -n \
+             --arg generatedAt "$GENERATED_AT" \
              --argjson latest "$LATEST_RELEASE" \
              --argjson releases "$ALL_RELEASES" \
-             '.generatedAt = $generatedAt | .latest = $latest | .releases = $releases' \
-             release-manifest.json > release-manifest.json.tmp
-
-          mv release-manifest.json.tmp release-manifest.json
+             '{generatedAt: $generatedAt, latest: $latest, releases: $releases}' \
+             > release-manifest.json
 
           echo "Generated release-manifest.json:"
           cat release-manifest.json
