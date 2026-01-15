@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-01-15T22:21:45Z",
+  "generatedAt": "2026-01-15T22:24:17Z",
   "latest": {
     "assets": [
       {
@@ -7,7 +7,7 @@
         "contentType": "application/octet-stream",
         "createdAt": "2026-01-14T20:43:44Z",
         "digest": "sha256:0e93416ddec79e3265f4215cfc8e1cf0632432edd8e492dd409baa0e6baf7689",
-        "downloadCount": 168,
+        "downloadCount": 171,
         "id": "RA_kwDOPFZ3eM4UTQkc",
         "label": "",
         "name": "seforim_bundle.tar.zst.part01",
@@ -21,7 +21,7 @@
         "contentType": "application/octet-stream",
         "createdAt": "2026-01-14T20:46:52Z",
         "digest": "sha256:48242548899177f944226dc7f83c5c6d2326702b18881ab3799cc6a27b4099f0",
-        "downloadCount": 132,
+        "downloadCount": 133,
         "id": "RA_kwDOPFZ3eM4UTQ39",
         "label": "",
         "name": "seforim_bundle.tar.zst.part02",
