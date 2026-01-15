@@ -1,0 +1,72 @@
+name: Update Release Manifest
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-manifest:
+    name: Generate release assets JSON
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Generate release manifest JSON
+        run: |
+          set -euo pipefail
+
+          echo "Fetching all releases..."
+
+          # Get latest release info
+          LATEST_RELEASE=$(gh release view --json tagName,name,publishedAt,assets)
+
+          # Get all releases for history
+          ALL_RELEASES=$(gh release list --json tagName,name,publishedAt --limit 100)
+
+          # Build the manifest JSON
+          cat > release-manifest.json << 'INNEREOF'
+          {
+            "generatedAt": "GENERATED_AT_PLACEHOLDER",
+            "latest": LATEST_PLACEHOLDER,
+            "releases": RELEASES_PLACEHOLDER
+          }
+          INNEREOF
+
+          # Get current timestamp
+          GENERATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # Replace placeholders using jq
+          jq --arg generatedAt "$GENERATED_AT" \
+             --argjson latest "$LATEST_RELEASE" \
+             --argjson releases "$ALL_RELEASES" \
+             '.generatedAt = $generatedAt | .latest = $latest | .releases = $releases' \
+             release-manifest.json > release-manifest.json.tmp
+
+          mv release-manifest.json.tmp release-manifest.json
+
+          echo "Generated release-manifest.json:"
+          cat release-manifest.json
+
+      - name: Commit and push manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add release-manifest.json
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update release manifest [skip ci]"
+            git push
+          fi

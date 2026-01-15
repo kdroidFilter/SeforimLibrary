@@ -74,3 +74,10 @@ jobs:
             generator/packaging/build/package/seforim_bundle.tar.zst.part*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trigger release manifest update
+        run: |
+          sleep 10  # Wait for release to be fully published
+          gh workflow run update-release-manifest.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
