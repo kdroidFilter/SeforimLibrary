@@ -1,6 +1,8 @@
 name: Update Release Manifest
 
 on:
+  push:
+    branches: [master]
   release:
     types: [published]
   workflow_dispatch:
