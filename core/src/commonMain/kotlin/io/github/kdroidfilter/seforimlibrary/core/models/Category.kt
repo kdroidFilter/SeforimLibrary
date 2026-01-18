@@ -1,5 +1,6 @@
 package io.github.kdroidfilter.seforimlibrary.core.models
 
+import androidx.compose.runtime.Stable
 import kotlinx.serialization.Serializable
 
 /**
@@ -11,6 +12,7 @@ import kotlinx.serialization.Serializable
  * @property level The level of the category in the hierarchy (0 for root categories)
  * @property order The display order of the category (lower values appear first)
  */
+@Stable
 @Serializable
 data class Category(
     val id: Long = 0,

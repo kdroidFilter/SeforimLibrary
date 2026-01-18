@@ -1,11 +1,13 @@
 package io.github.kdroidfilter.seforimlibrary.core.models
 
+import androidx.compose.runtime.Stable
 import kotlinx.serialization.Serializable
 
 /**
  * Describes an alternative TOC structure available for a book
  * (e.g., Parasha/Aliyah alongside the primary chapter/verse).
  */
+@Stable
 @Serializable
 data class AltTocStructure(
     val id: Long = 0,
@@ -18,6 +20,7 @@ data class AltTocStructure(
 /**
  * Single entry inside an alternative TOC tree.
  */
+@Stable
 @Serializable
 data class AltTocEntry(
     val id: Long = 0,

@@ -22,6 +22,8 @@ kotlin {
         commonMain.dependencies {
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlinx.serialization.protobuf)
+            // Compose runtime for @Stable annotation (used by consuming Compose apps)
+            compileOnly(libs.compose.runtime)
         }
 
         commonTest.dependencies {

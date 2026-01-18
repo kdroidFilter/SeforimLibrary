@@ -1,5 +1,6 @@
 package io.github.kdroidfilter.seforimlibrary.core.models
 
+import androidx.compose.runtime.Stable
 import kotlinx.serialization.Serializable
 
 /**
@@ -14,6 +15,7 @@ import kotlinx.serialization.Serializable
  * @property lineId The identifier of the associated line, or null if not linked to a specific line
  * @property isLastChild Indicates if this TOC entry is the last child of its parent
  */
+@Stable
 @Serializable
 data class TocEntry(
     val id: Long = 0,

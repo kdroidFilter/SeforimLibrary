@@ -1,5 +1,6 @@
 package io.github.kdroidfilter.seforimlibrary.core.models
 
+import androidx.compose.runtime.Stable
 import kotlinx.serialization.Serializable
 
 /**
@@ -20,6 +21,7 @@ import kotlinx.serialization.Serializable
  * @property hasTeamim Indicates if the book contains biblical cantillation marks (teamim)
  * @property hasNekudot Indicates if the book contains vowel points (nikud/nekudot)
  */
+@Stable
 @Serializable
 data class Book(
     val id: Long = 0,

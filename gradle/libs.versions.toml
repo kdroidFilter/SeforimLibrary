@@ -41,6 +41,7 @@ commons-compress = { module = "org.apache.commons:commons-compress", version.ref
 zstd = { module = "com.github.luben:zstd-jni", version.ref = "zstd-jni" }
 androidx-activityCompose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activityCompose" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
+compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose" }
 
 [plugins]
 

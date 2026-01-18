@@ -1,5 +1,6 @@
 package io.github.kdroidfilter.seforimlibrary.core.models
 
+import androidx.compose.runtime.Stable
 import kotlinx.serialization.Serializable
 
 /**
@@ -11,6 +12,7 @@ import kotlinx.serialization.Serializable
  * @property content The original HTML content of the line
  * @property heRef The Hebrew reference/citation (e.g., "בראשית א, א")
  */
+@Stable
 @Serializable
 data class Line(
     val id: Long = 0,
