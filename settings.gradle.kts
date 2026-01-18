@@ -30,6 +30,7 @@ dependencyResolutionManagement {
 }
 include(":core")
 include(":dao")
+include(":search")
 include(":catalog")
 include(":searchindex")
 include(":packaging")
