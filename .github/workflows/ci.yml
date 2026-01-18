@@ -27,10 +27,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run all tests
-        run: ./gradlew test --no-daemon
-
-      - name: Run search module tests
-        run: ./gradlew :search:jvmTest --no-daemon
+        run: ./gradlew allTests --no-daemon
 
       - name: Upload test reports
         if: always()
