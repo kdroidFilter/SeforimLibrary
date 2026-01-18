@@ -13,10 +13,11 @@ kotlinx-serialization = "1.9.0"
 kotlinx-datetime = "0.7.1"
 kermit = "2.0.8"
 sqlDelight = "2.1.0"
-compose = "1.9.3"
+compose = "1.10.0"
 androidx-activityCompose = "1.12.1"
 commons-compress = "1.28.0"
 zstd-jni = "1.5.7-6"
+jsoup = "1.22.1"
 
 [libraries]
 
@@ -39,6 +40,7 @@ sqlDelight-driver-js = { module = "app.cash.sqldelight:web-worker-driver", versi
 commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commons-compress" }
 zstd = { module = "com.github.luben:zstd-jni", version.ref = "zstd-jni" }
 androidx-activityCompose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activityCompose" }
+jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 
 [plugins]
 
