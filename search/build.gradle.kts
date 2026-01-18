@@ -19,7 +19,7 @@ kotlin {
             implementation(libs.lucene.analysis.common)
             implementation(libs.sqlDelight.driver.sqlite)
             implementation(libs.kermit)
-            implementation("org.jsoup:jsoup:1.17.2")
+            implementation(libs.jsoup)
         }
 
         jvmTest.dependencies {
