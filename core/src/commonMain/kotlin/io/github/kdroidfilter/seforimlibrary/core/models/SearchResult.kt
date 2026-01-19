@@ -1,5 +1,6 @@
 package io.github.kdroidfilter.seforimlibrary.core.models
 
+import androidx.compose.runtime.Stable
 import kotlinx.serialization.Serializable
 
 /**
@@ -12,6 +13,7 @@ import kotlinx.serialization.Serializable
  * @property snippet The text excerpt with highlighting
  * @property rank The relevance score of the result
  */
+@Stable
 @Serializable
 data class SearchResult(
     val bookId: Long,
