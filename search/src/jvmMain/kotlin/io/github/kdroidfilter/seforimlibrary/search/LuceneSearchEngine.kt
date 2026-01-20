@@ -293,28 +293,33 @@ class LuceneSearchEngine(
         logger.d { "[DEBUG] Analyzed tokens: $analyzedStd" }
 
         // Get all possible expansions for each token (a token can belong to multiple bases)
-        // Filter out hallucinated expansions using the blacklist
-        val tokenExpansionsRaw: Map<String, List<MagicDictionaryIndex.Expansion>> =
+        // These expansions are used for SEARCH - we keep all of them for better recall
+        val tokenExpansions: Map<String, List<MagicDictionaryIndex.Expansion>> =
             analyzedStd.associateWith { token ->
                 // Get best expansion (prefers matching base, then largest)
                 val expansion = magicDict?.expansionFor(token) ?: return@associateWith emptyList()
-                // Check if this expansion is a known hallucination
-                if (isHallucinatedExpansion(token, expansion)) {
-                    logger.d { "[DEBUG] Token '$token' -> BLOCKED hallucinated expansion: base=${expansion.base}" }
-                    return@associateWith emptyList()
-                }
                 listOf(expansion)
             }
-        tokenExpansionsRaw.forEach { (token, exps) ->
+        tokenExpansions.forEach { (token, exps) ->
             exps.forEach { exp ->
                 logger.d { "[DEBUG] Token '$token' -> expansion: surface=${exp.surface.take(10)}..., variants=${exp.variants.take(10)}..., base=${exp.base}" }
             }
         }
 
-        val tokenExpansions: Map<String, List<MagicDictionaryIndex.Expansion>> = tokenExpansionsRaw
+        // For HIGHLIGHTING, filter out hallucinated expansions to avoid highlighting unrelated words
+        val tokenExpansionsForHighlight: Map<String, List<MagicDictionaryIndex.Expansion>> =
+            tokenExpansions.mapValues { (token, exps) ->
+                exps.filter { exp ->
+                    val isHallucination = isHallucinatedExpansion(token, exp)
+                    if (isHallucination) {
+                        logger.d { "[DEBUG] Token '$token' -> BLOCKED for highlight (hallucination): base=${exp.base}" }
+                    }
+                    !isHallucination
+                }
+            }
 
-        val allExpansions = tokenExpansions.values.flatten()
-        val expandedTerms = allExpansions.flatMap { it.surface + it.variants + it.base }.distinct()
+        val allExpansionsForHighlight = tokenExpansionsForHighlight.values.flatten()
+        val expandedTerms = allExpansionsForHighlight.flatMap { it.surface + it.variants + it.base }.distinct()
         // Add 4-gram terms used in the query (matches text_ng4 clauses) so highlighting can
         // reflect matches that were found via the n-gram branch.
         val ngramTerms = buildNgramTerms(analyzedStd, gram = 4)
