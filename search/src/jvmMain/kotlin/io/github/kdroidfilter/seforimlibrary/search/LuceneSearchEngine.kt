@@ -749,6 +749,60 @@ class LuceneSearchEngine(
             .sortedByDescending { it.length }
     }
 
+    /**
+     * Find the best position to center the snippet around.
+     * Instead of just finding the first occurrence of the first anchor term,
+     * this finds where the most anchor terms cluster together.
+     * Returns (position, length) of the best anchor.
+     */
+    private fun findBestAnchorPosition(plainSearch: String, anchorTerms: List<String>, windowSize: Int): Pair<Int, Int> {
+        if (anchorTerms.isEmpty()) return Pair(0, 0)
+
+        // Find all occurrences of all anchor terms
+        data class TermOccurrence(val term: String, val position: Int)
+        val occurrences = mutableListOf<TermOccurrence>()
+
+        for (term in anchorTerms) {
+            if (term.isEmpty()) continue
+            var from = 0
+            while (from <= plainSearch.length - term.length) {
+                val idx = plainSearch.indexOf(term, startIndex = from)
+                if (idx == -1) break
+                occurrences.add(TermOccurrence(term, idx))
+                from = idx + 1
+            }
+        }
+
+        if (occurrences.isEmpty()) return Pair(0, anchorTerms.firstOrNull()?.length ?: 0)
+
+        // Score each occurrence by how many unique terms appear nearby
+        var bestPosition = occurrences.first().position
+        var bestLength = occurrences.first().term.length
+        var bestScore = 0
+
+        for (occ in occurrences) {
+            val windowStart = occ.position - windowSize
+            val windowEnd = occ.position + occ.term.length + windowSize
+
+            // Count unique terms within this window
+            val termsInWindow = occurrences
+                .filter { it.position >= windowStart && it.position <= windowEnd }
+                .map { it.term }
+                .toSet()
+
+            // Score: number of unique terms + bonus for longer anchor term
+            val score = termsInWindow.size * 100 + occ.term.length
+
+            if (score > bestScore) {
+                bestScore = score
+                bestPosition = occ.position
+                bestLength = occ.term.length
+            }
+        }
+
+        return Pair(bestPosition, bestLength)
+    }
+
     private fun buildSnippetInternal(raw: String, anchorTerms: List<String>, highlightTerms: List<String>, context: Int = 220): String {
         if (raw.isEmpty()) return ""
         val (plain, mapToOrig) = HebrewTextUtils.stripDiacriticsWithMap(raw)
@@ -756,12 +810,8 @@ class LuceneSearchEngine(
         val effContext = if (hasDiacritics) maxOf(context, 360) else context
         val plainSearch = HebrewTextUtils.replaceFinalsWithBase(plain)
 
-        val plainIdx = anchorTerms.asSequence().mapNotNull { t ->
-            val i = plainSearch.indexOf(t)
-            if (i >= 0) i else null
-        }.firstOrNull() ?: 0
-
-        val plainLen = anchorTerms.firstOrNull()?.length ?: 0
+        // Find the best position: where most anchor terms cluster together
+        val (plainIdx, plainLen) = findBestAnchorPosition(plainSearch, anchorTerms, effContext)
         val plainStart = (plainIdx - effContext).coerceAtLeast(0)
         val plainEnd = (plainIdx + plainLen + effContext).coerceAtMost(plain.length)
         val origStart = HebrewTextUtils.mapToOrigIndex(mapToOrig, plainStart)
