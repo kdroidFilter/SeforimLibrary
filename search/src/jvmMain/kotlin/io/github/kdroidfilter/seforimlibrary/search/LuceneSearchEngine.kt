@@ -749,60 +749,6 @@ class LuceneSearchEngine(
             .sortedByDescending { it.length }
     }
 
-    /**
-     * Find the best position to center the snippet around.
-     * Instead of just finding the first occurrence of the first anchor term,
-     * this finds where the most anchor terms cluster together.
-     * Returns (position, length) of the best anchor.
-     */
-    private fun findBestAnchorPosition(plainSearch: String, anchorTerms: List<String>, windowSize: Int): Pair<Int, Int> {
-        if (anchorTerms.isEmpty()) return Pair(0, 0)
-
-        // Find all occurrences of all anchor terms
-        data class TermOccurrence(val term: String, val position: Int)
-        val occurrences = mutableListOf<TermOccurrence>()
-
-        for (term in anchorTerms) {
-            if (term.isEmpty()) continue
-            var from = 0
-            while (from <= plainSearch.length - term.length) {
-                val idx = plainSearch.indexOf(term, startIndex = from)
-                if (idx == -1) break
-                occurrences.add(TermOccurrence(term, idx))
-                from = idx + 1
-            }
-        }
-
-        if (occurrences.isEmpty()) return Pair(0, anchorTerms.firstOrNull()?.length ?: 0)
-
-        // Score each occurrence by how many unique terms appear nearby
-        var bestPosition = occurrences.first().position
-        var bestLength = occurrences.first().term.length
-        var bestScore = 0
-
-        for (occ in occurrences) {
-            val windowStart = occ.position - windowSize
-            val windowEnd = occ.position + occ.term.length + windowSize
-
-            // Count unique terms within this window
-            val termsInWindow = occurrences
-                .filter { it.position >= windowStart && it.position <= windowEnd }
-                .map { it.term }
-                .toSet()
-
-            // Score: number of unique terms + bonus for longer anchor term
-            val score = termsInWindow.size * 100 + occ.term.length
-
-            if (score > bestScore) {
-                bestScore = score
-                bestPosition = occ.position
-                bestLength = occ.term.length
-            }
-        }
-
-        return Pair(bestPosition, bestLength)
-    }
-
     private fun buildSnippetInternal(raw: String, anchorTerms: List<String>, highlightTerms: List<String>, context: Int = 220): String {
         if (raw.isEmpty()) return ""
         val (plain, mapToOrig) = HebrewTextUtils.stripDiacriticsWithMap(raw)
@@ -810,8 +756,53 @@ class LuceneSearchEngine(
         val effContext = if (hasDiacritics) maxOf(context, 360) else context
         val plainSearch = HebrewTextUtils.replaceFinalsWithBase(plain)
 
-        // Find the best position: where most anchor terms cluster together
-        val (plainIdx, plainLen) = findBestAnchorPosition(plainSearch, anchorTerms, effContext)
+        // Find best anchor position: where most terms cluster together
+        // Optimized: limit occurrences per term, early exit on perfect score
+        var plainIdx = 0
+        var plainLen = anchorTerms.firstOrNull()?.length ?: 0
+
+        if (anchorTerms.isNotEmpty()) {
+            val maxOccPerTerm = 5 // Limit occurrences per term for perf
+            val positions = mutableListOf<Pair<Int, String>>() // (position, term)
+
+            for (term in anchorTerms) {
+                if (term.isEmpty()) continue
+                var from = 0
+                var count = 0
+                while (from <= plainSearch.length - term.length && count < maxOccPerTerm) {
+                    val idx = plainSearch.indexOf(term, startIndex = from)
+                    if (idx == -1) break
+                    positions.add(idx to term)
+                    from = idx + 1
+                    count++
+                }
+            }
+
+            if (positions.isNotEmpty()) {
+                val maxPossibleScore = anchorTerms.size
+                var bestScore = 0
+
+                for ((pos, term) in positions) {
+                    // Count unique terms in window around this position
+                    val windowStart = pos - effContext
+                    val windowEnd = pos + term.length + effContext
+                    var uniqueTerms = 0
+                    val seen = mutableSetOf<String>()
+                    for ((p, t) in positions) {
+                        if (p in windowStart..windowEnd && seen.add(t)) uniqueTerms++
+                    }
+                    val score = uniqueTerms * 100 + term.length
+
+                    if (score > bestScore) {
+                        bestScore = score
+                        plainIdx = pos
+                        plainLen = term.length
+                        // Early exit if we found all terms clustered
+                        if (uniqueTerms >= maxPossibleScore) break
+                    }
+                }
+            }
+        }
         val plainStart = (plainIdx - effContext).coerceAtLeast(0)
         val plainEnd = (plainIdx + plainLen + effContext).coerceAtMost(plain.length)
         val origStart = HebrewTextUtils.mapToOrigIndex(mapToOrig, plainStart)
