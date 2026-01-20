@@ -45,6 +45,58 @@ class LuceneSearchEngine(
         // Constants for snippet source building (must match indexer)
         private const val SNIPPET_NEIGHBOR_WINDOW = 4
         private const val SNIPPET_MIN_LENGTH = 280
+
+        /**
+         * Blacklist of hallucinated dictionary mappings.
+         * Loaded from resources/hallucination_blacklist.tsv
+         * Key: normalized token, Value: set of incorrect base forms to reject
+         *
+         * TODO: This is a temporary workaround. The proper fix is to correct the
+         *       hallucinated mappings directly in the lexical dictionary (lexical.db)
+         *       so this blacklist becomes unnecessary.
+         */
+        private val HALLUCINATION_BLACKLIST: Map<String, Set<String>> by lazy {
+            loadHallucinationBlacklist()
+        }
+
+        private fun loadHallucinationBlacklist(): Map<String, Set<String>> {
+            val result = mutableMapOf<String, MutableSet<String>>()
+            try {
+                val inputStream = LuceneSearchEngine::class.java.getResourceAsStream("/hallucination_blacklist.tsv")
+                if (inputStream == null) {
+                    logger.w { "hallucination_blacklist.tsv not found in resources" }
+                    return emptyMap()
+                }
+                inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        val trimmed = line.trim()
+                        if (trimmed.isEmpty() || trimmed.startsWith("#")) return@forEach
+                        val parts = trimmed.split("\t")
+                        if (parts.size >= 2) {
+                            val token = HebrewTextUtils.normalizeHebrew(parts[0])
+                            val base = HebrewTextUtils.normalizeHebrew(parts[1])
+                            result.getOrPut(token) { mutableSetOf() }.add(base)
+                        }
+                    }
+                }
+                logger.d { "Loaded ${result.size} hallucination blacklist entries" }
+            } catch (e: Exception) {
+                logger.e(e) { "Failed to load hallucination blacklist" }
+            }
+            return result
+        }
+
+        /**
+         * Check if an expansion should be rejected based on the hallucination blacklist.
+         */
+        private fun isHallucinatedExpansion(token: String, expansion: MagicDictionaryIndex.Expansion): Boolean {
+            val normalizedToken = HebrewTextUtils.normalizeHebrew(token)
+            val blacklistedBases = HALLUCINATION_BLACKLIST[normalizedToken] ?: return false
+            return expansion.base.any { base ->
+                val normalizedBase = HebrewTextUtils.normalizeHebrew(base)
+                blacklistedBases.contains(normalizedBase)
+            }
+        }
     }
 
     // Open Lucene directory lazily to avoid any I/O at app startup
@@ -141,6 +193,48 @@ class LuceneSearchEngine(
         )
         val anchorTerms = buildAnchorTerms(norm, highlightTerms)
         return buildSnippetInternal(rawClean, anchorTerms, highlightTerms)
+    }
+
+    override fun buildHighlightTerms(query: String): List<String> {
+        val norm = HebrewTextUtils.normalizeHebrew(query)
+        if (norm.isBlank()) return emptyList()
+
+        val analyzedRaw = analyzeToTerms(stdAnalyzer, norm) ?: emptyList()
+        val hasHashem = query.contains("ה׳") || query.contains("ה'")
+
+        // Filter single letters and stop words (same logic as buildSearchContext)
+        val analyzedStd = analyzedRaw.filter { token ->
+            if (token == "ה" && hasHashem) return@filter true
+            if (token.any { it.isDigit() }) return@filter true
+            token.length >= 2 && token !in setOf(
+                "א", "ב", "ג", "ד", "ה", "ו", "ז", "ח", "ט", "י", "כ", "ל", "מ",
+                "נ", "ס", "ע", "פ", "צ", "ק", "ר", "ש", "ת",
+            )
+        }
+
+        // Get dictionary expansions
+        val tokenExpansions: Map<String, List<MagicDictionaryIndex.Expansion>> =
+            analyzedStd.associateWith { token ->
+                val expansion = magicDict?.expansionFor(token) ?: return@associateWith emptyList()
+                listOf(expansion)
+            }
+
+        // Filter hallucinations for highlighting
+        val tokenExpansionsForHighlight = tokenExpansions.mapValues { (token, exps) ->
+            exps.filter { exp -> !isHallucinatedExpansion(token, exp) }
+        }
+
+        // Build expanded terms (filter 2-letter from expansions only)
+        val allExpansionsForHighlight = tokenExpansionsForHighlight.values.flatten()
+        val expandedTerms = allExpansionsForHighlight
+            .flatMap { it.surface + it.variants + it.base }
+            .filter { it.length > 2 }
+            .distinct()
+
+        val ngramTerms = buildNgramTerms(analyzedStd, gram = 4)
+        val hashemTerms = if (hasHashem) loadHashemHighlightTerms() else emptyList()
+
+        return filterTermsForHighlight(analyzedStd + expandedTerms + ngramTerms + hashemTerms)
     }
 
     override fun close() {
@@ -241,22 +335,38 @@ class LuceneSearchEngine(
         logger.d { "[DEBUG] Analyzed tokens: $analyzedStd" }
 
         // Get all possible expansions for each token (a token can belong to multiple bases)
-        val tokenExpansionsRaw: Map<String, List<MagicDictionaryIndex.Expansion>> =
+        // These expansions are used for SEARCH - we keep all of them for better recall
+        val tokenExpansions: Map<String, List<MagicDictionaryIndex.Expansion>> =
             analyzedStd.associateWith { token ->
                 // Get best expansion (prefers matching base, then largest)
                 val expansion = magicDict?.expansionFor(token) ?: return@associateWith emptyList()
                 listOf(expansion)
             }
-        tokenExpansionsRaw.forEach { (token, exps) ->
+        tokenExpansions.forEach { (token, exps) ->
             exps.forEach { exp ->
                 logger.d { "[DEBUG] Token '$token' -> expansion: surface=${exp.surface.take(10)}..., variants=${exp.variants.take(10)}..., base=${exp.base}" }
             }
         }
 
-        val tokenExpansions: Map<String, List<MagicDictionaryIndex.Expansion>> = tokenExpansionsRaw
+        // For HIGHLIGHTING, filter out hallucinated expansions to avoid highlighting unrelated words
+        val tokenExpansionsForHighlight: Map<String, List<MagicDictionaryIndex.Expansion>> =
+            tokenExpansions.mapValues { (token, exps) ->
+                exps.filter { exp ->
+                    val isHallucination = isHallucinatedExpansion(token, exp)
+                    if (isHallucination) {
+                        logger.d { "[DEBUG] Token '$token' -> BLOCKED for highlight (hallucination): base=${exp.base}" }
+                    }
+                    !isHallucination
+                }
+            }
 
-        val allExpansions = tokenExpansions.values.flatten()
-        val expandedTerms = allExpansions.flatMap { it.surface + it.variants + it.base }.distinct()
+        val allExpansionsForHighlight = tokenExpansionsForHighlight.values.flatten()
+        // Filter out 2-letter terms from dictionary expansions for highlighting
+        // (2-letter words should only be highlighted if explicitly in the query)
+        val expandedTerms = allExpansionsForHighlight
+            .flatMap { it.surface + it.variants + it.base }
+            .filter { it.length > 2 }
+            .distinct()
         // Add 4-gram terms used in the query (matches text_ng4 clauses) so highlighting can
         // reflect matches that were found via the n-gram branch.
         val ngramTerms = buildNgramTerms(analyzedStd, gram = 4)
@@ -688,12 +798,53 @@ class LuceneSearchEngine(
         val effContext = if (hasDiacritics) maxOf(context, 360) else context
         val plainSearch = HebrewTextUtils.replaceFinalsWithBase(plain)
 
-        val plainIdx = anchorTerms.asSequence().mapNotNull { t ->
-            val i = plainSearch.indexOf(t)
-            if (i >= 0) i else null
-        }.firstOrNull() ?: 0
+        // Find best anchor position: where most terms cluster together
+        // Optimized: limit occurrences per term, early exit on perfect score
+        var plainIdx = 0
+        var plainLen = anchorTerms.firstOrNull()?.length ?: 0
 
-        val plainLen = anchorTerms.firstOrNull()?.length ?: 0
+        if (anchorTerms.isNotEmpty()) {
+            val maxOccPerTerm = 5 // Limit occurrences per term for perf
+            val positions = mutableListOf<Pair<Int, String>>() // (position, term)
+
+            for (term in anchorTerms) {
+                if (term.isEmpty()) continue
+                var from = 0
+                var count = 0
+                while (from <= plainSearch.length - term.length && count < maxOccPerTerm) {
+                    val idx = plainSearch.indexOf(term, startIndex = from)
+                    if (idx == -1) break
+                    positions.add(idx to term)
+                    from = idx + 1
+                    count++
+                }
+            }
+
+            if (positions.isNotEmpty()) {
+                val maxPossibleScore = anchorTerms.size
+                var bestScore = 0
+
+                for ((pos, term) in positions) {
+                    // Count unique terms in window around this position
+                    val windowStart = pos - effContext
+                    val windowEnd = pos + term.length + effContext
+                    var uniqueTerms = 0
+                    val seen = mutableSetOf<String>()
+                    for ((p, t) in positions) {
+                        if (p in windowStart..windowEnd && seen.add(t)) uniqueTerms++
+                    }
+                    val score = uniqueTerms * 100 + term.length
+
+                    if (score > bestScore) {
+                        bestScore = score
+                        plainIdx = pos
+                        plainLen = term.length
+                        // Early exit if we found all terms clustered
+                        if (uniqueTerms >= maxPossibleScore) break
+                    }
+                }
+            }
+        }
         val plainStart = (plainIdx - effContext).coerceAtLeast(0)
         val plainEnd = (plainIdx + plainLen + effContext).coerceAtMost(plain.length)
         val origStart = HebrewTextUtils.mapToOrigIndex(mapToOrig, plainStart)

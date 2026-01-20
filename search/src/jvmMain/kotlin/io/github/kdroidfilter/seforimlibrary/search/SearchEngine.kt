@@ -82,4 +82,17 @@ interface SearchEngine : Closeable {
      * @return HTML string with `<b>` tags around matches, possibly with `...` for truncation
      */
     fun buildSnippet(rawText: String, query: String, near: Int): String
+
+    /**
+     * Builds a list of terms to highlight for a given query, using dictionary expansion.
+     *
+     * This is useful for intelligent find-in-page that matches the same words
+     * as the global search (including synonyms and morphological variants).
+     * The terms are filtered to exclude hallucinated mappings and short words
+     * that only came from dictionary expansion.
+     *
+     * @param query The search query in Hebrew
+     * @return List of normalized terms to highlight (includes original tokens + expansions)
+     */
+    fun buildHighlightTerms(query: String): List<String>
 }
