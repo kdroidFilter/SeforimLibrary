@@ -319,7 +319,12 @@ class LuceneSearchEngine(
             }
 
         val allExpansionsForHighlight = tokenExpansionsForHighlight.values.flatten()
-        val expandedTerms = allExpansionsForHighlight.flatMap { it.surface + it.variants + it.base }.distinct()
+        // Filter out 2-letter terms from dictionary expansions for highlighting
+        // (2-letter words should only be highlighted if explicitly in the query)
+        val expandedTerms = allExpansionsForHighlight
+            .flatMap { it.surface + it.variants + it.base }
+            .filter { it.length > 2 }
+            .distinct()
         // Add 4-gram terms used in the query (matches text_ng4 clauses) so highlighting can
         // reflect matches that were found via the n-gram branch.
         val ngramTerms = buildNgramTerms(analyzedStd, gram = 4)
