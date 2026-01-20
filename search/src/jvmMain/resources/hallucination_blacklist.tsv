@@ -1,0 +1,29 @@
+# Hallucination Blacklist
+# Format: token<TAB>base
+# Lines starting with # are comments
+# These are LLM-generated mappings that are incorrect and should be ignored
+לחתוכ	כנ
+לחתוך	כנ
+לבקש	רצה
+מתפלל	בעה
+לשבת	נתנ
+לעבוד	עשה
+להעמיד	קומ
+כנ	כנ
+בנ	בנ
+לשימ	שמ
+לשים	שמ
+לדונ	יד
+לדון	יד
+אמ	אמ
+להרגיע	יושב
+לחייכ	חוה
+לחייך	חוה
+שנ	שנ
+עצ	עצ
+דנ	דנ
+להיכנס	עלה
+לשקול	לקח
+לבנות	בנ
+לשחרר	שרה
+להתיר	שרה
