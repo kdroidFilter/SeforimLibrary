@@ -195,6 +195,48 @@ class LuceneSearchEngine(
         return buildSnippetInternal(rawClean, anchorTerms, highlightTerms)
     }
 
+    override fun buildHighlightTerms(query: String): List<String> {
+        val norm = HebrewTextUtils.normalizeHebrew(query)
+        if (norm.isBlank()) return emptyList()
+
+        val analyzedRaw = analyzeToTerms(stdAnalyzer, norm) ?: emptyList()
+        val hasHashem = query.contains("ה׳") || query.contains("ה'")
+
+        // Filter single letters and stop words (same logic as buildSearchContext)
+        val analyzedStd = analyzedRaw.filter { token ->
+            if (token == "ה" && hasHashem) return@filter true
+            if (token.any { it.isDigit() }) return@filter true
+            token.length >= 2 && token !in setOf(
+                "א", "ב", "ג", "ד", "ה", "ו", "ז", "ח", "ט", "י", "כ", "ל", "מ",
+                "נ", "ס", "ע", "פ", "צ", "ק", "ר", "ש", "ת",
+            )
+        }
+
+        // Get dictionary expansions
+        val tokenExpansions: Map<String, List<MagicDictionaryIndex.Expansion>> =
+            analyzedStd.associateWith { token ->
+                val expansion = magicDict?.expansionFor(token) ?: return@associateWith emptyList()
+                listOf(expansion)
+            }
+
+        // Filter hallucinations for highlighting
+        val tokenExpansionsForHighlight = tokenExpansions.mapValues { (token, exps) ->
+            exps.filter { exp -> !isHallucinatedExpansion(token, exp) }
+        }
+
+        // Build expanded terms (filter 2-letter from expansions only)
+        val allExpansionsForHighlight = tokenExpansionsForHighlight.values.flatten()
+        val expandedTerms = allExpansionsForHighlight
+            .flatMap { it.surface + it.variants + it.base }
+            .filter { it.length > 2 }
+            .distinct()
+
+        val ngramTerms = buildNgramTerms(analyzedStd, gram = 4)
+        val hashemTerms = if (hasHashem) loadHashemHighlightTerms() else emptyList()
+
+        return filterTermsForHighlight(analyzedStd + expandedTerms + ngramTerms + hashemTerms)
+    }
+
     override fun close() {
         // Directory is closed automatically when readers are closed
     }
