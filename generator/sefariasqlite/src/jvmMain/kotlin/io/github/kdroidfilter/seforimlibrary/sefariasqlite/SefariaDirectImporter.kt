@@ -162,7 +162,9 @@ class SefariaDirectImporter(
             val catId = ensureCategoryPath(payload.categoriesHe)
             val bookId = nextBookId.getAndIncrement()
             val bookPath = buildBookPath(payload.categoriesHe, payload.heTitle)
-            val bookOrder = bookOrders[payload.enTitle]?.toFloat() ?: 999f
+            val bookOrder = (bookOrders[payload.enTitle]
+                ?: bookOrders[payload.heTitle]
+                ?: bookOrders[sanitizeFolder(payload.heTitle)])?.toFloat() ?: 999f
             val normalizedPath = normalizedBookPath(payload.categoriesHe, payload.heTitle)
             val isBaseBook = normalizedPath in baseBookKeys
 
