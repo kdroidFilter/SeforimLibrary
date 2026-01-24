@@ -685,6 +685,19 @@ class DatabaseGenerator(
             return
         }
 
+        // Skip if a book with the same heRef already exists from Sefaria (Sefaria has priority)
+        val existingBook = repository.getBookByHeRef(title)
+        if (existingBook != null) {
+            val existingSource = repository.getSourceById(existingBook.sourceId)
+            if (existingSource?.name == "Sefaria") {
+                logger.i { "⏭️ Skipping '$title' - already exists from Sefaria (priority source)" }
+                processedBooksCount += 1
+                val pct = if (totalBooksToProcess > 0) (processedBooksCount * 100 / totalBooksToProcess) else 0
+                logger.i { "Books progress: $processedBooksCount/$totalBooksToProcess (${pct}%)" }
+                return
+            }
+        }
+
         // Assign a unique ID to this book
         val currentBookId = nextBookId++
         logger.d { "Assigning ID $currentBookId to book '$title' with categoryId: $categoryId" }
