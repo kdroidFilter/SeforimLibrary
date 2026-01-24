@@ -728,6 +728,7 @@ class DatabaseGenerator(
             categoryId = categoryId,
             sourceId = sourceId,
             title = title,
+            heRef = title,
             authors = authors,
             pubPlaces = pubPlaces,
             pubDates = pubDates,

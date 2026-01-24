@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS book (
     categoryId INTEGER NOT NULL,
     sourceId INTEGER NOT NULL,
     title TEXT NOT NULL,
+    heRef TEXT,
     heShortDesc TEXT,
     -- Optional raw notes attached to the base book (when a companion file 'הערות על <title>' exists)
     notesContent TEXT,
@@ -91,6 +92,7 @@ CREATE INDEX IF NOT EXISTS idx_book_category ON book(categoryId);
 CREATE INDEX IF NOT EXISTS idx_book_title ON book(title);
 CREATE INDEX IF NOT EXISTS idx_book_order ON book(orderIndex);
 CREATE INDEX IF NOT EXISTS idx_book_source ON book(sourceId);
+CREATE INDEX IF NOT EXISTS idx_book_heref ON book(heRef);
 
 -- Book-publication place junction table
 CREATE TABLE IF NOT EXISTS book_pub_place (

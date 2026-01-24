@@ -174,6 +174,7 @@ class SefariaDirectImporter(
                 categoryId = catId,
                 sourceId = sourceId,
                 title = payload.heTitle,
+                heRef = payload.heTitle,
                 authors = payload.authors.map { Author(name = it) },
                 pubPlaces = emptyList(),
                 pubDates = payload.pubDates,
