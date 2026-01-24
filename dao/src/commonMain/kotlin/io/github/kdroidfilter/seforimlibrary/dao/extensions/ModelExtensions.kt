@@ -78,6 +78,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json, authors: L
         categoryId = categoryId,
         sourceId = sourceId,
         title = title,
+        heRef = heRef,
         authors = authors,
         topics = emptyList(),
         pubPlaces = pubPlaces,

@@ -642,6 +642,19 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     /**
+     * Retrieves a book by its stable Hebrew reference identifier (heRef).
+     * Returns null if no book with the given heRef exists.
+     */
+    suspend fun getBookByHeRef(heRef: String): Book? = withContext(Dispatchers.IO) {
+        val bookData = database.bookQueriesQueries.selectByHeRef(heRef).executeAsOneOrNull() ?: return@withContext null
+        val authors = getBookAuthors(bookData.id)
+        val topics = getBookTopics(bookData.id)
+        val pubPlaces = getBookPubPlaces(bookData.id)
+        val pubDates = getBookPubDates(bookData.id)
+        return@withContext bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+    }
+
+    /**
      * Retrieves a book by approximate title (exact, normalized, or LIKE).
      */
     suspend fun findBookByTitlePreferExact(title: String): Book? = withContext(Dispatchers.IO) {
@@ -852,6 +865,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 categoryId = book.categoryId,
                 sourceId = book.sourceId,
                 title = book.title,
+                heRef = book.heRef,
                 heShortDesc = book.heShortDesc,
                 notesContent = book.notesContent,
                 orderIndex = book.order.toLong(),
@@ -909,6 +923,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 categoryId = book.categoryId,
                 sourceId = book.sourceId,
                 title = book.title,
+                heRef = book.heRef,
                 heShortDesc = book.heShortDesc,
                 notesContent = book.notesContent,
                 orderIndex = book.order.toLong(),
