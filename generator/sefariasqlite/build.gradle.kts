@@ -65,3 +65,28 @@ tasks.register<JavaExec>("generateSefariaSqlite") {
         "-XX:MaxGCPauseMillis=200"
     )
 }
+
+// Post-processing step to rename categories after all generation is complete
+// Usage:
+//   ./gradlew :sefariasqlite:renameCategories
+//   ./gradlew :sefariasqlite:renameCategories -PseforimDb=/path/to/seforim.db
+tasks.register<JavaExec>("renameCategories") {
+    group = "application"
+    description = "Rename 'פירושים מודרניים' categories to 'מחברי זמננו' after generation."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.sefariasqlite.RenameCategoriesPostProcessKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    // Pass DB path if provided
+    if (project.hasProperty("seforimDb")) {
+        systemProperty("seforimDb", project.property("seforimDb") as String)
+    } else if (System.getenv("SEFORIM_DB") != null) {
+        systemProperty("seforimDb", System.getenv("SEFORIM_DB"))
+    } else {
+        val defaultDbPath = rootProject.layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+        systemProperty("seforimDb", defaultDbPath)
+    }
+
+    jvmArgs = listOf("-Xmx256m")
+}
