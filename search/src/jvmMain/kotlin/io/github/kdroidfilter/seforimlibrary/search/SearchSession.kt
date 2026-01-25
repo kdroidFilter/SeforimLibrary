@@ -72,3 +72,17 @@ data class LineHit(
     val score: Float,
     val rawText: String
 )
+
+/**
+ * Aggregated facet counts from a search query.
+ * Computed once via a lightweight Lucene collector without loading full results.
+ *
+ * @property totalHits Total number of matching documents
+ * @property categoryCounts Map of categoryId to count (includes ancestor categories)
+ * @property bookCounts Map of bookId to count
+ */
+data class SearchFacets(
+    val totalHits: Long,
+    val categoryCounts: Map<Long, Int>,
+    val bookCounts: Map<Long, Int>,
+)
