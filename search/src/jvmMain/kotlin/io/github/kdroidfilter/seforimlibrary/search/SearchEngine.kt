@@ -46,6 +46,7 @@ interface SearchEngine : Closeable {
      * @param categoryFilter Optional category ID to restrict results
      * @param bookIds Optional collection of book IDs to restrict results (OR logic)
      * @param lineIds Optional collection of line IDs to restrict results (OR logic)
+     * @param baseBookOnly If true, restrict results to base books only (default: false)
      * @return A [SearchSession] for paginated access to results, or null if query is invalid
      */
     fun openSession(
@@ -54,7 +55,8 @@ interface SearchEngine : Closeable {
         bookFilter: Long? = null,
         categoryFilter: Long? = null,
         bookIds: Collection<Long>? = null,
-        lineIds: Collection<Long>? = null
+        lineIds: Collection<Long>? = null,
+        baseBookOnly: Boolean = false
     ): SearchSession?
 
     /**
@@ -109,6 +111,7 @@ interface SearchEngine : Closeable {
      * @param categoryFilter Optional category ID to restrict results
      * @param bookIds Optional collection of book IDs to restrict results (OR logic)
      * @param lineIds Optional collection of line IDs to restrict results (OR logic)
+     * @param baseBookOnly If true, restrict results to base books only (default: false)
      * @return [SearchFacets] with counts, or null if query is invalid
      */
     fun computeFacets(
@@ -117,6 +120,7 @@ interface SearchEngine : Closeable {
         bookFilter: Long? = null,
         categoryFilter: Long? = null,
         bookIds: Collection<Long>? = null,
-        lineIds: Collection<Long>? = null
+        lineIds: Collection<Long>? = null,
+        baseBookOnly: Boolean = false
     ): SearchFacets?
 }

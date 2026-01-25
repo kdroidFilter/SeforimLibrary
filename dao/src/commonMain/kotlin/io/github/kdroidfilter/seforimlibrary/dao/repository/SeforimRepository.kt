@@ -290,6 +290,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     }
 
     /**
+     * Returns all ancestor category IDs (including the category itself) using the
+     * category_closure table. Used for pre-indexing ancestors in search indexes.
+     */
+    suspend fun getAncestorCategoryIds(categoryId: Long): List<Long> = withContext(Dispatchers.IO) {
+        database.categoryClosureQueriesQueries.selectAncestors(categoryId).executeAsList()
+    }
+
+    /**
      * Finds categories whose title matches the LIKE pattern. Use %term% for contains.
      */
     suspend fun findCategoriesByTitleLike(pattern: String, limit: Int = 20): List<Category> = withContext(Dispatchers.IO) {

@@ -152,9 +152,10 @@ class LuceneSearchEngine(
         bookFilter: Long?,
         categoryFilter: Long?,
         bookIds: Collection<Long>?,
-        lineIds: Collection<Long>?
+        lineIds: Collection<Long>?,
+        baseBookOnly: Boolean
     ): SearchSession? {
-        val context = buildSearchContext(query, near, bookFilter, categoryFilter, bookIds, lineIds) ?: return null
+        val context = buildSearchContext(query, near, bookFilter, categoryFilter, bookIds, lineIds, baseBookOnly) ?: return null
         val reader = DirectoryReader.open(dir)
         return LuceneSearchSession(context.query, context.anchorTerms, context.highlightTerms, reader)
     }
@@ -252,9 +253,10 @@ class LuceneSearchEngine(
         bookFilter: Long?,
         categoryFilter: Long?,
         bookIds: Collection<Long>?,
-        lineIds: Collection<Long>?
+        lineIds: Collection<Long>?,
+        baseBookOnly: Boolean
     ): SearchFacets? {
-        val context = buildSearchContext(query, near, bookFilter, categoryFilter, bookIds, lineIds)
+        val context = buildSearchContext(query, near, bookFilter, categoryFilter, bookIds, lineIds, baseBookOnly)
             ?: return null
 
         return withSearcher { searcher ->
@@ -373,7 +375,8 @@ class LuceneSearchEngine(
         bookFilter: Long?,
         categoryFilter: Long?,
         bookIds: Collection<Long>?,
-        lineIds: Collection<Long>?
+        lineIds: Collection<Long>?,
+        baseBookOnly: Boolean = false
     ): SearchContext? {
         val norm = HebrewTextUtils.normalizeHebrew(rawQuery)
         if (norm.isBlank()) return null
@@ -452,6 +455,8 @@ class LuceneSearchEngine(
         builder.add(TermQuery(Term("type", "line")), BooleanClause.Occur.FILTER)
         if (bookFilter != null) builder.add(IntPoint.newExactQuery("book_id", bookFilter.toInt()), BooleanClause.Occur.FILTER)
         if (categoryFilter != null) builder.add(IntPoint.newExactQuery("category_id", categoryFilter.toInt()), BooleanClause.Occur.FILTER)
+        // Filter by base books only (is_base_book = 1) when baseBookOnly is true
+        if (baseBookOnly) builder.add(IntPoint.newExactQuery("is_base_book", 1), BooleanClause.Occur.FILTER)
         val bookIdsArray = bookIds?.map { it.toInt() }?.toIntArray()
         if (bookIdsArray != null && bookIdsArray.isNotEmpty()) {
             builder.add(IntPoint.newSetQuery("book_id", *bookIdsArray), BooleanClause.Occur.FILTER)

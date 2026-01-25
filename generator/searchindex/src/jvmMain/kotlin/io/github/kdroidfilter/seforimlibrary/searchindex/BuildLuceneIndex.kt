@@ -13,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.Dispatchers
+import java.util.concurrent.ConcurrentHashMap
 import org.apache.lucene.analysis.standard.StandardAnalyzer
 import org.apache.lucene.analysis.Analyzer
 import org.apache.lucene.analysis.TokenStream
@@ -123,6 +124,9 @@ fun main() = runBlocking {
             logger.i { "Indexing $totalBooks books into $indexDir using StandardAnalyzer + 4-gram field" }
             val progress = java.util.concurrent.atomic.AtomicInteger(0)
 
+            // Pre-compute ancestor category IDs per category (cached across books)
+            val ancestorsByCategory = ConcurrentHashMap<Long, List<Long>>()
+
             books.map { book ->
                 async(workerDispatcher) {
                     val current = progress.incrementAndGet()
@@ -191,6 +195,10 @@ fun main() = runBlocking {
                             val allLines = runCatching { localRepo.getLines(book.id, 0, total - 1) }.getOrDefault(emptyList())
                             // Note: rawPlainText is no longer stored in the index.
                             // Snippet source is fetched from DB at query time by RepositorySnippetSourceProvider.
+                            // Pre-compute ancestor category IDs for this book's category (cached)
+                            val ancestors = ancestorsByCategory.getOrPut(book.categoryId) {
+                                runBlocking { localRepo.getAncestorCategoryIds(book.categoryId) }
+                            }
                             var processed = 0
                             var nextLogPct = 10
                             for (ln in allLines) {
@@ -199,6 +207,7 @@ fun main() = runBlocking {
                                     bookId = book.id,
                                     bookTitle = book.title,
                                     categoryId = book.categoryId,
+                                    ancestorCategoryIds = ancestors,
                                     lineId = ln.id,
                                     lineIndex = ln.lineIndex,
                                     normalizedText = normalized,
