@@ -33,6 +33,7 @@ class LuceneTextIndexWriter(
 
         const val FIELD_BOOK_ID = "book_id"
         const val FIELD_CATEGORY_ID = "category_id"
+        const val FIELD_ANCESTOR_CATEGORY_IDS = "ancestor_category_ids"
         const val FIELD_BOOK_TITLE = "book_title"
         const val FIELD_LINE_ID = "line_id"
         const val FIELD_LINE_INDEX = "line_index"
@@ -59,6 +60,7 @@ class LuceneTextIndexWriter(
         bookId: Long,
         bookTitle: String,
         categoryId: Long,
+        ancestorCategoryIds: List<Long>,
         lineId: Long,
         lineIndex: Int,
         normalizedText: String,
@@ -75,6 +77,14 @@ class LuceneTextIndexWriter(
             add(StoredField(FIELD_CATEGORY_ID, categoryId))
             add(IntPoint(FIELD_CATEGORY_ID, categoryId.toInt()))
             add(StoredField(FIELD_BOOK_TITLE, bookTitle))
+
+            // Index ancestor category IDs for efficient filtering and retrieval
+            // IntPoint for filtering (multi-valued)
+            for (ancestorId in ancestorCategoryIds) {
+                add(IntPoint(FIELD_ANCESTOR_CATEGORY_IDS, ancestorId.toInt()))
+            }
+            // StoredField for retrieval (comma-separated)
+            add(StoredField(FIELD_ANCESTOR_CATEGORY_IDS, ancestorCategoryIds.joinToString(",")))
 
             add(StoredField(FIELD_LINE_ID, lineId))
             add(IntPoint(FIELD_LINE_ID, lineId.toInt()))

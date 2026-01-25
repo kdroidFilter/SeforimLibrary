@@ -8,14 +8,19 @@ import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
 import org.apache.lucene.index.DirectoryReader
 import org.apache.lucene.index.StoredFields
 import org.apache.lucene.index.Term
+import org.apache.lucene.index.LeafReaderContext
 import org.apache.lucene.search.BooleanClause
 import org.apache.lucene.search.BooleanQuery
 import org.apache.lucene.search.BoostQuery
+import org.apache.lucene.search.Collector
 import org.apache.lucene.search.FuzzyQuery
 import org.apache.lucene.search.IndexSearcher
+import org.apache.lucene.search.LeafCollector
 import org.apache.lucene.search.PrefixQuery
 import org.apache.lucene.search.Query
+import org.apache.lucene.search.Scorable
 import org.apache.lucene.search.ScoreDoc
+import org.apache.lucene.search.ScoreMode
 import org.apache.lucene.search.TermQuery
 import org.apache.lucene.util.QueryBuilder
 import org.apache.lucene.store.FSDirectory
@@ -147,9 +152,10 @@ class LuceneSearchEngine(
         bookFilter: Long?,
         categoryFilter: Long?,
         bookIds: Collection<Long>?,
-        lineIds: Collection<Long>?
+        lineIds: Collection<Long>?,
+        baseBookOnly: Boolean
     ): SearchSession? {
-        val context = buildSearchContext(query, near, bookFilter, categoryFilter, bookIds, lineIds) ?: return null
+        val context = buildSearchContext(query, near, bookFilter, categoryFilter, bookIds, lineIds, baseBookOnly) ?: return null
         val reader = DirectoryReader.open(dir)
         return LuceneSearchSession(context.query, context.anchorTerms, context.highlightTerms, reader)
     }
@@ -241,6 +247,68 @@ class LuceneSearchEngine(
         // Directory is closed automatically when readers are closed
     }
 
+    override fun computeFacets(
+        query: String,
+        near: Int,
+        bookFilter: Long?,
+        categoryFilter: Long?,
+        bookIds: Collection<Long>?,
+        lineIds: Collection<Long>?,
+        baseBookOnly: Boolean
+    ): SearchFacets? {
+        val context = buildSearchContext(query, near, bookFilter, categoryFilter, bookIds, lineIds, baseBookOnly)
+            ?: return null
+
+        return withSearcher { searcher ->
+            val categoryCounts = mutableMapOf<Long, Int>()
+            val bookCounts = mutableMapOf<Long, Int>()
+            var totalHits = 0L
+
+            // Lightweight collector that only reads stored fields for aggregation
+            val collector = object : Collector {
+                override fun getLeafCollector(leafContext: LeafReaderContext): LeafCollector {
+                    val storedFields = leafContext.reader().storedFields()
+
+                    return object : LeafCollector {
+                        override fun setScorer(scorer: Scorable) {
+                            // No scoring needed for facet counting
+                        }
+
+                        override fun collect(doc: Int) {
+                            totalHits++
+                            val luceneDoc = storedFields.document(doc)
+
+                            // Book count
+                            val bookId = luceneDoc.getField("book_id")?.numericValue()?.toLong()
+                            if (bookId != null) {
+                                bookCounts[bookId] = (bookCounts[bookId] ?: 0) + 1
+                            }
+
+                            // Category counts from ancestors (stored as comma-separated string)
+                            val ancestorStr = luceneDoc.getField("ancestor_category_ids")?.stringValue() ?: ""
+                            if (ancestorStr.isNotEmpty()) {
+                                for (idStr in ancestorStr.split(",")) {
+                                    val catId = idStr.trim().toLongOrNull() ?: continue
+                                    categoryCounts[catId] = (categoryCounts[catId] ?: 0) + 1
+                                }
+                            }
+                        }
+                    }
+                }
+
+                override fun scoreMode(): ScoreMode = ScoreMode.COMPLETE_NO_SCORES
+            }
+
+            searcher.search(context.query, collector)
+
+            SearchFacets(
+                totalHits = totalHits,
+                categoryCounts = categoryCounts.toMap(),
+                bookCounts = bookCounts.toMap()
+            )
+        }
+    }
+
     // --- Inner SearchSession class ---
 
     inner class LuceneSearchSession internal constructor(
@@ -307,7 +375,8 @@ class LuceneSearchEngine(
         bookFilter: Long?,
         categoryFilter: Long?,
         bookIds: Collection<Long>?,
-        lineIds: Collection<Long>?
+        lineIds: Collection<Long>?,
+        baseBookOnly: Boolean = false
     ): SearchContext? {
         val norm = HebrewTextUtils.normalizeHebrew(rawQuery)
         if (norm.isBlank()) return null
@@ -386,6 +455,8 @@ class LuceneSearchEngine(
         builder.add(TermQuery(Term("type", "line")), BooleanClause.Occur.FILTER)
         if (bookFilter != null) builder.add(IntPoint.newExactQuery("book_id", bookFilter.toInt()), BooleanClause.Occur.FILTER)
         if (categoryFilter != null) builder.add(IntPoint.newExactQuery("category_id", categoryFilter.toInt()), BooleanClause.Occur.FILTER)
+        // Filter by base books only (is_base_book = 1) when baseBookOnly is true
+        if (baseBookOnly) builder.add(IntPoint.newExactQuery("is_base_book", 1), BooleanClause.Occur.FILTER)
         val bookIdsArray = bookIds?.map { it.toInt() }?.toIntArray()
         if (bookIdsArray != null && bookIdsArray.isNotEmpty()) {
             builder.add(IntPoint.newSetQuery("book_id", *bookIdsArray), BooleanClause.Occur.FILTER)
