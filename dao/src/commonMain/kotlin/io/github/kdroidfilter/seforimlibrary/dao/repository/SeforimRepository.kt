@@ -36,7 +36,7 @@ import kotlinx.serialization.json.Json
  * @property driver The SQL driver used to connect to the database
  * @constructor Creates a repository with the specified database path and driver
  */
-class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
+class SeforimRepository(databasePath: String, private val driver: SqlDriver) : LineSelectionRepository {
     private val database = SeforimDb(driver)
     private val json = Json { ignoreUnknownKeys = true }
     private val logger = Logger.withTag("SeforimRepository")
@@ -160,7 +160,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     /**
      * Gets the tocEntryId associated with a line via the mapping table.
      */
-    suspend fun getTocEntryIdForLine(lineId: Long): Long? = withContext(Dispatchers.IO) {
+    override suspend fun getTocEntryIdForLine(lineId: Long): Long? = withContext(Dispatchers.IO) {
         database.lineTocQueriesQueries.selectTocEntryIdByLineId(lineId).executeAsOneOrNull()
     }
 
@@ -183,14 +183,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     /**
      * Returns the TOC entry whose heading line is the given line id, or null if not a TOC heading.
      */
-    suspend fun getHeadingTocEntryByLineId(lineId: Long): TocEntry? = withContext(Dispatchers.IO) {
+    override suspend fun getHeadingTocEntryByLineId(lineId: Long): TocEntry? = withContext(Dispatchers.IO) {
         database.tocQueriesQueries.selectByLineId(lineId).executeAsOneOrNull()?.toModel()
     }
 
     /**
      * Returns all line ids that belong to the given TOC entry (section), ordered by lineIndex.
      */
-    suspend fun getLineIdsForTocEntry(tocEntryId: Long): List<Long> = withContext(Dispatchers.IO) {
+    override suspend fun getLineIdsForTocEntry(tocEntryId: Long): List<Long> = withContext(Dispatchers.IO) {
         database.lineTocQueriesQueries.selectLineIdsByTocEntryId(tocEntryId).executeAsList()
     }
 
@@ -1040,7 +1040,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     // --- Lines ---
 
-    suspend fun getLine(id: Long): Line? = withContext(Dispatchers.IO) {
+    override suspend fun getLine(id: Long): Line? = withContext(Dispatchers.IO) {
         database.lineQueriesQueries.selectById(id).executeAsOneOrNull()?.toModel()
     }
 
@@ -1049,7 +1049,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             .executeAsOneOrNull()?.toModel()
     }
 
-    suspend fun getLines(bookId: Long, startIndex: Int, endIndex: Int): List<Line> =
+    override suspend fun getLines(bookId: Long, startIndex: Int, endIndex: Int): List<Line> =
         withContext(Dispatchers.IO) {
             database.lineQueriesQueries.selectByBookIdRange(
                 bookId = bookId,
@@ -1071,22 +1071,22 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
      * @param currentLineIndex The index of the current line
      * @return The previous line, or null if there is no previous line
      */
-    suspend fun getPreviousLine(bookId: Long, currentLineIndex: Int): Line? = withContext(Dispatchers.IO) {
+    override suspend fun getPreviousLine(bookId: Long, currentLineIndex: Int): Line? = withContext(Dispatchers.IO) {
         if (currentLineIndex <= 0) return@withContext null
-        
+
         val previousIndex = currentLineIndex - 1
         database.lineQueriesQueries.selectByBookIdAndIndex(bookId, previousIndex.toLong())
             .executeAsOneOrNull()?.toModel()
     }
-    
+
     /**
      * Gets the next line for a given book and line index.
-     * 
+     *
      * @param bookId The ID of the book
      * @param currentLineIndex The index of the current line
      * @return The next line, or null if there is no next line
      */
-    suspend fun getNextLine(bookId: Long, currentLineIndex: Int): Line? = withContext(Dispatchers.IO) {
+    override suspend fun getNextLine(bookId: Long, currentLineIndex: Int): Line? = withContext(Dispatchers.IO) {
         val nextIndex = currentLineIndex + 1
         database.lineQueriesQueries.selectByBookIdAndIndex(bookId, nextIndex.toLong())
             .executeAsOneOrNull()?.toModel()
@@ -1165,7 +1165,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     // --- Table of Contents ---
 
-    suspend fun getTocEntry(id: Long): TocEntry? = withContext(Dispatchers.IO) {
+    override suspend fun getTocEntry(id: Long): TocEntry? = withContext(Dispatchers.IO) {
         database.tocQueriesQueries.selectTocById(id).executeAsOneOrNull()?.toModel()
     }
 
