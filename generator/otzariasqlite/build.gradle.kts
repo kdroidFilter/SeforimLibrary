@@ -12,6 +12,7 @@ kotlin {
         commonMain.dependencies {
             api(project(":core"))
             api(project(":dao"))
+            implementation(project(":generator-common"))
 
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.coroutines.test)

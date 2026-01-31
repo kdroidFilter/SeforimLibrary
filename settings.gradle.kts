@@ -37,11 +37,13 @@ include(":searchindex")
 include(":packaging")
 include(":sefariasqlite")
 include(":otzariasqlite")
+include(":generator-common")
 
 project(":catalog").projectDir = file("generator/catalog")
 project(":searchindex").projectDir = file("generator/searchindex")
 project(":packaging").projectDir = file("generator/packaging")
 project(":sefariasqlite").projectDir = file("generator/sefariasqlite")
 project(":otzariasqlite").projectDir = file("generator/otzariasqlite")
+project(":generator-common").projectDir = file("generator/common")
 
 includeBuild("SeforimMagicIndexer")
