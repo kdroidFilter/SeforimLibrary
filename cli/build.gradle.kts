@@ -44,10 +44,18 @@ compose.desktop {
         mainClass = mainClassName
 
         nativeDistributions {
+            modules("java.sql", "jdk.unsupported", "jdk.security.auth", "jdk.incubator.vector")
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = appName
             packageVersion = version.toString()
             jvmArgs("--enable-native-access=ALL-UNNAMED")
+        }
+        buildTypes.release.proguard {
+            version.set("7.8.1")
+            isEnabled = true
+            obfuscate.set(false)
+            optimize.set(true)
+            configurationFiles.from(project.file("proguard-rules.pro"))
         }
     }
 }
