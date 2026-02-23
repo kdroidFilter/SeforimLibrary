@@ -51,10 +51,11 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         logger.d{"Initializing SeforimRepository"}
         // Create the database schema (fresh builds only; no runtime migrations needed)
         SeforimDb.Schema.create(driver)
-        // SQLite optimizations
+        // SQLite optimizations (balanced mode for desktop: 256MB cache + 512MB mmap)
         driver.execute(null, "PRAGMA journal_mode=WAL", 0)
         driver.execute(null, "PRAGMA synchronous=NORMAL", 0)
-        driver.execute(null, "PRAGMA cache_size=40000", 0)
+        driver.execute(null, "PRAGMA cache_size=-256000", 0) // 256MB cache (negative = KiB)
+        driver.execute(null, "PRAGMA mmap_size=536870912", 0) // 512MB memory-mapped I/O
         driver.execute(null, "PRAGMA temp_store=MEMORY", 0)
 
         // Check if the database is empty
