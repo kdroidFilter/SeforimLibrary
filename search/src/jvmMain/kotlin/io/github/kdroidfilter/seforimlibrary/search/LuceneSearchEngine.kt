@@ -24,6 +24,7 @@ import org.apache.lucene.search.ScoreMode
 import org.apache.lucene.search.TermQuery
 import org.apache.lucene.util.QueryBuilder
 import org.apache.lucene.store.FSDirectory
+import org.apache.lucene.store.NIOFSDirectory
 import org.apache.lucene.document.IntPoint
 import org.jsoup.Jsoup
 import org.jsoup.safety.Safelist
@@ -104,8 +105,16 @@ class LuceneSearchEngine(
         }
     }
 
-    // Open Lucene directory lazily to avoid any I/O at app startup
-    private val dir by lazy { FSDirectory.open(indexDir) }
+    // Open Lucene directory lazily to avoid any I/O at app startup.
+    // Falls back to NIOFSDirectory if FSDirectory (MMapDirectory) fails — e.g. on Linux
+    // GraalVM native image where MemorySegmentIndexInputProvider may not be available.
+    private val dir by lazy {
+        try {
+            FSDirectory.open(indexDir)
+        } catch (t: Throwable) {
+            NIOFSDirectory(indexDir)
+        }
+    }
 
     private val stdAnalyzer: Analyzer by lazy { analyzer }
     private val magicDict: MagicDictionaryIndex? by lazy {
