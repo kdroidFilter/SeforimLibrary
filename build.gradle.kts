@@ -83,3 +83,10 @@ tasks.register<Delete>("cleanGeneratedData") {
     // Packaged bundle
     delete(layout.buildDirectory.dir("package"))
 }
+
+
+tasks.register("packageBookImporterWindowsExe") {
+    group = "application"
+    description = "Package the desktop book importer as a Windows EXE (run on Windows)."
+    dependsOn(":bookimporter:packageWindowsExe")
+}
