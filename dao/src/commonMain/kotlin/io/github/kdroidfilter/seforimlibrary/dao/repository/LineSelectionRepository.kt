@@ -29,6 +29,11 @@ interface LineSelectionRepository {
     suspend fun getTocEntry(id: Long): TocEntry?
 
     /**
+     * Returns the ancestor path from the given TOC entry up to the root, ordered by level ASC.
+     */
+    suspend fun getAncestorPath(tocId: Long): List<TocEntry>
+
+    /**
      * Returns a line by its ID.
      */
     suspend fun getLine(id: Long): Line?

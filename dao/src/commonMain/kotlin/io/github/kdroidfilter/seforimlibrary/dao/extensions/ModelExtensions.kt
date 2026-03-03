@@ -242,6 +242,19 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectByLineId.toModel(): TocEntry 
     )
 }
 
+fun io.github.kdroidfilter.seforimlibrary.db.SelectAncestorPath.toModel(): TocEntry =
+    TocEntry(
+        id = id,
+        bookId = bookId,
+        parentId = parentId,
+        textId = textId,
+        text = text,
+        level = level.toInt(),
+        lineId = lineId,
+        isLastChild = isLastChild == 1L,
+        hasChildren = hasChildren == 1L
+    )
+
 // --- Alternative TOC mappings ---
 
 fun io.github.kdroidfilter.seforimlibrary.db.Alt_toc_structure.toModel(): AltTocStructure =
