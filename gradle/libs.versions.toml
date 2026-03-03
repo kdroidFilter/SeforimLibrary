@@ -1,23 +1,20 @@
 [versions]
 
-filekitCore = "0.12.0"
-kotlin = "2.3.0"
+filekitCore = "0.13.0"
+kotlin = "2.3.10"
 agp = "8.12.3"
 jvmToolchain = "25"
-luceneCore = "10.3.2"
-luceneAnalysisCommon = "10.3.2"
-luceneQueryparser = "10.3.2"
-luceneHighlighter = "10.3.2"
+lucene = "10.3.2"
 maven-publish = "0.36.0"
 kotlinx-coroutines = "1.10.2"
 kotlinx-serialization = "1.10.0"
 kotlinx-datetime = "0.7.1"
-kermit = "2.0.8"
+kermit = "2.1.0"
 sqlDelight = "2.2.1"
-compose = "1.10.0"
-androidx-activityCompose = "1.12.3"
+compose = "1.10.1"
+androidx-activityCompose = "1.12.4"
 commons-compress = "1.28.0"
-zstd-jni = "1.5.7-6"
+zstd-jni = "1.5.7-7"
 jsoup = "1.22.1"
 
 [libraries]
@@ -31,10 +28,10 @@ kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 kotlinx-serialization-protobuf = { module = "org.jetbrains.kotlinx:kotlinx-serialization-protobuf", version.ref = "kotlinx-serialization" }
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
 kermit = { module = "co.touchlab:kermit", version.ref = "kermit" }
-lucene-highlighter = { module = "org.apache.lucene:lucene-highlighter", version.ref = "luceneHighlighter" }
-lucene-queryparser = { module = "org.apache.lucene:lucene-queryparser", version.ref = "luceneQueryparser" }
-lucene-analysis-common = { module = "org.apache.lucene:lucene-analysis-common", version.ref = "luceneAnalysisCommon" }
-lucene-core = { module = "org.apache.lucene:lucene-core", version.ref = "luceneCore" }
+lucene-highlighter = { module = "org.apache.lucene:lucene-highlighter", version.ref = "lucene" }
+lucene-queryparser = { module = "org.apache.lucene:lucene-queryparser", version.ref = "lucene" }
+lucene-analysis-common = { module = "org.apache.lucene:lucene-analysis-common", version.ref = "lucene" }
+lucene-core = { module = "org.apache.lucene:lucene-core", version.ref = "lucene" }
 sqlDelight-driver-sqlite = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqlDelight" }
 sqlDelight-driver-android = { module = "app.cash.sqldelight:android-driver", version.ref = "sqlDelight" }
 sqlDelight-driver-native = { module = "app.cash.sqldelight:native-driver", version.ref = "sqlDelight" }
