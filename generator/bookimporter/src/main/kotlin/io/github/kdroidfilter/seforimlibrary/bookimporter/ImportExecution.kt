@@ -1,9 +1,5 @@
 package io.github.kdroidfilter.seforimlibrary.bookimporter
 
-import io.github.kdroidfilter.seforimlibrary.catalog.BuildCatalogKt
-import io.github.kdroidfilter.seforimlibrary.otzariasqlite.GenerateLinesKt
-import io.github.kdroidfilter.seforimlibrary.otzariasqlite.GenerateLinksKt
-import io.github.kdroidfilter.seforimlibrary.searchindex.BuildLuceneIndexKt
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import java.nio.file.Files
@@ -45,7 +41,7 @@ class ImportCoordinator(
                         "sourceDir" to sourceDir
                     )
                 ) {
-                    GenerateLinesKt.main(arrayOf(":memory:"))
+                    invokeArrayMain("io.github.kdroidfilter.seforimlibrary.otzariasqlite.GenerateLinesKt", arrayOf(":memory:"))
                 }
                 stepIndex++
 
@@ -59,7 +55,7 @@ class ImportCoordinator(
                         "sourceDir" to sourceDir
                     )
                 ) {
-                    GenerateLinksKt.main(arrayOf(":memory:"))
+                    invokeArrayMain("io.github.kdroidfilter.seforimlibrary.otzariasqlite.GenerateLinksKt", arrayOf(":memory:"))
                 }
                 stepIndex++
             }
@@ -68,7 +64,7 @@ class ImportCoordinator(
                 currentCoroutineContext().ensureActive()
                 progress(stepIndex.toFloat() / totalSteps, "Updating catalog.pb")
                 log("[INFO] Building catalog.pb")
-                BuildCatalogKt.main(arrayOf(dbPath.absolutePathString()))
+                invokeArrayMain("io.github.kdroidfilter.seforimlibrary.catalog.BuildCatalogKt", arrayOf(dbPath.absolutePathString()))
                 stepIndex++
             }
 
@@ -77,7 +73,7 @@ class ImportCoordinator(
                 progress(stepIndex.toFloat() / totalSteps, "Building Lucene indexes")
                 log("[INFO] Building Lucene indexes")
                 runWithProperties(mapOf("seforimDb" to dbPath.absolutePathString())) {
-                    BuildLuceneIndexKt.main()
+                    invokeNoArgMain("io.github.kdroidfilter.seforimlibrary.searchindex.BuildLuceneIndexKt")
                 }
                 stepIndex++
             }
@@ -102,6 +98,18 @@ class ImportCoordinator(
     private fun restoreBackup(backup: Path, db: Path) {
         Files.copy(backup, db, StandardCopyOption.REPLACE_EXISTING)
     }
+}
+
+private fun invokeArrayMain(className: String, args: Array<String>) {
+    val clazz = Class.forName(className)
+    val main = clazz.getMethod("main", Array<String>::class.java)
+    main.invoke(null, args)
+}
+
+private fun invokeNoArgMain(className: String) {
+    val clazz = Class.forName(className)
+    val main = clazz.getMethod("main")
+    main.invoke(null)
 }
 
 private inline fun runWithProperties(properties: Map<String, String>, block: () -> Unit) {
