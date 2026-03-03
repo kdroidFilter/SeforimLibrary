@@ -55,3 +55,28 @@ DELETE FROM tocEntry WHERE bookId = ?;
 
 lastInsertRowId:
 SELECT last_insert_rowid();
+
+selectAncestorPath:
+WITH RECURSIVE ancestors(id, bookId, parentId, textId, level, lineId, isLastChild, hasChildren) AS (
+    SELECT id, bookId, parentId, textId, level, lineId, isLastChild, hasChildren
+    FROM tocEntry WHERE id = ?
+    UNION ALL
+    SELECT t.id, t.bookId, t.parentId, t.textId, t.level, t.lineId, t.isLastChild, t.hasChildren
+    FROM tocEntry t
+    JOIN ancestors a ON t.id = a.parentId
+)
+SELECT a.*, tt.text
+FROM ancestors a
+JOIN tocText tt ON a.textId = tt.id
+ORDER BY a.level ASC;
+
+selectFirstLeafUnder:
+WITH RECURSIVE descent(id, hasChildren) AS (
+    SELECT id, hasChildren FROM tocEntry WHERE id = ?
+    UNION ALL
+    SELECT (SELECT t.id FROM tocEntry t WHERE t.parentId = d.id ORDER BY t.id LIMIT 1),
+           (SELECT t.hasChildren FROM tocEntry t WHERE t.parentId = d.id ORDER BY t.id LIMIT 1)
+    FROM descent d
+    WHERE d.hasChildren = 1
+)
+SELECT id FROM descent WHERE hasChildren = 0 LIMIT 1;

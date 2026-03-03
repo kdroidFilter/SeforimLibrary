@@ -64,6 +64,16 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         } catch (e: Exception) {
             logger.d{"Error counting books: ${e.message}"}
         }
+
+        // Warm up SQLite page cache by touching the line table index
+        try {
+            driver.executeQuery(
+                null,
+                "SELECT COUNT(*) FROM line WHERE bookId = 1",
+                { c -> QueryResult.Value(if (c.next().value) c.getLong(0) else 0L) },
+                0,
+            )
+        } catch (_: Exception) { }
     }
 
     
@@ -1156,6 +1166,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     suspend fun getTocChildren(parentId: Long): List<TocEntry> = withContext(Dispatchers.IO) {
         database.tocQueriesQueries.selectChildren(parentId).executeAsList().map { it.toModel() }
+    }
+
+    override suspend fun getAncestorPath(tocId: Long): List<TocEntry> = withContext(Dispatchers.IO) {
+        database.tocQueriesQueries.selectAncestorPath(tocId).executeAsList().map { it.toModel() }
+    }
+
+    suspend fun getFirstLeafTocId(tocId: Long): Long? = withContext(Dispatchers.IO) {
+        database.tocQueriesQueries.selectFirstLeafUnder(tocId).executeAsOneOrNull()
     }
 
     // --- Alternative TOC structures ---
