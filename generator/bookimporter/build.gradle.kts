@@ -23,6 +23,9 @@ compose.desktop {
     application {
         mainClass = "io.github.kdroidfilter.seforimlibrary.bookimporter.MainKt"
 
+        buildTypes.release.proguard {
+            isEnabled.set(false)
+        }
         nativeDistributions {
             packageName = "SeforimBookImporter"
             packageVersion = "1.0.0"

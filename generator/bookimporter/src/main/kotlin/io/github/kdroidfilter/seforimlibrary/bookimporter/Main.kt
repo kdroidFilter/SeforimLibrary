@@ -39,6 +39,7 @@ import java.awt.Frame
 import java.io.File
 import java.nio.file.Path
 import kotlin.io.path.extension
+import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
 import kotlin.io.path.notExists
 
@@ -243,6 +244,17 @@ private object ImportPreflight {
         if (roots.isEmpty()) return InputValidation(false, "יש לבחור לפחות תיקייה אחת")
         val missing = roots.filter { File(it).toPath().let { p -> p.notExists() || !p.isDirectory() } }
         if (missing.isNotEmpty()) return InputValidation(false, "תיקיות לא תקינות: ${missing.joinToString()}")
+
+        val invalidStructure = roots
+            .map { File(it).toPath() }
+            .filter { it.resolve("אוצריא").notExists() && it.fileName?.toString() != "אוצריא" }
+        if (invalidStructure.isNotEmpty()) {
+            return InputValidation(
+                false,
+                "כל נתיב חייב להיות תיקיית מקור של אוצריא (שמכילה 'אוצריא') או התיקייה 'אוצריא' עצמה: ${invalidStructure.joinToString()}"
+            )
+        }
+
         return InputValidation(true, "OK")
     }
 
@@ -251,8 +263,8 @@ private object ImportPreflight {
         val validRoots = roots - roots.filter { it.notExists() || !it.isDirectory() }
         val categories = mutableSetOf<String>()
         val books = validRoots.sumOf { root ->
-            val library = root.resolve("אוצריא")
-            if (library.notExists()) return@sumOf 0
+            val library = resolveLibraryDir(root)
+            if (library == null || library.notExists()) return@sumOf 0
             java.nio.file.Files.walk(library).use { stream ->
                 stream.filter { java.nio.file.Files.isRegularFile(it) && it.extension == "txt" }
                     .peek { categories.add(it.parent?.fileName?.toString() ?: "") }
@@ -260,5 +272,13 @@ private object ImportPreflight {
             }.toInt()
         }
         return PreviewResult(totalBooks = books, categories = categories.filter { it.isNotBlank() }.toSet(), missingRoots = missingRoots)
+    }
+
+    private fun resolveLibraryDir(root: Path): Path? {
+        return when {
+            root.fileName?.toString() == "אוצריא" -> root
+            root.resolve("אוצריא").exists() -> root.resolve("אוצריא")
+            else -> null
+        }
     }
 }
