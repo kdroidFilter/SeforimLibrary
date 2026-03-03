@@ -44,3 +44,6 @@ project(":sefariasqlite").projectDir = file("generator/sefariasqlite")
 project(":otzariasqlite").projectDir = file("generator/otzariasqlite")
 
 includeBuild("SeforimMagicIndexer")
+
+include(":bookimporter")
+project(":bookimporter").projectDir = file("generator/bookimporter")
