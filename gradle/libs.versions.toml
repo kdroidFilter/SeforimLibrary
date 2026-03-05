@@ -16,6 +16,7 @@ androidx-activityCompose = "1.12.4"
 commons-compress = "1.28.0"
 zstd-jni = "1.5.7-7"
 jsoup = "1.22.1"
+slf4j = "2.0.17"
 
 [libraries]
 
@@ -40,6 +41,7 @@ commons-compress = { module = "org.apache.commons:commons-compress", version.ref
 zstd = { module = "com.github.luben:zstd-jni", version.ref = "zstd-jni" }
 androidx-activityCompose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activityCompose" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
+slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
 compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose" }
 
 [plugins]

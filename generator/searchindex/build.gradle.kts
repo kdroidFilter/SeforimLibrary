@@ -21,7 +21,7 @@ kotlin {
             implementation(project(":core"))
             implementation(project(":dao"))
             implementation(libs.sqlDelight.driver.sqlite)
-            implementation("org.jsoup:jsoup:1.17.2")
+            implementation(libs.jsoup)
 
             api(libs.lucene.core)
             api(libs.lucene.analysis.common)
