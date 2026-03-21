@@ -106,13 +106,12 @@ class LuceneSearchEngine(
     }
 
     // Open Lucene directory lazily to avoid any I/O at app startup.
-    // Falls back to NIOFSDirectory if MMapDirectory/FSDirectory fails (e.g. GraalVM native image
-    // on macOS where Panama foreign downcalls for madvise are not registered).
+    // GraalVM native image does not support MMapDirectory (Panama foreign downcalls), use NIOFSDirectory instead.
     private val dir by lazy {
-        try {
-            FSDirectory.open(indexDir)
-        } catch (t: Throwable) {
+        if (System.getProperty("org.graalvm.nativeimage.imagecode") != null) {
             NIOFSDirectory(indexDir)
+        } else {
+            FSDirectory.open(indexDir)
         }
     }
 
