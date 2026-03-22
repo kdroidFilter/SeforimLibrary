@@ -3,7 +3,8 @@ package io.github.kdroidfilter.seforimlibrary.cli
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import io.github.kdroidfilter.seforimlibrary.search.LineSnippetInfo
 import io.github.kdroidfilter.seforimlibrary.search.SnippetProvider
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
 import org.jsoup.safety.Safelist
 
@@ -18,10 +19,10 @@ class CliSnippetProvider(
         private const val SNIPPET_MIN_LENGTH = 280
     }
 
-    override fun getSnippetSources(lines: List<LineSnippetInfo>): Map<Long, String> {
+    override suspend fun getSnippetSources(lines: List<LineSnippetInfo>): Map<Long, String> {
         if (lines.isEmpty()) return emptyMap()
 
-        return runBlocking {
+        return withContext(Dispatchers.IO) {
             val byBook = lines.groupBy { it.bookId }
             val result = mutableMapOf<Long, String>()
 

@@ -36,7 +36,7 @@ interface SearchSession : Closeable {
      * @param limit Maximum number of results to return in this page
      * @return [SearchPage] containing hits and metadata, or null if no more results
      */
-    fun nextPage(limit: Int): SearchPage?
+    suspend fun nextPage(limit: Int): SearchPage?
 }
 
 /**

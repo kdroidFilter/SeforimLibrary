@@ -1,6 +1,8 @@
 package io.github.kdroidfilter.seforimlibrary.search
 
 import co.touchlab.kermit.Logger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.apache.lucene.analysis.Analyzer
 import org.apache.lucene.analysis.TokenStream
 import org.apache.lucene.analysis.standard.StandardAnalyzer
@@ -330,20 +332,20 @@ class LuceneSearchEngine(
         private var finished = false
         private var totalHitsValue: Long? = null
 
-        override fun nextPage(limit: Int): SearchPage? {
-            if (finished) return null
+        override suspend fun nextPage(limit: Int): SearchPage? = withContext(Dispatchers.IO) {
+            if (finished) return@withContext null
             val top = searcher.searchAfter(after, query, limit)
             if (totalHitsValue == null) totalHitsValue = top.totalHits?.value
             if (top.scoreDocs.isEmpty()) {
                 finished = true
-                return null
+                return@withContext null
             }
             val stored = searcher.storedFields()
             val hits = mapScoreDocs(stored, top.scoreDocs.toList(), anchorTerms, highlightTerms)
             after = top.scoreDocs.last()
             val isLast = top.scoreDocs.size < limit
             if (isLast) finished = true
-            return SearchPage(
+            SearchPage(
                 hits = hits,
                 totalHits = totalHitsValue ?: hits.size.toLong(),
                 isLastPage = isLast
@@ -357,16 +359,16 @@ class LuceneSearchEngine(
 
     // --- Additional public search methods ---
 
-    fun searchAllText(rawQuery: String, near: Int = 5, limit: Int, offset: Int = 0): List<LineHit> =
+    suspend fun searchAllText(rawQuery: String, near: Int = 5, limit: Int, offset: Int = 0): List<LineHit> =
         doSearch(rawQuery, near, limit, offset, bookFilter = null, categoryFilter = null)
 
-    fun searchInBook(rawQuery: String, near: Int, bookId: Long, limit: Int, offset: Int = 0): List<LineHit> =
+    suspend fun searchInBook(rawQuery: String, near: Int, bookId: Long, limit: Int, offset: Int = 0): List<LineHit> =
         doSearch(rawQuery, near, limit, offset, bookFilter = bookId, categoryFilter = null)
 
-    fun searchInCategory(rawQuery: String, near: Int, categoryId: Long, limit: Int, offset: Int = 0): List<LineHit> =
+    suspend fun searchInCategory(rawQuery: String, near: Int, categoryId: Long, limit: Int, offset: Int = 0): List<LineHit> =
         doSearch(rawQuery, near, limit, offset, bookFilter = null, categoryFilter = categoryId)
 
-    fun searchInBooks(rawQuery: String, near: Int, bookIds: Collection<Long>, limit: Int, offset: Int = 0): List<LineHit> =
+    suspend fun searchInBooks(rawQuery: String, near: Int, bookIds: Collection<Long>, limit: Int, offset: Int = 0): List<LineHit> =
         doSearchInBooks(rawQuery, near, limit, offset, bookIds)
 
     // --- Private implementation ---
@@ -496,7 +498,9 @@ class LuceneSearchEngine(
         )
     }
 
-    private fun mapScoreDocs(
+    // suspend because it calls snippetProvider.getSnippetSources();
+    // callers are responsible for providing Dispatchers.IO context.
+    private suspend fun mapScoreDocs(
         stored: StoredFields,
         scoreDocs: List<ScoreDoc>,
         anchorTerms: List<String>,
@@ -568,7 +572,7 @@ class LuceneSearchEngine(
         return hits.sortedByDescending { it.score }
     }
 
-    private fun doSearch(
+    private suspend fun doSearch(
         rawQuery: String,
         near: Int,
         limit: Int,
@@ -577,15 +581,17 @@ class LuceneSearchEngine(
         categoryFilter: Long?
     ): List<LineHit> {
         val context = buildSearchContext(rawQuery, near, bookFilter, categoryFilter, null, null) ?: return emptyList()
-        return withSearcher { searcher ->
-            val top = searcher.search(context.query, offset + limit)
-            val stored: StoredFields = searcher.storedFields()
-            val sliced = top.scoreDocs.drop(offset)
-            mapScoreDocs(stored, sliced, context.anchorTerms, context.highlightTerms)
+        return withContext(Dispatchers.IO) {
+            withSearcher { searcher ->
+                val top = searcher.search(context.query, offset + limit)
+                val stored: StoredFields = searcher.storedFields()
+                val sliced = top.scoreDocs.drop(offset)
+                mapScoreDocs(stored, sliced, context.anchorTerms, context.highlightTerms)
+            }
         }
     }
 
-    private fun doSearchInBooks(
+    private suspend fun doSearchInBooks(
         rawQuery: String,
         near: Int,
         limit: Int,
@@ -594,11 +600,13 @@ class LuceneSearchEngine(
     ): List<LineHit> {
         if (bookIds.isEmpty()) return emptyList()
         val context = buildSearchContext(rawQuery, near, bookFilter = null, categoryFilter = null, bookIds = bookIds, lineIds = null) ?: return emptyList()
-        return withSearcher { searcher ->
-            val top = searcher.search(context.query, offset + limit)
-            val stored: StoredFields = searcher.storedFields()
-            val sliced = top.scoreDocs.drop(offset)
-            mapScoreDocs(stored, sliced, context.anchorTerms, context.highlightTerms)
+        return withContext(Dispatchers.IO) {
+            withSearcher { searcher ->
+                val top = searcher.search(context.query, offset + limit)
+                val stored: StoredFields = searcher.storedFields()
+                val sliced = top.scoreDocs.drop(offset)
+                mapScoreDocs(stored, sliced, context.anchorTerms, context.highlightTerms)
+            }
         }
     }
 
