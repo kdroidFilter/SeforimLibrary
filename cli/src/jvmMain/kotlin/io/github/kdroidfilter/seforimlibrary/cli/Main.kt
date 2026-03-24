@@ -7,6 +7,7 @@ import io.github.kdroidfilter.seforimlibrary.search.SearchEngine
 import io.github.vinceglb.filekit.FileKit
 import io.github.vinceglb.filekit.databasesDir
 import io.github.vinceglb.filekit.path
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -229,25 +230,27 @@ fun runSearch(config: CliConfig) {
             val allResults = mutableListOf<SearchResultOutput>()
             var totalHits = 0L
 
-            do {
-                val page = s.nextPage(config.limit) ?: break
-                totalHits = page.totalHits
+            runBlocking {
+                do {
+                    val page = s.nextPage(config.limit) ?: break
+                    totalHits = page.totalHits
 
-                for (hit in page.hits) {
-                    allResults.add(
-                        SearchResultOutput(
-                            bookId = hit.bookId,
-                            bookTitle = hit.bookTitle,
-                            lineId = hit.lineId,
-                            lineIndex = hit.lineIndex,
-                            snippet = stripHtml(hit.snippet),
-                            score = hit.score,
+                    for (hit in page.hits) {
+                        allResults.add(
+                            SearchResultOutput(
+                                bookId = hit.bookId,
+                                bookTitle = hit.bookTitle,
+                                lineId = hit.lineId,
+                                lineIndex = hit.lineIndex,
+                                snippet = stripHtml(hit.snippet),
+                                score = hit.score,
+                            )
                         )
-                    )
-                }
+                    }
 
-                if (!config.fetchAll || page.isLastPage) break
-            } while (true)
+                    if (!config.fetchAll || page.isLastPage) break
+                } while (true)
+            }
 
             if (config.jsonOutput) {
                 val output = SearchOutput(
