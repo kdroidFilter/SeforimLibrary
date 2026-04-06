@@ -37,75 +37,73 @@ import java.nio.file.Path
  * Lucene-based implementation of SearchEngine for full-text search.
  * Supports Hebrew text with diacritics handling, dictionary expansion, and fuzzy matching.
  */
+private val logger = Logger.withTag("LuceneSearchEngine")
+// Hard cap on how many synonym/expansion terms we allow per token
+private const val MAX_SYNONYM_TERMS_PER_TOKEN: Int = 32
+// Global cap for boost queries built from dictionary expansions
+private const val MAX_SYNONYM_BOOST_TERMS: Int = 256
+// Constants for snippet source building (must match indexer)
+private const val SNIPPET_NEIGHBOR_WINDOW = 4
+private const val SNIPPET_MIN_LENGTH = 280
+
+/**
+ * Blacklist of hallucinated dictionary mappings.
+ * Loaded from resources/hallucination_blacklist.tsv
+ * Key: normalized token, Value: set of incorrect base forms to reject
+ *
+ * TODO: This is a temporary workaround. The proper fix is to correct the
+ *       hallucinated mappings directly in the lexical dictionary (lexical.db)
+ *       so this blacklist becomes unnecessary.
+ */
+private val HALLUCINATION_BLACKLIST: Map<String, Set<String>> by lazy {
+    loadHallucinationBlacklist()
+}
+
+private fun loadHallucinationBlacklist(): Map<String, Set<String>> {
+    val result = mutableMapOf<String, MutableSet<String>>()
+    try {
+        val inputStream = LuceneSearchEngine::class.java.getResourceAsStream("/hallucination_blacklist.tsv")
+        if (inputStream == null) {
+            logger.w { "hallucination_blacklist.tsv not found in resources" }
+            return emptyMap()
+        }
+        inputStream.bufferedReader().useLines { lines ->
+            lines.forEach { line ->
+                val trimmed = line.trim()
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) return@forEach
+                val parts = trimmed.split("\t")
+                if (parts.size >= 2) {
+                    val token = HebrewTextUtils.normalizeHebrew(parts[0])
+                    val base = HebrewTextUtils.normalizeHebrew(parts[1])
+                    result.getOrPut(token) { mutableSetOf() }.add(base)
+                }
+            }
+        }
+        logger.d { "Loaded ${result.size} hallucination blacklist entries" }
+    } catch (e: Exception) {
+        logger.e(e) { "Failed to load hallucination blacklist" }
+    }
+    return result
+}
+
+/**
+ * Check if an expansion should be rejected based on the hallucination blacklist.
+ */
+private fun isHallucinatedExpansion(token: String, expansion: MagicDictionaryIndex.Expansion): Boolean {
+    val normalizedToken = HebrewTextUtils.normalizeHebrew(token)
+    val blacklistedBases = HALLUCINATION_BLACKLIST[normalizedToken] ?: return false
+    return expansion.base.any { base ->
+        val normalizedBase = HebrewTextUtils.normalizeHebrew(base)
+        blacklistedBases.contains(normalizedBase)
+    }
+}
+
 class LuceneSearchEngine(
     private val indexDir: Path,
     private val snippetProvider: SnippetProvider? = null,
     private val analyzer: Analyzer = StandardAnalyzer(),
     private val dictionaryPath: Path? = null
 ) : SearchEngine {
-
-    companion object {
-        private val logger = Logger.withTag("LuceneSearchEngine")
-        // Hard cap on how many synonym/expansion terms we allow per token
-        private const val MAX_SYNONYM_TERMS_PER_TOKEN: Int = 32
-        // Global cap for boost queries built from dictionary expansions
-        private const val MAX_SYNONYM_BOOST_TERMS: Int = 256
-        // Constants for snippet source building (must match indexer)
-        private const val SNIPPET_NEIGHBOR_WINDOW = 4
-        private const val SNIPPET_MIN_LENGTH = 280
-
-        /**
-         * Blacklist of hallucinated dictionary mappings.
-         * Loaded from resources/hallucination_blacklist.tsv
-         * Key: normalized token, Value: set of incorrect base forms to reject
-         *
-         * TODO: This is a temporary workaround. The proper fix is to correct the
-         *       hallucinated mappings directly in the lexical dictionary (lexical.db)
-         *       so this blacklist becomes unnecessary.
-         */
-        private val HALLUCINATION_BLACKLIST: Map<String, Set<String>> by lazy {
-            loadHallucinationBlacklist()
-        }
-
-        private fun loadHallucinationBlacklist(): Map<String, Set<String>> {
-            val result = mutableMapOf<String, MutableSet<String>>()
-            try {
-                val inputStream = LuceneSearchEngine::class.java.getResourceAsStream("/hallucination_blacklist.tsv")
-                if (inputStream == null) {
-                    logger.w { "hallucination_blacklist.tsv not found in resources" }
-                    return emptyMap()
-                }
-                inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { line ->
-                        val trimmed = line.trim()
-                        if (trimmed.isEmpty() || trimmed.startsWith("#")) return@forEach
-                        val parts = trimmed.split("\t")
-                        if (parts.size >= 2) {
-                            val token = HebrewTextUtils.normalizeHebrew(parts[0])
-                            val base = HebrewTextUtils.normalizeHebrew(parts[1])
-                            result.getOrPut(token) { mutableSetOf() }.add(base)
-                        }
-                    }
-                }
-                logger.d { "Loaded ${result.size} hallucination blacklist entries" }
-            } catch (e: Exception) {
-                logger.e(e) { "Failed to load hallucination blacklist" }
-            }
-            return result
-        }
-
-        /**
-         * Check if an expansion should be rejected based on the hallucination blacklist.
-         */
-        private fun isHallucinatedExpansion(token: String, expansion: MagicDictionaryIndex.Expansion): Boolean {
-            val normalizedToken = HebrewTextUtils.normalizeHebrew(token)
-            val blacklistedBases = HALLUCINATION_BLACKLIST[normalizedToken] ?: return false
-            return expansion.base.any { base ->
-                val normalizedBase = HebrewTextUtils.normalizeHebrew(base)
-                blacklistedBases.contains(normalizedBase)
-            }
-        }
-    }
 
     // Open Lucene directory lazily to avoid any I/O at app startup.
     // GraalVM native image does not support MMapDirectory (Panama foreign downcalls), use NIOFSDirectory instead.
@@ -193,7 +191,7 @@ class LuceneSearchEngine(
                 val id = doc.getField("book_id")?.numericValue()?.toLong()
                 if (id != null) ids.add(id)
             }
-            ids.toList().take(limit)
+            ids.toList()
         }
     }
 
@@ -341,7 +339,7 @@ class LuceneSearchEngine(
                 return@withContext null
             }
             val stored = searcher.storedFields()
-            val hits = mapScoreDocs(stored, top.scoreDocs.toList(), anchorTerms, highlightTerms)
+            val hits = mapScoreDocs(stored, top.scoreDocs.asList(), anchorTerms, highlightTerms)
             after = top.scoreDocs.last()
             val isLast = top.scoreDocs.size < limit
             if (isLast) finished = true

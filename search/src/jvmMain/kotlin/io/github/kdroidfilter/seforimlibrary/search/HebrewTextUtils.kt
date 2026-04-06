@@ -83,17 +83,18 @@ object HebrewTextUtils {
      */
     fun stripDiacriticsWithMap(src: String): Pair<String, IntArray> {
         val out = StringBuilder(src.length)
-        val map = ArrayList<Int>(src.length)
+        val map = IntArray(src.length)
+        var count = 0
         var i = 0
         while (i < src.length) {
             val ch = src[i]
             if (!isNikudOrTeamim(ch)) {
                 out.append(ch)
-                map.add(i)
+                map[count++] = i
             }
             i++
         }
-        val arr = IntArray(map.size) { map[it] }
+        val arr = if (count == map.size) map else map.copyOf(count)
         return out.toString() to arr
     }
 

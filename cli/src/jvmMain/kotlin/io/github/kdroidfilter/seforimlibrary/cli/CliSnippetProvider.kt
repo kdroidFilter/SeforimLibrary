@@ -11,14 +11,12 @@ import org.jsoup.safety.Safelist
 /**
  * CLI implementation of [SnippetProvider] that fetches line content from the database.
  */
+private const val SNIPPET_NEIGHBOR_WINDOW = 4
+private const val SNIPPET_MIN_LENGTH = 280
+
 class CliSnippetProvider(
     private val repository: SeforimRepository,
 ) : SnippetProvider {
-    companion object {
-        private const val SNIPPET_NEIGHBOR_WINDOW = 4
-        private const val SNIPPET_MIN_LENGTH = 280
-    }
-
     override suspend fun getSnippetSources(lines: List<LineSnippetInfo>): Map<Long, String> {
         if (lines.isEmpty()) return emptyMap()
 
