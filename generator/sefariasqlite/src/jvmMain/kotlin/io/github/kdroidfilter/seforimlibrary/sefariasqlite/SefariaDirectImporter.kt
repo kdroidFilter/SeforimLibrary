@@ -40,6 +40,19 @@ class SefariaDirectImporter(
         val bookPayloadReader = SefariaBookPayloadReader(json, logger)
         val schemaLookup = bookPayloadReader.buildSchemaLookup(schemaDir)
 
+        // Pre-download every `textimages.sefaria.org` asset and cache as base64
+        // so that merged.json content can be inlined as `data:image/...` URIs.
+        // Without this, books like Tikkunei Zohar render broken ❌ placeholders
+        // (issue 392). This scan reads all merged.json once; the embedder uses
+        // a disk cache under build/sefaria/image-cache so re-runs skip network.
+        val mergedFiles = java.nio.file.Files.walk(jsonDir).use { stream ->
+            stream.filter {
+                java.nio.file.Files.isRegularFile(it) &&
+                    it.fileName.toString().equals("merged.json", ignoreCase = true)
+            }.toList()
+        }
+        SefariaImageEmbedder.prefetch(mergedFiles, logger = logger)
+
         // Read and parse files in parallel
         logger.i { "Starting parallel file processing..." }
         val bookPayloads = bookPayloadReader.readBooksInParallel(jsonDir, schemaDir, schemaLookup)

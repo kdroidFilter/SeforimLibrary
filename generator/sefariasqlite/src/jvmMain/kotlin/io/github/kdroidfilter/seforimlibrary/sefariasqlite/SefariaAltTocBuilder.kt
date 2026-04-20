@@ -18,7 +18,13 @@ internal class SefariaAltTocBuilder(
 
         var hasGeneratedAltStructures = false
 
-        val isTalmudTractate = payload.categoriesHe.any { it.contains("תלמוד") }
+        // Only Bavli tractates should suppress alt-struct child enumeration —
+        // their main schema already renders daf-by-daf, so enumerating refs
+        // under the alt-struct produces duplicates. Yerushalmi uses a
+        // chapter×halakhah×segment main schema and Venice/Vilna alt-structs
+        // that MUST be expanded to produce daf (column) headings.
+        val isYerushalmi = payload.categoriesHe.any { it.contains("ירושלמי") }
+        val isTalmudTractate = payload.categoriesHe.any { it.contains("תלמוד") } && !isYerushalmi
         val isShulchanArukhCode = payload.categoriesHe.any { it.contains("שולחן ערוך") }
         val isTurCode = payload.categoriesHe.any { it.contains("טור") }
 
@@ -224,22 +230,7 @@ internal class SefariaAltTocBuilder(
                 return null to null
             }
 
-            fun mapBaseToHebrew(base: String?): String? {
-                if (base.isNullOrBlank()) return null
-                val norm = base.lowercase()
-                return when {
-                    "aliyah" in norm -> "עליה"
-                    "daf" in norm -> "דף"
-                    "chapter" in norm -> "פרק"
-                    "perek" in norm -> "פרק"
-                    "siman" in norm -> "סימן"
-                    "section" in norm -> "סימן"
-                    "klal" in norm -> "כלל"
-                    "psalm" in norm || "psalms" in norm -> "מזמור"
-                    "day" in norm -> "יום"
-                    else -> base
-                }
-            }
+            fun mapBaseToHebrew(base: String?): String? = mapSectionNameToHebrew(base)
 
             fun buildChildLabel(base: String?, idx: Int, addressValue: Int?, addressType: String?): String {
                 val numericValue = (addressValue ?: (idx + 1)).coerceAtLeast(1)
