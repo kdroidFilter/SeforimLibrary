@@ -346,6 +346,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectLinkById.toModel(): Link {
         targetBookId = targetBookId,
         sourceLineId = sourceLineId,
         targetLineId = targetLineId,
+        targetLineIndex = targetLineIndex.toInt(),
         connectionType = ConnectionType.fromString(connectionType)
     )
 }
@@ -362,6 +363,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectLinksBySourceLineIds.toModel(
         targetBookId = targetBookId,
         sourceLineId = sourceLineId,
         targetLineId = targetLineId,
+        targetLineIndex = targetLineIndex.toInt(),
         connectionType = ConnectionType.fromString(connectionType)
     )
 }
@@ -378,6 +380,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectLinksBySourceBook.toModel(): 
         targetBookId = targetBookId,
         sourceLineId = sourceLineId,
         targetLineId = targetLineId,
+        targetLineIndex = targetLineIndex.toInt(),
         connectionType = ConnectionType.fromString(connectionType)
     )
 }

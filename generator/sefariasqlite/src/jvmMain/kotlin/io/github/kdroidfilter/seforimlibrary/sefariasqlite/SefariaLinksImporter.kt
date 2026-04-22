@@ -107,8 +107,10 @@ internal class SefariaLinksImporter(
 
                 for (from in fromRefs) {
                     for (to in toRefs) {
-                        val srcLine = lineKeyToId[from.path to (from.lineIndex - 1)] ?: continue
-                        val tgtLine = lineKeyToId[to.path to (to.lineIndex - 1)] ?: continue
+                        val srcLineIndex = from.lineIndex - 1
+                        val tgtLineIndex = to.lineIndex - 1
+                        val srcLine = lineKeyToId[from.path to srcLineIndex] ?: continue
+                        val tgtLine = lineKeyToId[to.path to tgtLineIndex] ?: continue
                         // Skip links where source or target is a heading line
                         if (srcLine in headingLineIds || tgtLine in headingLineIds) continue
                         val baseConnectionType = ConnectionType.fromString(conn)
@@ -140,6 +142,7 @@ internal class SefariaLinksImporter(
                                 targetBookId = tgtBookId,
                                 sourceLineId = srcLine,
                                 targetLineId = tgtLine,
+                                targetLineIndex = tgtLineIndex,
                                 connectionType = forwardType
                             )
                         )
@@ -150,6 +153,7 @@ internal class SefariaLinksImporter(
                                 targetBookId = srcBookId,
                                 sourceLineId = tgtLine,
                                 targetLineId = srcLine,
+                                targetLineIndex = srcLineIndex,
                                 connectionType = reverseType
                             )
                         )

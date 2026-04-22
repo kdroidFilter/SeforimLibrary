@@ -199,12 +199,15 @@ CREATE TABLE IF NOT EXISTS connection_type (
 CREATE INDEX IF NOT EXISTS idx_connection_type_name ON connection_type(name);
 
 -- Links table
+-- targetLineIndex mirrors line(targetLineId).lineIndex so we can sort commentaries
+-- by their natural position in the target book without an extra JOIN on `line`.
 CREATE TABLE IF NOT EXISTS link (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sourceBookId INTEGER NOT NULL,
     targetBookId INTEGER NOT NULL,
     sourceLineId INTEGER NOT NULL,
     targetLineId INTEGER NOT NULL,
+    targetLineIndex INTEGER NOT NULL,
     connectionTypeId INTEGER NOT NULL,
     FOREIGN KEY (sourceBookId) REFERENCES book(id) ON DELETE CASCADE,
     FOREIGN KEY (targetBookId) REFERENCES book(id) ON DELETE CASCADE,
@@ -219,6 +222,7 @@ CREATE INDEX IF NOT EXISTS idx_link_target_book ON link(targetBookId);
 CREATE INDEX IF NOT EXISTS idx_link_target_line ON link(targetLineId);
 CREATE INDEX IF NOT EXISTS idx_link_type ON link(connectionTypeId);
 CREATE INDEX IF NOT EXISTS idx_link_type_source_line ON link(connectionTypeId, sourceLineId);
+CREATE INDEX IF NOT EXISTS idx_link_type_source_order ON link(connectionTypeId, sourceLineId, targetLineIndex);
 
 -- Removed legacy FTS view/table in favor of Lucene (10.x)
 
