@@ -1320,6 +1320,7 @@ class DatabaseGenerator(
                         targetBookId = targetBook.id,
                         sourceLineId = sourceLineId,
                         targetLineId = targetLineId,
+                        targetLineIndex = targetLineIndex,
                         connectionType = ConnectionType.fromString(linkData.connectionType)
                     )
 
@@ -1394,6 +1395,7 @@ class DatabaseGenerator(
                     targetBookId = targetBook.id,
                     sourceLineId = sourceLineId,
                     targetLineId = targetLineId,
+                    targetLineIndex = targetLineIndex,
                     connectionType = ConnectionType.fromString(linkData.connectionType)
                 )
                 repository.insertLink(link)

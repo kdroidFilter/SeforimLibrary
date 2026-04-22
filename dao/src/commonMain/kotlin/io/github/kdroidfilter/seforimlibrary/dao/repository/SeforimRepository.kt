@@ -1549,6 +1549,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                         targetBookId = it.targetBookId,
                         sourceLineId = it.sourceLineId,
                         targetLineId = it.targetLineId,
+                        targetLineIndex = it.targetLineIndex.toInt(),
                         connectionType = ConnectionType.fromString(it.connectionType)
                     ),
                     targetBookTitle = it.targetBookTitle,
@@ -1574,6 +1575,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                         targetBookId = it.targetBookId,
                         sourceLineId = it.sourceLineId,
                         targetLineId = it.targetLineId,
+                        targetLineIndex = it.targetLineIndex.toInt(),
                         connectionType = ConnectionType.fromString(it.connectionType)
                     ),
                     targetBookTitle = it.targetBookTitle
@@ -1623,6 +1625,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                             targetBookId = it.targetBookId,
                             sourceLineId = it.sourceLineId ?: 0L,
                             targetLineId = it.targetLineId,
+                            targetLineIndex = (it.targetLineIndex ?: 0L).toInt(),
                             connectionType = ConnectionType.fromString(it.connectionType)
                         ),
                         targetBookTitle = it.targetBookTitle,
@@ -1643,6 +1646,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                             targetBookId = it.targetBookId,
                             sourceLineId = it.sourceLineId,
                             targetLineId = it.targetLineId,
+                            targetLineIndex = it.targetLineIndex.toInt(),
                             connectionType = ConnectionType.fromString(it.connectionType)
                         ),
                         targetBookTitle = it.targetBookTitle,
@@ -1666,6 +1670,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                             targetBookId = it.targetBookId,
                             sourceLineId = it.sourceLineId ?: 0L,
                             targetLineId = it.targetLineId,
+                            targetLineIndex = (it.targetLineIndex ?: 0L).toInt(),
                             connectionType = ConnectionType.fromString(it.connectionType)
                         ),
                         targetBookTitle = it.targetBookTitle,
@@ -1687,6 +1692,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                             targetBookId = it.targetBookId,
                             sourceLineId = it.sourceLineId,
                             targetLineId = it.targetLineId,
+                            targetLineIndex = it.targetLineIndex.toInt(),
                             connectionType = ConnectionType.fromString(it.connectionType)
                         ),
                         targetBookTitle = it.targetBookTitle,
@@ -1750,6 +1756,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                 targetBookId = link.targetBookId,
                 sourceLineId = link.sourceLineId,
                 targetLineId = link.targetLineId,
+                targetLineIndex = link.targetLineIndex.toLong(),
                 connectionTypeId = connectionTypeId
             )
             val linkId = database.linkQueriesQueries.lastInsertRowId().executeAsOne()
@@ -1808,6 +1815,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                     targetBookId = link.targetBookId,
                     sourceLineId = link.sourceLineId,
                     targetLineId = link.targetLineId,
+                    targetLineIndex = link.targetLineIndex.toLong(),
                     connectionTypeId = connectionTypeId
                 )
             }

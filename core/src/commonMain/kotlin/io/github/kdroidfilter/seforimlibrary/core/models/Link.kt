@@ -10,6 +10,9 @@ import kotlinx.serialization.Serializable
  * @property targetBookId The identifier of the target book
  * @property sourceLineId The identifier of the source line
  * @property targetLineId The identifier of the target line
+ * @property targetLineIndex The 0-based index of the target line within its book.
+ *           Denormalized from `line.lineIndex` so that commentaries can be ordered
+ *           by their natural position in the target book without an extra JOIN.
  * @property connectionType The type of connection between the texts
  */
 @Serializable
@@ -19,6 +22,7 @@ data class Link(
     val targetBookId: Long,
     val sourceLineId: Long,
     val targetLineId: Long,
+    val targetLineIndex: Int,
     val connectionType: ConnectionType
 )
 

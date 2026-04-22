@@ -3,7 +3,9 @@ package io.github.kdroidfilter.seforimlibrary.dao.repository
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
+import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
 import io.github.kdroidfilter.seforimlibrary.core.models.Line
+import io.github.kdroidfilter.seforimlibrary.core.models.Link
 import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
@@ -449,6 +451,67 @@ class SeforimRepositoryIntegrationTest {
         val maxId = repository.getMaxLineId()
         assertEquals(0L, maxId)
     }
+
+    // ==================== Link Ordering Tests ====================
+
+    // Regression guard for Zayit issue #415: commentary links must be returned in the
+    // natural order of their target line (e.g. Bartenura segments 1→N on a single Mishna),
+    // not in link insertion order.
+    @Test
+    fun `getCommentariesForLineRange returns links sorted by targetLineIndex`() = runBlocking {
+        val sourceId = repository.insertSource("Test")
+        val mishnahCategoryId = repository.insertCategory(
+            Category(parentId = null, title = "Mishnah", level = 0, order = 1)
+        )
+        val mishnahBookId = repository.insertBook(
+            Book(categoryId = mishnahCategoryId, sourceId = sourceId, title = "Avot", order = 1f)
+        )
+        val bartenuraBookId = repository.insertBook(
+            Book(categoryId = mishnahCategoryId, sourceId = sourceId, title = "Bartenura on Avot", order = 2f)
+        )
+
+        val mishnaLineId = repository.insertLine(
+            Line(bookId = mishnahBookId, lineIndex = 0, content = "Mishna Avot 1:1")
+        )
+
+        val bartenuraSegmentIds = (0 until 5).map { idx ->
+            repository.insertLine(
+                Line(bookId = bartenuraBookId, lineIndex = idx, content = "Segment $idx")
+            )
+        }
+
+        // Insert links in a deliberately shuffled order (4, 2, 0, 3, 1) to prove the
+        // ordering comes from targetLineIndex, not insertion order.
+        val shuffledOrder = listOf(4, 2, 0, 3, 1)
+        for (idx in shuffledOrder) {
+            repository.insertLink(
+                Link(
+                    sourceBookId = mishnahBookId,
+                    targetBookId = bartenuraBookId,
+                    sourceLineId = mishnaLineId,
+                    targetLineId = bartenuraSegmentIds[idx],
+                    targetLineIndex = idx,
+                    connectionType = ConnectionType.COMMENTARY
+                )
+            )
+        }
+
+        val commentaries = repository.getCommentariesForLineRange(
+            lineIds = listOf(mishnaLineId),
+            connectionTypes = setOf(ConnectionType.COMMENTARY),
+            offset = 0,
+            limit = 100
+        )
+
+        assertEquals(5, commentaries.size)
+        assertEquals(listOf(0, 1, 2, 3, 4), commentaries.map { it.link.targetLineIndex })
+        assertEquals(
+            listOf("Segment 0", "Segment 1", "Segment 2", "Segment 3", "Segment 4"),
+            commentaries.map { it.targetText }
+        )
+    }
+
+    // ==================== Max ID Tests (continued) ====================
 
     @Test
     fun `getMaxLineId returns highest line id`() = runBlocking {
