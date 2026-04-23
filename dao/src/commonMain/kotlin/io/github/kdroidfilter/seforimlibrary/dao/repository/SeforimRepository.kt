@@ -889,7 +889,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                 notesContent = book.notesContent,
                 orderIndex = book.order.toLong(),
                 totalLines = book.totalLines.toLong(),
-                totalChars = book.totalChars,
                 isBaseBook = if (book.isBaseBook) 1 else 0,
                 hasSourceConnection = if (book.hasSourceConnection) 1 else 0,
                 hasAltStructures = if (book.hasAltStructures) 1 else 0,
@@ -948,7 +947,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                 notesContent = book.notesContent,
                 orderIndex = book.order.toLong(),
                 totalLines = book.totalLines.toLong(),
-                totalChars = book.totalChars,
                 isBaseBook = if (book.isBaseBook) 1 else 0,
                 hasSourceConnection = if (book.hasSourceConnection) 1 else 0,
                 hasAltStructures = if (book.hasAltStructures) 1 else 0,
@@ -1041,10 +1039,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         database.bookQueriesQueries.updateTotalLines(totalLines.toLong(), bookId)
     }
 
-    suspend fun updateBookTotalChars(bookId: Long, totalChars: Long) = withContext(Dispatchers.IO) {
-        database.bookQueriesQueries.updateTotalChars(totalChars, bookId)
-    }
-
     suspend fun updateBookCategoryId(bookId: Long, categoryId: Long) = withContext(Dispatchers.IO) {
         logger.d{"Updating book $bookId with categoryId: $categoryId"}
         database.bookQueriesQueries.updateCategoryId(categoryId, bookId)
@@ -1096,38 +1090,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
     }
 
     /**
-     * Result of [findLineByCumulativeChars]: position of the first line whose cumulative
-     * character offset meets or exceeds the requested target. All indices are inclusive.
-     */
-    data class LineByCumulativeChars(
-        val id: Long,
-        val lineIndex: Int,
-        val charCount: Int,
-        val cumulativeChars: Long,
-    )
-
-    /**
-     * Finds the first line of [bookId] whose start offset (`cumulativeChars`) is at or past
-     * [targetChars]. Used by the content-aware scrollbar to map a thumb drop position back
-     * to a concrete line in O(log N) via [idx_line_book_cumchars]. The returned [id] can be
-     * fed straight into the paging factory to rebuild the window centred on the target line.
-     */
-    suspend fun findLineByCumulativeChars(bookId: Long, targetChars: Long): LineByCumulativeChars? =
-        withContext(Dispatchers.IO) {
-            database.lineQueriesQueries
-                .findByCumulativeChars(bookId, targetChars)
-                .executeAsOneOrNull()
-                ?.let {
-                    LineByCumulativeChars(
-                        id = it.id,
-                        lineIndex = it.lineIndex.toInt(),
-                        charCount = it.charCount.toInt(),
-                        cumulativeChars = it.cumulativeChars,
-                    )
-                }
-        }
-
-    /**
      * Gets the previous line for a given book and line index.
      * 
      * @param bookId The ID of the book
@@ -1173,7 +1135,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                     heRef = line.heRef,
                     tocEntryId = null,
                     charCount = line.charCount.toLong(),
-                    cumulativeChars = line.cumulativeChars,
                 )
             }
         }
@@ -1192,7 +1153,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                 heRef = line.heRef,
                 tocEntryId = null,
                 charCount = line.charCount.toLong(),
-                cumulativeChars = line.cumulativeChars,
             )
             logger.d{"Repository inserted line with explicit ID: ${line.id} and bookId: ${line.bookId}"}
             return@withContext line.id
@@ -1205,7 +1165,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                 heRef = line.heRef,
                 tocEntryId = null,
                 charCount = line.charCount.toLong(),
-                cumulativeChars = line.cumulativeChars,
             )
             val lineId = database.lineQueriesQueries.lastInsertRowId().executeAsOne()
             logger.d{"Repository inserted line with auto-generated ID: $lineId and bookId: ${line.bookId}"}

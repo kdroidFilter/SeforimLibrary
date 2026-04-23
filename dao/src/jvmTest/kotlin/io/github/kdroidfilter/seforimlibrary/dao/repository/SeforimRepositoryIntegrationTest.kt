@@ -332,59 +332,18 @@ class SeforimRepositoryIntegrationTest {
     }
 
     @Test
-    fun `line char metrics roundtrip via insertLine`() = runBlocking {
+    fun `line char count roundtrip via insertLine`() = runBlocking {
         val sourceId = repository.insertSource("Sefaria")
         val categoryId = repository.insertCategory(Category(parentId = null, title = "Torah", level = 0, order = 1))
         val bookId = repository.insertBook(
             Book(categoryId = categoryId, sourceId = sourceId, title = "Bereshit", order = 1f)
         )
-        repository.insertLine(Line(bookId = bookId, lineIndex = 0, content = "a", charCount = 1, cumulativeChars = 0L))
-        repository.insertLine(Line(bookId = bookId, lineIndex = 1, content = "bcd", charCount = 3, cumulativeChars = 1L))
-        repository.insertLine(Line(bookId = bookId, lineIndex = 2, content = "ef", charCount = 2, cumulativeChars = 4L))
+        repository.insertLine(Line(bookId = bookId, lineIndex = 0, content = "a", charCount = 1))
+        repository.insertLine(Line(bookId = bookId, lineIndex = 1, content = "bcd", charCount = 3))
+        repository.insertLine(Line(bookId = bookId, lineIndex = 2, content = "ef", charCount = 2))
 
         val lines = repository.getLines(bookId, startIndex = 0, endIndex = 2)
         assertEquals(listOf(1, 3, 2), lines.map { it.charCount })
-        assertEquals(listOf(0L, 1L, 4L), lines.map { it.cumulativeChars })
-    }
-
-    @Test
-    fun `findLineByCumulativeChars returns first line at or past target offset`() = runBlocking {
-        val sourceId = repository.insertSource("Sefaria")
-        val categoryId = repository.insertCategory(Category(parentId = null, title = "Torah", level = 0, order = 1))
-        val bookId = repository.insertBook(
-            Book(categoryId = categoryId, sourceId = sourceId, title = "Bereshit", order = 1f)
-        )
-        // Cumulative offsets: 0, 10, 30, 50
-        repository.insertLinesBatch(listOf(
-            Line(id = 1, bookId = bookId, lineIndex = 0, content = "x", charCount = 10, cumulativeChars = 0L),
-            Line(id = 2, bookId = bookId, lineIndex = 1, content = "x", charCount = 20, cumulativeChars = 10L),
-            Line(id = 3, bookId = bookId, lineIndex = 2, content = "x", charCount = 20, cumulativeChars = 30L),
-            Line(id = 4, bookId = bookId, lineIndex = 3, content = "x", charCount = 15, cumulativeChars = 50L),
-        ))
-
-        // Target before any line starts at offset 0: first line (idx 0).
-        assertEquals(0, repository.findLineByCumulativeChars(bookId, 0L)?.lineIndex)
-        // Target lands inside line 1's span (cumulative 10 covers offsets 10..29): lookup
-        // returns first line with cumulativeChars >= target = line 1 itself for target=10.
-        assertEquals(1, repository.findLineByCumulativeChars(bookId, 10L)?.lineIndex)
-        // Target inside line 2's span: target 20 → line 1 (cum 10) not matched, line 2 (cum 30) matched.
-        assertEquals(2, repository.findLineByCumulativeChars(bookId, 20L)?.lineIndex)
-        // Past the last line: null.
-        assertNull(repository.findLineByCumulativeChars(bookId, 999L))
-    }
-
-    @Test
-    fun `updateBookTotalChars persists book-level denominator`() = runBlocking {
-        val sourceId = repository.insertSource("Sefaria")
-        val categoryId = repository.insertCategory(Category(parentId = null, title = "Torah", level = 0, order = 1))
-        val bookId = repository.insertBook(
-            Book(categoryId = categoryId, sourceId = sourceId, title = "Bereshit", order = 1f)
-        )
-        repository.updateBookTotalChars(bookId, 12_345L)
-
-        val book = repository.getBook(bookId)
-        assertNotNull(book)
-        assertEquals(12_345L, book.totalChars)
     }
 
     // ==================== TOC Tests ====================

@@ -87,7 +87,6 @@ fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json, authors: L
         notesContent = notesContent,
         order = orderIndex.toFloat(),
         totalLines = totalLines.toInt(),
-        totalChars = totalChars,
         isBaseBook = isBaseBook == 1L,
         hasTargumConnection = hasTargumConnection == 1L,
         hasReferenceConnection = hasReferenceConnection == 1L,
@@ -138,7 +137,6 @@ fun io.github.kdroidfilter.seforimlibrary.db.Line.toModel(): Line {
         content = content,
         heRef = heRef,
         charCount = charCount.toInt(),
-        cumulativeChars = cumulativeChars,
     )
 }
 
