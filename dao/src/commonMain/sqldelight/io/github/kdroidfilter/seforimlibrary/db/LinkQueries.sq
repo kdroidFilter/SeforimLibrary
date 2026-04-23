@@ -80,26 +80,6 @@ GROUP BY l.targetLineId
 ORDER BY b.orderIndex, MIN(l.targetLineIndex)
 LIMIT ? OFFSET ?;
 
--- Sum of visible char counts across every link matching the same filter used by
--- `selectLinksBySourceLineIdsAndTypesPaged`. Feeds the content-aware scrollbar on the
--- commentaries panel so the thumb size and position are computed against the real
--- total, not the running average of the loaded paging window.
-sumLinkCharsBySourceLineIdsAndTypes:
-SELECT COALESCE(SUM(tl.charCount), 0) AS totalChars
-FROM link l
-JOIN connection_type ct ON l.connectionTypeId = ct.id
-JOIN line tl ON l.targetLineId = tl.id
-WHERE l.sourceLineId IN ? AND ct.name IN ?;
-
--- Same aggregate with the additional commentator-book filter applied by
--- `selectLinksBySourceLineIdsTargetsAndTypesPaged`.
-sumLinkCharsBySourceLineIdsTargetsAndTypes:
-SELECT COALESCE(SUM(tl.charCount), 0) AS totalChars
-FROM link l
-JOIN connection_type ct ON l.connectionTypeId = ct.id
-JOIN line tl ON l.targetLineId = tl.id
-WHERE l.sourceLineId IN ? AND l.targetBookId IN ? AND ct.name IN ?;
-
 -- Ordered list of per-link charCounts matching `selectLinksBySourceLineIdsAndTypesPaged`.
 -- The scrollbar needs the whole vector (not just the sum) so it can turn each raw
 -- charCount into `ceil(charCount / capacity) * capacity` at runtime, where `capacity`

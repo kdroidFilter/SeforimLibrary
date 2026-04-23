@@ -1762,34 +1762,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
     }
 
     /**
-     * Returns the total visible-char count across every commentary matching the same
-     * filter as [getCommentariesForLineRange]. Feeds the content-aware scrollbar on
-     * the commentaries panel with the exact denominator (`totalChars`) so thumb size
-     * and position stay stable regardless of how many items have been paged in.
-     *
-     * Single SQL sum over the `link ⋈ line` join, backed by
-     * `idx_link_type_source_line`; sub-millisecond on the current dataset.
-     */
-    suspend fun sumCommentaryCharsForLines(
-        lineIds: List<Long>,
-        activeCommentatorIds: Set<Long> = emptySet(),
-        connectionTypes: Set<ConnectionType> = setOf(ConnectionType.COMMENTARY),
-    ): Long = withContext(Dispatchers.IO) {
-        if (lineIds.isEmpty() || connectionTypes.isEmpty()) return@withContext 0L
-        val typeNames = connectionTypes.map { it.name }
-        val raw = if (activeCommentatorIds.isEmpty()) {
-            database.linkQueriesQueries
-                .sumLinkCharsBySourceLineIdsAndTypes(lineIds, typeNames)
-                .executeAsOneOrNull()
-        } else {
-            database.linkQueriesQueries
-                .sumLinkCharsBySourceLineIdsTargetsAndTypes(lineIds, activeCommentatorIds.toList(), typeNames)
-                .executeAsOneOrNull()
-        }
-        raw ?: 0L
-    }
-
-    /**
      * Ordered list of per-link target charCounts matching the same filter the
      * commentaries pager uses. The scrollbar converts every value into
      * `ceil(charCount / capacity) * capacity` at runtime, where `capacity` is the
@@ -1843,35 +1815,6 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
             listOf(baseLineId)
         }
         return getCommentaryCharCountsForLines(resolvedLineIds, activeCommentatorIds, connectionTypes)
-    }
-
-    /**
-     * Sum of commentary-target char counts for the line set used by
-     * [io.github.kdroidfilter.seforimapp.pagination.CommentsForLineOrTocPagingSource].
-     *
-     * When [baseLineId] maps to a TOC heading the pager pages through the heading's
-     * section instead of that single line (which carries no commentaries of its own);
-     * this method mirrors that resolution so the scrollbar total matches exactly what
-     * the pager will ever surface.
-     *
-     * [maxSectionLines] mirrors the pager's `maxBatchSize = max(64, limit)` cap; stays
-     * conservative (64) so the total is stable across page sizes.
-     */
-    suspend fun sumCommentaryCharsForLineOrSection(
-        baseLineId: Long,
-        activeCommentatorIds: Set<Long> = emptySet(),
-        connectionTypes: Set<ConnectionType> = setOf(ConnectionType.COMMENTARY),
-        maxSectionLines: Int = 64,
-    ): Long {
-        val headingToc = getHeadingTocEntryByLineId(baseLineId)
-        val resolvedLineIds = if (headingToc != null) {
-            getLineIdsForTocEntry(headingToc.id)
-                .filter { it != baseLineId }
-                .take(maxSectionLines)
-        } else {
-            listOf(baseLineId)
-        }
-        return sumCommentaryCharsForLines(resolvedLineIds, activeCommentatorIds, connectionTypes)
     }
 
     suspend fun getAvailableCommentators(
