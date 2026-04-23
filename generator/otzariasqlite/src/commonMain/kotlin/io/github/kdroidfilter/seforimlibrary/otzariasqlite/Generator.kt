@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.otzariasqlite
 
 import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.core.text.HebrewTextUtils
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
@@ -836,11 +837,16 @@ class DatabaseGenerator(
         val entriesByParent = mutableMapOf<Long?, MutableList<Long>>()
         var currentOwningTocEntryId: Long? = null
         val lineTocBuffer = ArrayList<Pair<Long, Long>>(minOf(lines.size, 200_000))
+        // Running visible-char total feeding line.cumulativeChars (exclusive of the
+        // current line) and book.totalChars once the book finishes importing.
+        var bookCumulativeChars = 0L
 
         // PREMIÈRE PASSE : Créer toutes les entrées et lignes
         for ((lineIndex, line) in lines.withIndex()) {
             val level = detectHeaderLevel(line)
             val plainText = if (level > 0) cleanHtml(line) else ""
+            val lineCharCount = countVisibleChars(line)
+            val lineCumulative = bookCumulativeChars
 
             if (level > 0) {
                 if (plainText.isBlank()) {
@@ -884,7 +890,9 @@ class DatabaseGenerator(
                         id = currentLineId,
                         bookId = bookId,
                         lineIndex = lineIndex,
-                        content = line
+                        content = line,
+                        charCount = lineCharCount,
+                        cumulativeChars = lineCumulative,
                     )
                 )
                 // Track this as a heading line for link filtering
@@ -906,7 +914,9 @@ class DatabaseGenerator(
                         bookId = bookId,
                         lineIndex = lineIndex,
                         content = line,
-                        heRef = buildOtzariaRef(bookTitle, lineIndex)
+                        heRef = buildOtzariaRef(bookTitle, lineIndex),
+                        charCount = lineCharCount,
+                        cumulativeChars = lineCumulative,
                     )
                 )
                 // Buffer mapping for regular line if there is a current owner
@@ -919,6 +929,10 @@ class DatabaseGenerator(
                 }
             }
 
+            // Only advance the cumulative counter for lines that produced a row (empty
+            // headings bail out via `continue` above).
+            bookCumulativeChars += lineCharCount
+
             if (lineIndex % 1000 == 0) {
                 val pct = if (lines.isNotEmpty()) (lineIndex * 100 / lines.size) else 0
                 logger.i { "Book $bookId '$bookTitle': $lineIndex/${lines.size} lines (${pct}%)" }
@@ -927,6 +941,9 @@ class DatabaseGenerator(
 
         // Flush buffered line→toc mappings in bulk
         repository.bulkUpsertLineToc(lineTocBuffer)
+
+        // Persist the book-level denominator used by the content-aware scrollbar.
+        repository.updateBookTotalChars(bookId, bookCumulativeChars)
 
         // DEUXIÈME PASSE : Mettre à jour isLastChild et hasChildren
         logger.d { "Updating isLastChild and hasChildren for book ID: $bookId" }

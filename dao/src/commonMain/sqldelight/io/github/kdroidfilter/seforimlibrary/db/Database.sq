@@ -75,6 +75,9 @@ CREATE TABLE IF NOT EXISTS book (
     notesContent TEXT,
     orderIndex INTEGER NOT NULL DEFAULT 999,
     totalLines INTEGER NOT NULL DEFAULT 0,
+    -- Sum of visible (HTML-stripped) character counts across all lines of the book.
+    -- Used as the denominator for content-aware scrollbars.
+    totalChars INTEGER NOT NULL DEFAULT 0,
     isBaseBook INTEGER NOT NULL DEFAULT 0,
     hasTargumConnection INTEGER NOT NULL DEFAULT 0,
     hasReferenceConnection INTEGER NOT NULL DEFAULT 0,
@@ -150,6 +153,13 @@ CREATE TABLE IF NOT EXISTS line (
     content TEXT NOT NULL,
     heRef TEXT,
     tocEntryId INTEGER,
+    -- Visible character count of this line (HTML stripped). Used to compute scrollbar
+    -- thumb size from the currently visible lines.
+    charCount INTEGER NOT NULL DEFAULT 0,
+    -- Cumulative visible character count for all lines of the same book with a
+    -- strictly lower lineIndex. Equals 0 for the first line of each book.
+    -- Paired with book.totalChars it yields the relative scroll position in O(1).
+    cumulativeChars INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
     FOREIGN KEY (tocEntryId) REFERENCES tocEntry(id) ON DELETE SET NULL
 );
@@ -157,6 +167,8 @@ CREATE TABLE IF NOT EXISTS line (
 CREATE INDEX IF NOT EXISTS idx_line_book_index ON line(bookId, lineIndex);
 CREATE INDEX IF NOT EXISTS idx_line_toc ON line(tocEntryId);
 CREATE INDEX IF NOT EXISTS idx_line_heref ON line(heRef);
+-- Backs the drag-to-position query findByCumulativeChars.
+CREATE INDEX IF NOT EXISTS idx_line_book_cumchars ON line(bookId, cumulativeChars);
 
 -- TOC texts table
 CREATE TABLE IF NOT EXISTS tocText (

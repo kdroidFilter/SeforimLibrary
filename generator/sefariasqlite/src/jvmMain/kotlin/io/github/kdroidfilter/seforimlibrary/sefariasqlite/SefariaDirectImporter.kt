@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
 import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
 import io.github.kdroidfilter.seforimlibrary.core.models.Author
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
@@ -229,16 +230,25 @@ class SefariaDirectImporter(
             // Create a mapping from lineIndex to RefEntry for quick lookup
             val refsByLineIndex = payload.refEntries.associateBy { it.lineIndex - 1 }
 
+            // Visible-char offset reset at every book: `bookCumulativeChars` is the value
+            // stamped on the *current* line (chars before it); it is then advanced by the
+            // line's own charCount for the following iteration.
+            var bookCumulativeChars = 0L
+
             payload.lines.forEachIndexed { idx, content ->
                 val lineId = nextLineId.getAndIncrement()
                 val refEntry = refsByLineIndex[idx]
+                val lineCharCount = countVisibleChars(content)
                 lineBatch += Line(
                     id = lineId,
                     bookId = bookId,
                     lineIndex = idx,
                     content = content,
-                    heRef = refEntry?.heRef
+                    heRef = refEntry?.heRef,
+                    charCount = lineCharCount,
+                    cumulativeChars = bookCumulativeChars,
                 )
+                bookCumulativeChars += lineCharCount
                 lineKeyToId[bookPath to idx] = lineId
                 lineIdToBookId[lineId] = bookId
                 // Track heading lines (contain <h1>, <h2>, etc. tags)
@@ -253,6 +263,11 @@ class SefariaDirectImporter(
                     lineBatch.clear()
                 }
             }
+
+            // Persist the book-level denominator used by the content-aware scrollbar.
+            // Book row was just inserted with totalChars=0 (default); patch it now that we
+            // know the real total.
+            repository.updateBookTotalChars(bookId, bookCumulativeChars)
 
             // Insert TOC entries hierarchically and build line_toc mappings
             if (payload.headings.isNotEmpty()) {

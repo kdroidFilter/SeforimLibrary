@@ -11,6 +11,10 @@ import kotlinx.serialization.Serializable
  * @property lineIndex The index of the line within the book
  * @property content The original HTML content of the line
  * @property heRef The Hebrew reference/citation (e.g., "בראשית א, א")
+ * @property charCount Visible character count of [content] after HTML stripping; feeds the scrollbar thumb sizing.
+ * @property cumulativeChars Sum of [charCount] for all lines of the same book with a strictly lower [lineIndex].
+ * Paired with [io.github.kdroidfilter.seforimlibrary.core.models.Book.totalChars] this gives the O(1)
+ * relative scroll position of the start of this line within the book.
  */
 @Stable
 @Serializable
@@ -19,5 +23,7 @@ data class Line(
     val bookId: Long,
     val lineIndex: Int,
     val content: String,
-    val heRef: String? = null
+    val heRef: String? = null,
+    val charCount: Int = 0,
+    val cumulativeChars: Long = 0L,
 )

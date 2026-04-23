@@ -20,12 +20,20 @@ selectByIds:
 SELECT * FROM line WHERE id IN ?;
 
 insert:
-INSERT INTO line (bookId, lineIndex, content, heRef, tocEntryId)
-VALUES (?, ?, ?, ?, ?);
+INSERT INTO line (bookId, lineIndex, content, heRef, tocEntryId, charCount, cumulativeChars)
+VALUES (?, ?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO line (id, bookId, lineIndex, content, heRef, tocEntryId)
-VALUES (?, ?, ?, ?, ?, ?);
+INSERT INTO line (id, bookId, lineIndex, content, heRef, tocEntryId, charCount, cumulativeChars)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+-- Lookup used by the content-aware scrollbar when the user drags the thumb:
+-- finds the first line whose stored cumulativeChars is >= the target offset.
+findByCumulativeChars:
+SELECT id, lineIndex, charCount, cumulativeChars FROM line
+WHERE bookId = ? AND cumulativeChars >= ?
+ORDER BY cumulativeChars
+LIMIT 1;
 
 updateTocEntryId:
 UPDATE line SET tocEntryId = ? WHERE id = ?;

@@ -19,6 +19,8 @@ import kotlinx.serialization.Serializable
  * @property heShortDesc A short description of the book in Hebrew
  * @property order The display order of the book within its category
  * @property totalLines The total number of lines in the book
+ * @property totalChars Sum of visible (HTML-stripped) character counts across all lines of the book. Used as
+ *                     the denominator of the content-aware scrollbar.
  * @property hasAltStructures Indicates if the book has alternative TOC structures (e.g., Parasha)
  * @property hasTeamim Indicates if the book contains biblical cantillation marks (teamim)
  * @property hasNekudot Indicates if the book contains vowel points (nikud/nekudot)
@@ -41,6 +43,7 @@ data class Book(
     val notesContent: String? = null,
     val order: Float = 999f,
     val totalLines: Int = 0,
+    val totalChars: Long = 0L,
     val isBaseBook: Boolean = false,
     val hasTargumConnection: Boolean = false,
     val hasReferenceConnection: Boolean = false,
