@@ -6,6 +6,12 @@ SELECT * FROM line WHERE id = ?;
 selectByBookId:
 SELECT * FROM line WHERE bookId = ? ORDER BY lineIndex;
 
+-- Lightweight projection returning just the per-line charCount for a whole book.
+-- Feeds the content-aware scrollbar: loaded once per book, converted into a visual-
+-- line prefix-sum whenever the measured chars-per-visual-line capacity changes.
+selectCharCountsByBookId:
+SELECT charCount FROM line WHERE bookId = ? ORDER BY lineIndex;
+
 selectByBookIdRange:
 SELECT * FROM line
 WHERE bookId = ?
