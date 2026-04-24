@@ -331,6 +331,21 @@ class SeforimRepositoryIntegrationTest {
         assertTrue(firstRangeIndices.intersect(secondRangeIndices).isEmpty())
     }
 
+    @Test
+    fun `line char count roundtrip via insertLine`() = runBlocking {
+        val sourceId = repository.insertSource("Sefaria")
+        val categoryId = repository.insertCategory(Category(parentId = null, title = "Torah", level = 0, order = 1))
+        val bookId = repository.insertBook(
+            Book(categoryId = categoryId, sourceId = sourceId, title = "Bereshit", order = 1f)
+        )
+        repository.insertLine(Line(bookId = bookId, lineIndex = 0, content = "a", charCount = 1))
+        repository.insertLine(Line(bookId = bookId, lineIndex = 1, content = "bcd", charCount = 3))
+        repository.insertLine(Line(bookId = bookId, lineIndex = 2, content = "ef", charCount = 2))
+
+        val lines = repository.getLines(bookId, startIndex = 0, endIndex = 2)
+        assertEquals(listOf(1, 3, 2), lines.map { it.charCount })
+    }
+
     // ==================== TOC Tests ====================
 
     @Test

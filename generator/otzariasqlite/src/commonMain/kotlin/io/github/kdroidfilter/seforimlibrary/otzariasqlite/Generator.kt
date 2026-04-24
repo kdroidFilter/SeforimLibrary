@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.otzariasqlite
 
 import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.core.text.HebrewTextUtils
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
@@ -841,6 +842,7 @@ class DatabaseGenerator(
         for ((lineIndex, line) in lines.withIndex()) {
             val level = detectHeaderLevel(line)
             val plainText = if (level > 0) cleanHtml(line) else ""
+            val lineCharCount = countVisibleChars(line)
 
             if (level > 0) {
                 if (plainText.isBlank()) {
@@ -884,7 +886,8 @@ class DatabaseGenerator(
                         id = currentLineId,
                         bookId = bookId,
                         lineIndex = lineIndex,
-                        content = line
+                        content = line,
+                        charCount = lineCharCount,
                     )
                 )
                 // Track this as a heading line for link filtering
@@ -906,7 +909,8 @@ class DatabaseGenerator(
                         bookId = bookId,
                         lineIndex = lineIndex,
                         content = line,
-                        heRef = buildOtzariaRef(bookTitle, lineIndex)
+                        heRef = buildOtzariaRef(bookTitle, lineIndex),
+                        charCount = lineCharCount,
                     )
                 )
                 // Buffer mapping for regular line if there is a current owner

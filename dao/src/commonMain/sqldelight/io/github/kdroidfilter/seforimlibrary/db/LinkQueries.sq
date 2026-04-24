@@ -80,6 +80,27 @@ GROUP BY l.targetLineId
 ORDER BY b.orderIndex, MIN(l.targetLineIndex)
 LIMIT ? OFFSET ?;
 
+-- Ordered list of per-link charCounts matching `selectLinksBySourceLineIdsAndTypesPaged`.
+-- The scrollbar needs the whole vector (not just the sum) so it can turn each raw
+-- charCount into `ceil(charCount / capacity) * capacity` at runtime, where `capacity`
+-- is the measured chars-per-visual-line at the current width/font.
+selectLinkCharCountsBySourceLineIdsAndTypes:
+SELECT tl.charCount FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN book b ON l.targetBookId = b.id
+JOIN line tl ON l.targetLineId = tl.id
+WHERE l.sourceLineId IN ? AND ct.name IN ?
+ORDER BY b.orderIndex, l.targetLineIndex;
+
+-- Same ordered vector with the commentator-book filter applied.
+selectLinkCharCountsBySourceLineIdsTargetsAndTypes:
+SELECT tl.charCount FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN book b ON l.targetBookId = b.id
+JOIN line tl ON l.targetLineId = tl.id
+WHERE l.sourceLineId IN ? AND l.targetBookId IN ? AND ct.name IN ?
+ORDER BY b.orderIndex, l.targetLineIndex;
+
 selectLinkSummariesBySourceLineIds:
 SELECT l.*, ct.name AS connectionType, b.title AS targetBookTitle
 FROM link l

@@ -150,6 +150,9 @@ CREATE TABLE IF NOT EXISTS line (
     content TEXT NOT NULL,
     heRef TEXT,
     tocEntryId INTEGER,
+    -- Visible character count of this line (HTML stripped). Used to compute scrollbar
+    -- thumb size from the currently visible lines.
+    charCount INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
     FOREIGN KEY (tocEntryId) REFERENCES tocEntry(id) ON DELETE SET NULL
 );

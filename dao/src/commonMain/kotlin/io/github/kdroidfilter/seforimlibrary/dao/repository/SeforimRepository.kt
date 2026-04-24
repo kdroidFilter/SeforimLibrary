@@ -1076,6 +1076,20 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         }
 
     /**
+     * Light-weight projection of per-line `charCount` for a full book, in `lineIndex`
+     * order. Feeds the content-aware scrollbar: loaded once at book open, converted
+     * to a visual-line prefix-sum whenever the measured chars-per-visual-line
+     * capacity changes (resize, font swap, text-size tweak). Returned as an
+     * `IntArray` so the prefix sum can run without allocating boxed integers.
+     */
+    suspend fun getBookCharCounts(bookId: Long): IntArray = withContext(Dispatchers.IO) {
+        val rows = database.lineQueriesQueries
+            .selectCharCountsByBookId(bookId)
+            .executeAsList()
+        IntArray(rows.size) { rows[it].toInt() }
+    }
+
+    /**
      * Gets the previous line for a given book and line index.
      * 
      * @param bookId The ID of the book
@@ -1119,7 +1133,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                     lineIndex = line.lineIndex.toLong(),
                     content = line.content,
                     heRef = line.heRef,
-                    tocEntryId = null
+                    tocEntryId = null,
+                    charCount = line.charCount.toLong(),
                 )
             }
         }
@@ -1136,7 +1151,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                 lineIndex = line.lineIndex.toLong(),
                 content = line.content,
                 heRef = line.heRef,
-                tocEntryId = null
+                tocEntryId = null,
+                charCount = line.charCount.toLong(),
             )
             logger.d{"Repository inserted line with explicit ID: ${line.id} and bookId: ${line.bookId}"}
             return@withContext line.id
@@ -1147,7 +1163,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                 lineIndex = line.lineIndex.toLong(),
                 content = line.content,
                 heRef = line.heRef,
-                tocEntryId = null
+                tocEntryId = null,
+                charCount = line.charCount.toLong(),
             )
             val lineId = database.lineQueriesQueries.lastInsertRowId().executeAsOne()
             logger.d{"Repository inserted line with auto-generated ID: $lineId and bookId: ${line.bookId}"}
@@ -1701,6 +1718,62 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                 }
             }
         }
+    }
+
+    /**
+     * Ordered list of per-link target charCounts matching the same filter the
+     * commentaries pager uses. The scrollbar converts every value into
+     * `ceil(charCount / capacity) * capacity` at runtime, where `capacity` is the
+     * measured chars-per-visual-line at the current width/font — so a short item
+     * still contributes one visual line to the total instead of a handful of chars.
+     *
+     * Returns the vector in pager order (`book.orderIndex`, `targetLineIndex`).
+     */
+    suspend fun getCommentaryCharCountsForLines(
+        lineIds: List<Long>,
+        activeCommentatorIds: Set<Long> = emptySet(),
+        connectionTypes: Set<ConnectionType> = setOf(ConnectionType.COMMENTARY),
+    ): List<Int> = withContext(Dispatchers.IO) {
+        if (lineIds.isEmpty() || connectionTypes.isEmpty()) return@withContext emptyList()
+        val typeNames = connectionTypes.map { it.name }
+        val rows = if (activeCommentatorIds.isEmpty()) {
+            database.linkQueriesQueries
+                .selectLinkCharCountsBySourceLineIdsAndTypes(lineIds, typeNames)
+                .executeAsList()
+        } else {
+            database.linkQueriesQueries
+                .selectLinkCharCountsBySourceLineIdsTargetsAndTypes(
+                    lineIds,
+                    activeCommentatorIds.toList(),
+                    typeNames,
+                )
+                .executeAsList()
+        }
+        rows.map { it.toInt() }
+    }
+
+    /**
+     * Ordered charCount vector for the line set used by
+     * [io.github.kdroidfilter.seforimapp.pagination.CommentsForLineOrTocPagingSource].
+     * See [getCommentaryCharCountsForLines] for semantics; this variant mirrors the
+     * pager's TOC-heading expansion (and its `maxBatchSize = 64` cap) so the vector
+     * describes exactly the set the user will paginate through.
+     */
+    suspend fun getCommentaryCharCountsForLineOrSection(
+        baseLineId: Long,
+        activeCommentatorIds: Set<Long> = emptySet(),
+        connectionTypes: Set<ConnectionType> = setOf(ConnectionType.COMMENTARY),
+        maxSectionLines: Int = 64,
+    ): List<Int> {
+        val headingToc = getHeadingTocEntryByLineId(baseLineId)
+        val resolvedLineIds = if (headingToc != null) {
+            getLineIdsForTocEntry(headingToc.id)
+                .filter { it != baseLineId }
+                .take(maxSectionLines)
+        } else {
+            listOf(baseLineId)
+        }
+        return getCommentaryCharCountsForLines(resolvedLineIds, activeCommentatorIds, connectionTypes)
     }
 
     suspend fun getAvailableCommentators(

@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
 import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
 import io.github.kdroidfilter.seforimlibrary.core.models.Author
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
@@ -232,12 +233,14 @@ class SefariaDirectImporter(
             payload.lines.forEachIndexed { idx, content ->
                 val lineId = nextLineId.getAndIncrement()
                 val refEntry = refsByLineIndex[idx]
+                val lineCharCount = countVisibleChars(content)
                 lineBatch += Line(
                     id = lineId,
                     bookId = bookId,
                     lineIndex = idx,
                     content = content,
-                    heRef = refEntry?.heRef
+                    heRef = refEntry?.heRef,
+                    charCount = lineCharCount,
                 )
                 lineKeyToId[bookPath to idx] = lineId
                 lineIdToBookId[lineId] = bookId
