@@ -41,6 +41,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
     private val json = Json { ignoreUnknownKeys = true }
     private val logger = Logger.withTag("SeforimRepository")
 
+    // Category rows are immutable at runtime, so a plain read-through cache avoids
+    // paying a SQLite prepare + connection round-trip for every breadcrumb/tree walk.
+    // Profiling (see JFR 2026-04-23) showed 70 `sqlite3_prepare` calls in 20 s all
+    // coming from `getCategory`. Both KMP targets (JVM + Android) are JVM-based so
+    // `ConcurrentHashMap` is safe to use directly from commonMain.
+    private val categoryCache = java.util.concurrent.ConcurrentHashMap<Long, Category>()
+
     init {
         val repositoryLoggingEnv = getEnvironmentVariable("SEFORIMAPP_REPOSITORY_LOGGING")?.lowercase()
         if (repositoryLoggingEnv == "true" || repositoryLoggingEnv == "1" || repositoryLoggingEnv == "yes") {
@@ -249,13 +256,16 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
     // --- Categories ---
 
     /**
-     * Retrieves a category by its ID.
-     *
-     * @param id The ID of the category to retrieve
-     * @return The category if found, null otherwise
+     * Retrieves a category by its ID. Backed by a read-through in-memory cache —
+     * categories are immutable at runtime, so we only hit SQLite on the first lookup
+     * for each id. Returns `null` for unknown ids (not cached as negative — cheap).
      */
-    suspend fun getCategory(id: Long): Category? = withContext(Dispatchers.IO) {
-        database.categoryQueriesQueries.selectById(id).executeAsOneOrNull()?.toModel()
+    suspend fun getCategory(id: Long): Category? {
+        categoryCache[id]?.let { return it }
+        val loaded = withContext(Dispatchers.IO) {
+            database.categoryQueriesQueries.selectById(id).executeAsOneOrNull()?.toModel()
+        } ?: return null
+        return categoryCache.putIfAbsent(id, loaded) ?: loaded
     }
 
     /**
