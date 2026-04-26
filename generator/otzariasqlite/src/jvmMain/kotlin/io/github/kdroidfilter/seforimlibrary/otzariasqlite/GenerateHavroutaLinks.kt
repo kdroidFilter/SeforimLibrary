@@ -275,6 +275,7 @@ private suspend fun processBookPair(
             targetBookId = havroutaBookId,
             sourceLineId = talmudLineId,
             targetLineId = havroutaLine.id,
+            targetLineIndex = havroutaLine.lineIndex,
             connectionType = ConnectionType.COMMENTARY
         ))
 
@@ -284,6 +285,7 @@ private suspend fun processBookPair(
             targetBookId = talmudBookId,
             sourceLineId = havroutaLine.id,
             targetLineId = talmudLineId,
+            targetLineIndex = matchingLineIndex,
             connectionType = ConnectionType.SOURCE
         ))
 
@@ -573,6 +575,7 @@ private suspend fun generateHavroutaHearotLinks(
                 targetBookId = targetBook.id,
                 sourceLineId = sourceLineId,
                 targetLineId = targetLineId,
+                targetLineIndex = targetLineIndex,
                 connectionType = ConnectionType.COMMENTARY
             ))
 
@@ -582,6 +585,7 @@ private suspend fun generateHavroutaHearotLinks(
                 targetBookId = havroutaBook.id,
                 sourceLineId = targetLineId,
                 targetLineId = sourceLineId,
+                targetLineIndex = sourceLineIndex,
                 connectionType = ConnectionType.SOURCE
             ))
         }
@@ -669,12 +673,13 @@ private suspend fun generateTalmudHearotTransitiveLinks(
     logger.i { "Creating transitive Talmud->Hearot links via SQL..." }
 
     val insertSql = """
-        INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, connectionTypeId)
+        INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, connectionTypeId)
         SELECT DISTINCT
             l1.sourceBookId,
             l2.targetBookId,
             l1.sourceLineId,
             l2.targetLineId,
+            l2.targetLineIndex,
             ct.id
         FROM link l1
         JOIN link l2 ON l1.targetLineId = l2.sourceLineId

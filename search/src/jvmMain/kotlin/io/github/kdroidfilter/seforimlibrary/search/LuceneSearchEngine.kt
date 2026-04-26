@@ -1,6 +1,8 @@
 package io.github.kdroidfilter.seforimlibrary.search
 
 import co.touchlab.kermit.Logger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.apache.lucene.analysis.Analyzer
 import org.apache.lucene.analysis.TokenStream
 import org.apache.lucene.analysis.standard.StandardAnalyzer
@@ -8,14 +10,19 @@ import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
 import org.apache.lucene.index.DirectoryReader
 import org.apache.lucene.index.StoredFields
 import org.apache.lucene.index.Term
+import org.apache.lucene.index.LeafReaderContext
 import org.apache.lucene.search.BooleanClause
 import org.apache.lucene.search.BooleanQuery
 import org.apache.lucene.search.BoostQuery
+import org.apache.lucene.search.Collector
 import org.apache.lucene.search.FuzzyQuery
 import org.apache.lucene.search.IndexSearcher
+import org.apache.lucene.search.LeafCollector
 import org.apache.lucene.search.PrefixQuery
 import org.apache.lucene.search.Query
+import org.apache.lucene.search.Scorable
 import org.apache.lucene.search.ScoreDoc
+import org.apache.lucene.search.ScoreMode
 import org.apache.lucene.search.TermQuery
 import org.apache.lucene.util.QueryBuilder
 import org.apache.lucene.store.FSDirectory
@@ -30,6 +37,67 @@ import java.nio.file.Path
  * Lucene-based implementation of SearchEngine for full-text search.
  * Supports Hebrew text with diacritics handling, dictionary expansion, and fuzzy matching.
  */
+private val logger = Logger.withTag("LuceneSearchEngine")
+// Hard cap on how many synonym/expansion terms we allow per token
+private const val MAX_SYNONYM_TERMS_PER_TOKEN: Int = 32
+// Global cap for boost queries built from dictionary expansions
+private const val MAX_SYNONYM_BOOST_TERMS: Int = 256
+// Constants for snippet source building (must match indexer)
+private const val SNIPPET_NEIGHBOR_WINDOW = 4
+private const val SNIPPET_MIN_LENGTH = 280
+
+/**
+ * Blacklist of hallucinated dictionary mappings.
+ * Loaded from resources/hallucination_blacklist.tsv
+ * Key: normalized token, Value: set of incorrect base forms to reject
+ *
+ * TODO: This is a temporary workaround. The proper fix is to correct the
+ *       hallucinated mappings directly in the lexical dictionary (lexical.db)
+ *       so this blacklist becomes unnecessary.
+ */
+private val HALLUCINATION_BLACKLIST: Map<String, Set<String>> by lazy {
+    loadHallucinationBlacklist()
+}
+
+private fun loadHallucinationBlacklist(): Map<String, Set<String>> {
+    val result = mutableMapOf<String, MutableSet<String>>()
+    try {
+        val inputStream = LuceneSearchEngine::class.java.getResourceAsStream("/hallucination_blacklist.tsv")
+        if (inputStream == null) {
+            logger.w { "hallucination_blacklist.tsv not found in resources" }
+            return emptyMap()
+        }
+        inputStream.bufferedReader().useLines { lines ->
+            lines.forEach { line ->
+                val trimmed = line.trim()
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) return@forEach
+                val parts = trimmed.split("\t")
+                if (parts.size >= 2) {
+                    val token = HebrewTextUtils.normalizeHebrew(parts[0])
+                    val base = HebrewTextUtils.normalizeHebrew(parts[1])
+                    result.getOrPut(token) { mutableSetOf() }.add(base)
+                }
+            }
+        }
+        logger.d { "Loaded ${result.size} hallucination blacklist entries" }
+    } catch (e: Exception) {
+        logger.e(e) { "Failed to load hallucination blacklist" }
+    }
+    return result
+}
+
+/**
+ * Check if an expansion should be rejected based on the hallucination blacklist.
+ */
+private fun isHallucinatedExpansion(token: String, expansion: MagicDictionaryIndex.Expansion): Boolean {
+    val normalizedToken = HebrewTextUtils.normalizeHebrew(token)
+    val blacklistedBases = HALLUCINATION_BLACKLIST[normalizedToken] ?: return false
+    return expansion.base.any { base ->
+        val normalizedBase = HebrewTextUtils.normalizeHebrew(base)
+        blacklistedBases.contains(normalizedBase)
+    }
+}
+
 class LuceneSearchEngine(
     private val indexDir: Path,
     private val snippetProvider: SnippetProvider? = null,
@@ -37,77 +105,13 @@ class LuceneSearchEngine(
     private val dictionaryPath: Path? = null
 ) : SearchEngine {
 
-    companion object {
-        private val logger = Logger.withTag("LuceneSearchEngine")
-        // Hard cap on how many synonym/expansion terms we allow per token
-        private const val MAX_SYNONYM_TERMS_PER_TOKEN: Int = 32
-        // Global cap for boost queries built from dictionary expansions
-        private const val MAX_SYNONYM_BOOST_TERMS: Int = 256
-        // Constants for snippet source building (must match indexer)
-        private const val SNIPPET_NEIGHBOR_WINDOW = 4
-        private const val SNIPPET_MIN_LENGTH = 280
-
-        /**
-         * Blacklist of hallucinated dictionary mappings.
-         * Loaded from resources/hallucination_blacklist.tsv
-         * Key: normalized token, Value: set of incorrect base forms to reject
-         *
-         * TODO: This is a temporary workaround. The proper fix is to correct the
-         *       hallucinated mappings directly in the lexical dictionary (lexical.db)
-         *       so this blacklist becomes unnecessary.
-         */
-        private val HALLUCINATION_BLACKLIST: Map<String, Set<String>> by lazy {
-            loadHallucinationBlacklist()
-        }
-
-        private fun loadHallucinationBlacklist(): Map<String, Set<String>> {
-            val result = mutableMapOf<String, MutableSet<String>>()
-            try {
-                val inputStream = LuceneSearchEngine::class.java.getResourceAsStream("/hallucination_blacklist.tsv")
-                if (inputStream == null) {
-                    logger.w { "hallucination_blacklist.tsv not found in resources" }
-                    return emptyMap()
-                }
-                inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { line ->
-                        val trimmed = line.trim()
-                        if (trimmed.isEmpty() || trimmed.startsWith("#")) return@forEach
-                        val parts = trimmed.split("\t")
-                        if (parts.size >= 2) {
-                            val token = HebrewTextUtils.normalizeHebrew(parts[0])
-                            val base = HebrewTextUtils.normalizeHebrew(parts[1])
-                            result.getOrPut(token) { mutableSetOf() }.add(base)
-                        }
-                    }
-                }
-                logger.d { "Loaded ${result.size} hallucination blacklist entries" }
-            } catch (e: Exception) {
-                logger.e(e) { "Failed to load hallucination blacklist" }
-            }
-            return result
-        }
-
-        /**
-         * Check if an expansion should be rejected based on the hallucination blacklist.
-         */
-        private fun isHallucinatedExpansion(token: String, expansion: MagicDictionaryIndex.Expansion): Boolean {
-            val normalizedToken = HebrewTextUtils.normalizeHebrew(token)
-            val blacklistedBases = HALLUCINATION_BLACKLIST[normalizedToken] ?: return false
-            return expansion.base.any { base ->
-                val normalizedBase = HebrewTextUtils.normalizeHebrew(base)
-                blacklistedBases.contains(normalizedBase)
-            }
-        }
-    }
-
     // Open Lucene directory lazily to avoid any I/O at app startup.
-    // Falls back to NIOFSDirectory if MMapDirectory/FSDirectory fails (e.g. GraalVM native image
-    // on macOS where Panama foreign downcalls for madvise are not registered).
+    // GraalVM native image does not support MMapDirectory (Panama foreign downcalls), use NIOFSDirectory instead.
     private val dir by lazy {
-        try {
-            FSDirectory.open(indexDir)
-        } catch (t: Throwable) {
+        if (System.getProperty("org.graalvm.nativeimage.imagecode") != null) {
             NIOFSDirectory(indexDir)
+        } else {
+            FSDirectory.open(indexDir)
         }
     }
 
@@ -156,9 +160,10 @@ class LuceneSearchEngine(
         bookFilter: Long?,
         categoryFilter: Long?,
         bookIds: Collection<Long>?,
-        lineIds: Collection<Long>?
+        lineIds: Collection<Long>?,
+        baseBookOnly: Boolean
     ): SearchSession? {
-        val context = buildSearchContext(query, near, bookFilter, categoryFilter, bookIds, lineIds) ?: return null
+        val context = buildSearchContext(query, near, bookFilter, categoryFilter, bookIds, lineIds, baseBookOnly) ?: return null
         val reader = DirectoryReader.open(dir)
         return LuceneSearchSession(context.query, context.anchorTerms, context.highlightTerms, reader)
     }
@@ -186,7 +191,7 @@ class LuceneSearchEngine(
                 val id = doc.getField("book_id")?.numericValue()?.toLong()
                 if (id != null) ids.add(id)
             }
-            ids.toList().take(limit)
+            ids.toList()
         }
     }
 
@@ -250,6 +255,68 @@ class LuceneSearchEngine(
         // Directory is closed automatically when readers are closed
     }
 
+    override fun computeFacets(
+        query: String,
+        near: Int,
+        bookFilter: Long?,
+        categoryFilter: Long?,
+        bookIds: Collection<Long>?,
+        lineIds: Collection<Long>?,
+        baseBookOnly: Boolean
+    ): SearchFacets? {
+        val context = buildSearchContext(query, near, bookFilter, categoryFilter, bookIds, lineIds, baseBookOnly)
+            ?: return null
+
+        return withSearcher { searcher ->
+            val categoryCounts = mutableMapOf<Long, Int>()
+            val bookCounts = mutableMapOf<Long, Int>()
+            var totalHits = 0L
+
+            // Lightweight collector that only reads stored fields for aggregation
+            val collector = object : Collector {
+                override fun getLeafCollector(leafContext: LeafReaderContext): LeafCollector {
+                    val storedFields = leafContext.reader().storedFields()
+
+                    return object : LeafCollector {
+                        override fun setScorer(scorer: Scorable) {
+                            // No scoring needed for facet counting
+                        }
+
+                        override fun collect(doc: Int) {
+                            totalHits++
+                            val luceneDoc = storedFields.document(doc)
+
+                            // Book count
+                            val bookId = luceneDoc.getField("book_id")?.numericValue()?.toLong()
+                            if (bookId != null) {
+                                bookCounts[bookId] = (bookCounts[bookId] ?: 0) + 1
+                            }
+
+                            // Category counts from ancestors (stored as comma-separated string)
+                            val ancestorStr = luceneDoc.getField("ancestor_category_ids")?.stringValue() ?: ""
+                            if (ancestorStr.isNotEmpty()) {
+                                for (idStr in ancestorStr.split(",")) {
+                                    val catId = idStr.trim().toLongOrNull() ?: continue
+                                    categoryCounts[catId] = (categoryCounts[catId] ?: 0) + 1
+                                }
+                            }
+                        }
+                    }
+                }
+
+                override fun scoreMode(): ScoreMode = ScoreMode.COMPLETE_NO_SCORES
+            }
+
+            searcher.search(context.query, collector)
+
+            SearchFacets(
+                totalHits = totalHits,
+                categoryCounts = categoryCounts.toMap(),
+                bookCounts = bookCounts.toMap()
+            )
+        }
+    }
+
     // --- Inner SearchSession class ---
 
     inner class LuceneSearchSession internal constructor(
@@ -263,20 +330,20 @@ class LuceneSearchEngine(
         private var finished = false
         private var totalHitsValue: Long? = null
 
-        override fun nextPage(limit: Int): SearchPage? {
-            if (finished) return null
+        override suspend fun nextPage(limit: Int): SearchPage? = withContext(Dispatchers.IO) {
+            if (finished) return@withContext null
             val top = searcher.searchAfter(after, query, limit)
             if (totalHitsValue == null) totalHitsValue = top.totalHits?.value
             if (top.scoreDocs.isEmpty()) {
                 finished = true
-                return null
+                return@withContext null
             }
             val stored = searcher.storedFields()
-            val hits = mapScoreDocs(stored, top.scoreDocs.toList(), anchorTerms, highlightTerms)
+            val hits = mapScoreDocs(stored, top.scoreDocs.asList(), anchorTerms, highlightTerms)
             after = top.scoreDocs.last()
             val isLast = top.scoreDocs.size < limit
             if (isLast) finished = true
-            return SearchPage(
+            SearchPage(
                 hits = hits,
                 totalHits = totalHitsValue ?: hits.size.toLong(),
                 isLastPage = isLast
@@ -290,16 +357,16 @@ class LuceneSearchEngine(
 
     // --- Additional public search methods ---
 
-    fun searchAllText(rawQuery: String, near: Int = 5, limit: Int, offset: Int = 0): List<LineHit> =
+    suspend fun searchAllText(rawQuery: String, near: Int = 5, limit: Int, offset: Int = 0): List<LineHit> =
         doSearch(rawQuery, near, limit, offset, bookFilter = null, categoryFilter = null)
 
-    fun searchInBook(rawQuery: String, near: Int, bookId: Long, limit: Int, offset: Int = 0): List<LineHit> =
+    suspend fun searchInBook(rawQuery: String, near: Int, bookId: Long, limit: Int, offset: Int = 0): List<LineHit> =
         doSearch(rawQuery, near, limit, offset, bookFilter = bookId, categoryFilter = null)
 
-    fun searchInCategory(rawQuery: String, near: Int, categoryId: Long, limit: Int, offset: Int = 0): List<LineHit> =
+    suspend fun searchInCategory(rawQuery: String, near: Int, categoryId: Long, limit: Int, offset: Int = 0): List<LineHit> =
         doSearch(rawQuery, near, limit, offset, bookFilter = null, categoryFilter = categoryId)
 
-    fun searchInBooks(rawQuery: String, near: Int, bookIds: Collection<Long>, limit: Int, offset: Int = 0): List<LineHit> =
+    suspend fun searchInBooks(rawQuery: String, near: Int, bookIds: Collection<Long>, limit: Int, offset: Int = 0): List<LineHit> =
         doSearchInBooks(rawQuery, near, limit, offset, bookIds)
 
     // --- Private implementation ---
@@ -316,7 +383,8 @@ class LuceneSearchEngine(
         bookFilter: Long?,
         categoryFilter: Long?,
         bookIds: Collection<Long>?,
-        lineIds: Collection<Long>?
+        lineIds: Collection<Long>?,
+        baseBookOnly: Boolean = false
     ): SearchContext? {
         val norm = HebrewTextUtils.normalizeHebrew(rawQuery)
         if (norm.isBlank()) return null
@@ -395,6 +463,8 @@ class LuceneSearchEngine(
         builder.add(TermQuery(Term("type", "line")), BooleanClause.Occur.FILTER)
         if (bookFilter != null) builder.add(IntPoint.newExactQuery("book_id", bookFilter.toInt()), BooleanClause.Occur.FILTER)
         if (categoryFilter != null) builder.add(IntPoint.newExactQuery("category_id", categoryFilter.toInt()), BooleanClause.Occur.FILTER)
+        // Filter by base books only (is_base_book = 1) when baseBookOnly is true
+        if (baseBookOnly) builder.add(IntPoint.newExactQuery("is_base_book", 1), BooleanClause.Occur.FILTER)
         val bookIdsArray = bookIds?.map { it.toInt() }?.toIntArray()
         if (bookIdsArray != null && bookIdsArray.isNotEmpty()) {
             builder.add(IntPoint.newSetQuery("book_id", *bookIdsArray), BooleanClause.Occur.FILTER)
@@ -426,7 +496,9 @@ class LuceneSearchEngine(
         )
     }
 
-    private fun mapScoreDocs(
+    // suspend because it calls snippetProvider.getSnippetSources();
+    // callers are responsible for providing Dispatchers.IO context.
+    private suspend fun mapScoreDocs(
         stored: StoredFields,
         scoreDocs: List<ScoreDoc>,
         anchorTerms: List<String>,
@@ -498,7 +570,7 @@ class LuceneSearchEngine(
         return hits.sortedByDescending { it.score }
     }
 
-    private fun doSearch(
+    private suspend fun doSearch(
         rawQuery: String,
         near: Int,
         limit: Int,
@@ -507,15 +579,17 @@ class LuceneSearchEngine(
         categoryFilter: Long?
     ): List<LineHit> {
         val context = buildSearchContext(rawQuery, near, bookFilter, categoryFilter, null, null) ?: return emptyList()
-        return withSearcher { searcher ->
-            val top = searcher.search(context.query, offset + limit)
-            val stored: StoredFields = searcher.storedFields()
-            val sliced = top.scoreDocs.drop(offset)
-            mapScoreDocs(stored, sliced, context.anchorTerms, context.highlightTerms)
+        return withContext(Dispatchers.IO) {
+            withSearcher { searcher ->
+                val top = searcher.search(context.query, offset + limit)
+                val stored: StoredFields = searcher.storedFields()
+                val sliced = top.scoreDocs.drop(offset)
+                mapScoreDocs(stored, sliced, context.anchorTerms, context.highlightTerms)
+            }
         }
     }
 
-    private fun doSearchInBooks(
+    private suspend fun doSearchInBooks(
         rawQuery: String,
         near: Int,
         limit: Int,
@@ -524,11 +598,13 @@ class LuceneSearchEngine(
     ): List<LineHit> {
         if (bookIds.isEmpty()) return emptyList()
         val context = buildSearchContext(rawQuery, near, bookFilter = null, categoryFilter = null, bookIds = bookIds, lineIds = null) ?: return emptyList()
-        return withSearcher { searcher ->
-            val top = searcher.search(context.query, offset + limit)
-            val stored: StoredFields = searcher.storedFields()
-            val sliced = top.scoreDocs.drop(offset)
-            mapScoreDocs(stored, sliced, context.anchorTerms, context.highlightTerms)
+        return withContext(Dispatchers.IO) {
+            withSearcher { searcher ->
+                val top = searcher.search(context.query, offset + limit)
+                val stored: StoredFields = searcher.storedFields()
+                val sliced = top.scoreDocs.drop(offset)
+                mapScoreDocs(stored, sliced, context.anchorTerms, context.highlightTerms)
+            }
         }
     }
 

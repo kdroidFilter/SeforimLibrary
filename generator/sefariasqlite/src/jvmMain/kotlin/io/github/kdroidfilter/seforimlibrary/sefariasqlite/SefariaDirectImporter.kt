@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
 import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
 import io.github.kdroidfilter.seforimlibrary.core.models.Author
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
@@ -39,6 +40,19 @@ class SefariaDirectImporter(
 
         val bookPayloadReader = SefariaBookPayloadReader(json, logger)
         val schemaLookup = bookPayloadReader.buildSchemaLookup(schemaDir)
+
+        // Pre-download every `textimages.sefaria.org` asset and cache as base64
+        // so that merged.json content can be inlined as `data:image/...` URIs.
+        // Without this, books like Tikkunei Zohar render broken ❌ placeholders
+        // (issue 392). This scan reads all merged.json once; the embedder uses
+        // a disk cache under build/sefaria/image-cache so re-runs skip network.
+        val mergedFiles = java.nio.file.Files.walk(jsonDir).use { stream ->
+            stream.filter {
+                java.nio.file.Files.isRegularFile(it) &&
+                    it.fileName.toString().equals("merged.json", ignoreCase = true)
+            }.toList()
+        }
+        SefariaImageEmbedder.prefetch(mergedFiles, logger = logger)
 
         // Read and parse files in parallel
         logger.i { "Starting parallel file processing..." }
@@ -162,7 +176,9 @@ class SefariaDirectImporter(
             val catId = ensureCategoryPath(payload.categoriesHe)
             val bookId = nextBookId.getAndIncrement()
             val bookPath = buildBookPath(payload.categoriesHe, payload.heTitle)
-            val bookOrder = bookOrders[payload.enTitle]?.toFloat() ?: 999f
+            val bookOrder = (bookOrders[payload.enTitle]
+                ?: bookOrders[payload.heTitle]
+                ?: bookOrders[sanitizeFolder(payload.heTitle)])?.toFloat() ?: 999f
             val normalizedPath = normalizedBookPath(payload.categoriesHe, payload.heTitle)
             val isBaseBook = normalizedPath in baseBookKeys
 
@@ -174,6 +190,7 @@ class SefariaDirectImporter(
                 categoryId = catId,
                 sourceId = sourceId,
                 title = payload.heTitle,
+                heRef = payload.heTitle,
                 authors = payload.authors.map { Author(name = it) },
                 pubPlaces = emptyList(),
                 pubDates = payload.pubDates,
@@ -216,12 +233,14 @@ class SefariaDirectImporter(
             payload.lines.forEachIndexed { idx, content ->
                 val lineId = nextLineId.getAndIncrement()
                 val refEntry = refsByLineIndex[idx]
+                val lineCharCount = countVisibleChars(content)
                 lineBatch += Line(
                     id = lineId,
                     bookId = bookId,
                     lineIndex = idx,
                     content = content,
-                    heRef = refEntry?.heRef
+                    heRef = refEntry?.heRef,
+                    charCount = lineCharCount,
                 )
                 lineKeyToId[bookPath to idx] = lineId
                 lineIdToBookId[lineId] = bookId

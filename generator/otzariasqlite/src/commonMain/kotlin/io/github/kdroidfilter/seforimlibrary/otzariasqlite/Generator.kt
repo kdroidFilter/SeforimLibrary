@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.otzariasqlite
 
 import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.core.text.HebrewTextUtils
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
@@ -685,6 +686,19 @@ class DatabaseGenerator(
             return
         }
 
+        // Skip if a book with the same heRef already exists from Sefaria (Sefaria has priority)
+        val existingBook = repository.getBookByHeRef(title)
+        if (existingBook != null) {
+            val existingSource = repository.getSourceById(existingBook.sourceId)
+            if (existingSource?.name == "Sefaria") {
+                logger.i { "⏭️ Skipping '$title' - already exists from Sefaria (priority source)" }
+                processedBooksCount += 1
+                val pct = if (totalBooksToProcess > 0) (processedBooksCount * 100 / totalBooksToProcess) else 0
+                logger.i { "Books progress: $processedBooksCount/$totalBooksToProcess (${pct}%)" }
+                return
+            }
+        }
+
         // Assign a unique ID to this book
         val currentBookId = nextBookId++
         logger.d { "Assigning ID $currentBookId to book '$title' with categoryId: $categoryId" }
@@ -728,6 +742,7 @@ class DatabaseGenerator(
             categoryId = categoryId,
             sourceId = sourceId,
             title = title,
+            heRef = title,
             authors = authors,
             pubPlaces = pubPlaces,
             pubDates = pubDates,
@@ -827,6 +842,7 @@ class DatabaseGenerator(
         for ((lineIndex, line) in lines.withIndex()) {
             val level = detectHeaderLevel(line)
             val plainText = if (level > 0) cleanHtml(line) else ""
+            val lineCharCount = countVisibleChars(line)
 
             if (level > 0) {
                 if (plainText.isBlank()) {
@@ -870,7 +886,8 @@ class DatabaseGenerator(
                         id = currentLineId,
                         bookId = bookId,
                         lineIndex = lineIndex,
-                        content = line
+                        content = line,
+                        charCount = lineCharCount,
                     )
                 )
                 // Track this as a heading line for link filtering
@@ -892,7 +909,8 @@ class DatabaseGenerator(
                         bookId = bookId,
                         lineIndex = lineIndex,
                         content = line,
-                        heRef = buildOtzariaRef(bookTitle, lineIndex)
+                        heRef = buildOtzariaRef(bookTitle, lineIndex),
+                        charCount = lineCharCount,
                     )
                 )
                 // Buffer mapping for regular line if there is a current owner
@@ -1306,6 +1324,7 @@ class DatabaseGenerator(
                         targetBookId = targetBook.id,
                         sourceLineId = sourceLineId,
                         targetLineId = targetLineId,
+                        targetLineIndex = targetLineIndex,
                         connectionType = ConnectionType.fromString(linkData.connectionType)
                     )
 
@@ -1380,6 +1399,7 @@ class DatabaseGenerator(
                     targetBookId = targetBook.id,
                     sourceLineId = sourceLineId,
                     targetLineId = targetLineId,
+                    targetLineIndex = targetLineIndex,
                     connectionType = ConnectionType.fromString(linkData.connectionType)
                 )
                 repository.insertLink(link)

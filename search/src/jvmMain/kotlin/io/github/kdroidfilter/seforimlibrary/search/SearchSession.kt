@@ -36,7 +36,7 @@ interface SearchSession : Closeable {
      * @param limit Maximum number of results to return in this page
      * @return [SearchPage] containing hits and metadata, or null if no more results
      */
-    fun nextPage(limit: Int): SearchPage?
+    suspend fun nextPage(limit: Int): SearchPage?
 }
 
 /**
@@ -71,4 +71,18 @@ data class LineHit(
     val snippet: String,
     val score: Float,
     val rawText: String
+)
+
+/**
+ * Aggregated facet counts from a search query.
+ * Computed once via a lightweight Lucene collector without loading full results.
+ *
+ * @property totalHits Total number of matching documents
+ * @property categoryCounts Map of categoryId to count (includes ancestor categories)
+ * @property bookCounts Map of bookId to count
+ */
+data class SearchFacets(
+    val totalHits: Long,
+    val categoryCounts: Map<Long, Int>,
+    val bookCounts: Map<Long, Int>,
 )

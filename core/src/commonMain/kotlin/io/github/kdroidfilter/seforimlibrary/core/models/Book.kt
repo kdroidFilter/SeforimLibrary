@@ -9,6 +9,8 @@ import kotlinx.serialization.Serializable
  * @property id The unique identifier of the book
  * @property categoryId The identifier of the category this book belongs to
  * @property title The title of the book
+ * @property heRef A stable Hebrew reference identifier for the book, used for consistent identification
+ *                 across database regenerations (e.g., "בראשית", "רש״י על בראשית")
  * @property sourceId The identifier of the source this book originates from
  * @property authors The list of authors of this book
  * @property topics The list of topics associated with this book
@@ -28,6 +30,7 @@ data class Book(
     val categoryId: Long,
     val sourceId: Long,
     val title: String,
+    val heRef: String? = null,
     val authors: List<Author> = emptyList(),
     val topics: List<Topic> = emptyList(),
     val pubPlaces: List<PubPlace> = emptyList(),

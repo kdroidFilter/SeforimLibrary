@@ -12,13 +12,14 @@ kotlin {
         commonMain.dependencies {
             api(project(":core"))
             api(project(":dao"))
+            implementation(project(":generator-common"))
 
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kermit)
-            implementation("org.jsoup:jsoup:1.17.2")
-            implementation("org.slf4j:slf4j-simple:2.0.17")
+            implementation(libs.jsoup)
+            implementation(libs.slf4j.simple)
         }
 
         commonTest.dependencies {

@@ -1,26 +1,26 @@
 [versions]
 
-kotlin = "2.3.0"
+filekitCore = "0.13.0"
+kotlin = "2.3.20"
 agp = "8.12.3"
 jvmToolchain = "25"
-luceneCore = "10.4.0"
-luceneAnalysisCommon = "10.4.0"
-luceneQueryparser = "10.4.0"
-luceneHighlighter = "10.4.0"
-maven-publish = "0.34.0"
+lucene = "10.4.0"
+maven-publish = "0.36.0"
 kotlinx-coroutines = "1.10.2"
-kotlinx-serialization = "1.9.0"
+kotlinx-serialization = "1.10.0"
 kotlinx-datetime = "0.7.1"
-kermit = "2.0.8"
-sqlDelight = "2.1.0"
-compose = "1.10.0"
-androidx-activityCompose = "1.12.1"
+kermit = "2.1.0"
+sqlDelight = "2.3.2"
+compose = "1.10.2"
+androidx-activityCompose = "1.13.0"
 commons-compress = "1.28.0"
-zstd-jni = "1.5.7-6"
+zstd-jni = "1.5.7-7"
 jsoup = "1.22.1"
+slf4j = "2.0.17"
 
 [libraries]
 
+filekit-core = { module = "io.github.vinceglb:filekit-core", version.ref = "filekitCore" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
 kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "kotlinx-coroutines" }
@@ -29,10 +29,10 @@ kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 kotlinx-serialization-protobuf = { module = "org.jetbrains.kotlinx:kotlinx-serialization-protobuf", version.ref = "kotlinx-serialization" }
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
 kermit = { module = "co.touchlab:kermit", version.ref = "kermit" }
-lucene-highlighter = { module = "org.apache.lucene:lucene-highlighter", version.ref = "luceneHighlighter" }
-lucene-queryparser = { module = "org.apache.lucene:lucene-queryparser", version.ref = "luceneQueryparser" }
-lucene-analysis-common = { module = "org.apache.lucene:lucene-analysis-common", version.ref = "luceneAnalysisCommon" }
-lucene-core = { module = "org.apache.lucene:lucene-core", version.ref = "luceneCore" }
+lucene-highlighter = { module = "org.apache.lucene:lucene-highlighter", version.ref = "lucene" }
+lucene-queryparser = { module = "org.apache.lucene:lucene-queryparser", version.ref = "lucene" }
+lucene-analysis-common = { module = "org.apache.lucene:lucene-analysis-common", version.ref = "lucene" }
+lucene-core = { module = "org.apache.lucene:lucene-core", version.ref = "lucene" }
 sqlDelight-driver-sqlite = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqlDelight" }
 sqlDelight-driver-android = { module = "app.cash.sqldelight:android-driver", version.ref = "sqlDelight" }
 sqlDelight-driver-native = { module = "app.cash.sqldelight:native-driver", version.ref = "sqlDelight" }
@@ -41,6 +41,7 @@ commons-compress = { module = "org.apache.commons:commons-compress", version.ref
 zstd = { module = "com.github.luben:zstd-jni", version.ref = "zstd-jni" }
 androidx-activityCompose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activityCompose" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
+slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
 compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose" }
 
 [plugins]

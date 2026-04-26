@@ -107,35 +107,53 @@ internal class SefariaLinksImporter(
 
                 for (from in fromRefs) {
                     for (to in toRefs) {
-                        val srcLine = lineKeyToId[from.path to (from.lineIndex - 1)] ?: continue
-                        val tgtLine = lineKeyToId[to.path to (to.lineIndex - 1)] ?: continue
+                        val srcLineIndex = from.lineIndex - 1
+                        val tgtLineIndex = to.lineIndex - 1
+                        val srcLine = lineKeyToId[from.path to srcLineIndex] ?: continue
+                        val tgtLine = lineKeyToId[to.path to tgtLineIndex] ?: continue
                         // Skip links where source or target is a heading line
                         if (srcLine in headingLineIds || tgtLine in headingLineIds) continue
                         val baseConnectionType = ConnectionType.fromString(conn)
+                        val srcBookId = lineBookId(srcLine, lineIdToBookId)
+                        val tgtBookId = lineBookId(tgtLine, lineIdToBookId)
+                        // Drop self-commentary / self-targum links. Sefaria ships a handful
+                        // of links that point back to the same book (e.g. Genesis → Genesis
+                        // tagged as COMMENTARY), which makes the book appear as a
+                        // commentator on itself in the reader's "מפרשים" panel
+                        // (Zayit issue #300). Cross-references (OTHER / REFERENCE) are
+                        // legitimate inside a single book and are kept.
+                        if (srcBookId == tgtBookId &&
+                            (baseConnectionType == ConnectionType.COMMENTARY ||
+                                baseConnectionType == ConnectionType.TARGUM)
+                        ) {
+                            continue
+                        }
                         val (forwardType, reverseType) = resolveDirectionalConnectionTypes(
                             baseType = baseConnectionType,
-                            sourceBookId = lineBookId(srcLine, lineIdToBookId),
-                            targetBookId = lineBookId(tgtLine, lineIdToBookId),
+                            sourceBookId = srcBookId,
+                            targetBookId = tgtBookId,
                             bookMetaById = bookMetaById
                         )
 
                         // Send links to channel
                         linkChannel.send(
                             Link(
-                                sourceBookId = lineBookId(srcLine, lineIdToBookId),
-                                targetBookId = lineBookId(tgtLine, lineIdToBookId),
+                                sourceBookId = srcBookId,
+                                targetBookId = tgtBookId,
                                 sourceLineId = srcLine,
                                 targetLineId = tgtLine,
+                                targetLineIndex = tgtLineIndex,
                                 connectionType = forwardType
                             )
                         )
 
                         linkChannel.send(
                             Link(
-                                sourceBookId = lineBookId(tgtLine, lineIdToBookId),
-                                targetBookId = lineBookId(srcLine, lineIdToBookId),
+                                sourceBookId = tgtBookId,
+                                targetBookId = srcBookId,
                                 sourceLineId = tgtLine,
                                 targetLineId = srcLine,
+                                targetLineIndex = srcLineIndex,
                                 connectionType = reverseType
                             )
                         )

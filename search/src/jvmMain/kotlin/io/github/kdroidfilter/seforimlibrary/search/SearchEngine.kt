@@ -46,6 +46,7 @@ interface SearchEngine : Closeable {
      * @param categoryFilter Optional category ID to restrict results
      * @param bookIds Optional collection of book IDs to restrict results (OR logic)
      * @param lineIds Optional collection of line IDs to restrict results (OR logic)
+     * @param baseBookOnly If true, restrict results to base books only (default: false)
      * @return A [SearchSession] for paginated access to results, or null if query is invalid
      */
     fun openSession(
@@ -54,7 +55,8 @@ interface SearchEngine : Closeable {
         bookFilter: Long? = null,
         categoryFilter: Long? = null,
         bookIds: Collection<Long>? = null,
-        lineIds: Collection<Long>? = null
+        lineIds: Collection<Long>? = null,
+        baseBookOnly: Boolean = false
     ): SearchSession?
 
     /**
@@ -95,4 +97,30 @@ interface SearchEngine : Closeable {
      * @return List of normalized terms to highlight (includes original tokens + expansions)
      */
     fun buildHighlightTerms(query: String): List<String>
+
+    /**
+     * Computes aggregate facet counts without loading full results.
+     *
+     * Uses a lightweight Lucene collector that only reads book IDs and ancestor
+     * category IDs from the index. This is much faster than streaming all results
+     * and allows the UI to display the category/book tree immediately.
+     *
+     * @param query The search query in Hebrew (may contain nikud/teamim)
+     * @param near Proximity slop for phrase matching (default: 5)
+     * @param bookFilter Optional single book ID to restrict results
+     * @param categoryFilter Optional category ID to restrict results
+     * @param bookIds Optional collection of book IDs to restrict results (OR logic)
+     * @param lineIds Optional collection of line IDs to restrict results (OR logic)
+     * @param baseBookOnly If true, restrict results to base books only (default: false)
+     * @return [SearchFacets] with counts, or null if query is invalid
+     */
+    fun computeFacets(
+        query: String,
+        near: Int = 5,
+        bookFilter: Long? = null,
+        categoryFilter: Long? = null,
+        bookIds: Collection<Long>? = null,
+        lineIds: Collection<Long>? = null,
+        baseBookOnly: Boolean = false
+    ): SearchFacets?
 }
