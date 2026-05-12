@@ -1,12 +1,20 @@
 package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
+import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings
 import io.github.kdroidfilter.seforimlibrary.core.models.AltTocEntry
 import io.github.kdroidfilter.seforimlibrary.core.models.AltTocStructure
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 
 internal class SefariaAltTocBuilder(
-    private val repository: SeforimRepository
+    private val repository: SeforimRepository,
+    @Suppress("unused") private val bindings: IdAllocatorBindings,
 ) {
+    // NOTE: alt_toc_entry ids are still auto-allocated here. Their natural-key
+    // wiring (DELTA_UPDATE_PLAN.md §3.3, `(structure_id, ancestor_path)`)
+    // requires threading a deterministic path through the recursive traversal
+    // (createContainerEntry / traverseAltNode / addEntry). Deferred to Phase 1.5
+    // — alt-toc rows are rebuilt wholesale per book so unstable ids cost an
+    // extra DELETE+INSERT batch but don't affect cross-book stability.
     suspend fun buildAltTocStructuresForBook(
         payload: BookPayload,
         bookId: Long,
@@ -68,7 +76,7 @@ internal class SefariaAltTocBuilder(
 
         payload.altStructures.forEach { structure ->
             val isPsalms30DayCycle = structure.key == "30 Day Cycle"
-            val structureId = repository.upsertAltTocStructure(
+            val structureId = bindings.upsertAltTocStructureStable(
                 AltTocStructure(
                     bookId = bookId,
                     key = structure.key,

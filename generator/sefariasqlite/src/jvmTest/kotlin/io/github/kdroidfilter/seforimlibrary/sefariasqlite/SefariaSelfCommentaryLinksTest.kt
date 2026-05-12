@@ -139,7 +139,11 @@ class SefariaSelfCommentaryLinksTest {
         )
         val refsByBase = refsByCanonical.values.flatten().associateBy { canonicalBase(it.ref) }
 
-        val importer = SefariaLinksImporter(repo, Logger.withTag("SefariaSelfCommentaryLinksTest"))
+        val bindings = io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings(
+            io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator.load(path = null),
+            repo,
+        )
+        val importer = SefariaLinksImporter(repo, bindings, Logger.withTag("SefariaSelfCommentaryLinksTest"))
         importer.processLinksInParallel(
             linksDir = linksDir,
             refsByCanonical = refsByCanonical,

@@ -5,8 +5,11 @@ import app.cash.sqldelight.db.SqlCursor
 import app.cash.sqldelight.db.QueryResult
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
+import io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import kotlinx.coroutines.runBlocking
+import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.Paths
 
 /**
@@ -77,13 +80,31 @@ fun main(args: Array<String>) = runBlocking {
             }
         }
 
+        val buildStatePath: Path = run {
+            val explicit = System.getProperty("buildStatePath") ?: System.getenv("BUILD_STATE_PATH")
+            if (explicit != null) Paths.get(explicit) else Paths.get("$persistDbPath.buildstate")
+        }
+        val prev = buildStatePath.takeIf { Files.exists(it) }
+        val allocator = InMemoryIdAllocator.load(prev, Logger.withTag("IdAllocator"))
+
         val generator = DatabaseGenerator(
             sourceDirectory = Paths.get(sourceDir),
             repository = repository,
             acronymDbPath = null,
-            filterSourcesForLinks = false
+            filterSourcesForLinks = false,
+            allocator = allocator,
         )
         generator.generateLinksOnly()
+        runCatching {
+            allocator.snapshotTo(
+                target = buildStatePath,
+                extraMeta = mapOf(
+                    "generator" to "otzariasqlite/generateLinks",
+                    "generated_at" to java.time.Instant.now().toString(),
+                ),
+            )
+        }.onFailure { logger.w(it) { "Failed to write build_state to $buildStatePath" } }
+        Unit
         if (useMemoryDb) {
             // Persist in-memory DB to disk using VACUUM INTO (target must not exist)
             runCatching {

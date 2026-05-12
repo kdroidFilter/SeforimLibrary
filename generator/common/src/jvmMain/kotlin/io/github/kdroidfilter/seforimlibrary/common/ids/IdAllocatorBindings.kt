@@ -21,7 +21,7 @@ import java.security.MessageDigest
  * See DELTA_UPDATE_PLAN.md §3.5.
  */
 class IdAllocatorBindings(
-    private val allocator: IdAllocator,
+    val allocator: IdAllocator,
     private val repo: SeforimRepository,
 ) {
     // ─── Lookup-table helpers ──────────────────────────────────────────────────

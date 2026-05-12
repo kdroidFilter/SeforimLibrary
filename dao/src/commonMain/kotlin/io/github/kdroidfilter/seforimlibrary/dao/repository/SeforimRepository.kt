@@ -1893,14 +1893,26 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                 val connectionTypeId = typeIdCache[link.connectionType.name]
                     ?: error("Missing connection type id for ${link.connectionType.name}")
 
-                database.linkQueriesQueries.insert(
-                    sourceBookId = link.sourceBookId,
-                    targetBookId = link.targetBookId,
-                    sourceLineId = link.sourceLineId,
-                    targetLineId = link.targetLineId,
-                    targetLineIndex = link.targetLineIndex.toLong(),
-                    connectionTypeId = connectionTypeId
-                )
+                if (link.id > 0) {
+                    database.linkQueriesQueries.insertWithId(
+                        id = link.id,
+                        sourceBookId = link.sourceBookId,
+                        targetBookId = link.targetBookId,
+                        sourceLineId = link.sourceLineId,
+                        targetLineId = link.targetLineId,
+                        targetLineIndex = link.targetLineIndex.toLong(),
+                        connectionTypeId = connectionTypeId
+                    )
+                } else {
+                    database.linkQueriesQueries.insert(
+                        sourceBookId = link.sourceBookId,
+                        targetBookId = link.targetBookId,
+                        sourceLineId = link.sourceLineId,
+                        targetLineId = link.targetLineId,
+                        targetLineIndex = link.targetLineIndex.toLong(),
+                        connectionTypeId = connectionTypeId
+                    )
+                }
             }
         }
     }

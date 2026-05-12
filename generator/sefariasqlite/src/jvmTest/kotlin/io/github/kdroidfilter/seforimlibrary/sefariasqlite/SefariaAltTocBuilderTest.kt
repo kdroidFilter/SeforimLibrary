@@ -1,6 +1,8 @@
 package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings
+import io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
 import io.github.kdroidfilter.seforimlibrary.core.models.Line
@@ -181,7 +183,8 @@ class SefariaAltTocBuilderTest {
         )
 
         // Build alt TOC structures
-        val builder = SefariaAltTocBuilder(repository)
+        val bindings = IdAllocatorBindings(InMemoryIdAllocator.load(path = null), repository)
+        val builder = SefariaAltTocBuilder(repository, bindings)
         val result = builder.buildAltTocStructuresForBook(
             payload = payload,
             bookId = bookId,

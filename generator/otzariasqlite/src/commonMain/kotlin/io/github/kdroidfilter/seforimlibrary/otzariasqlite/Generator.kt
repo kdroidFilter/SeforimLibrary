@@ -2,6 +2,9 @@ package io.github.kdroidfilter.seforimlibrary.otzariasqlite
 
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
+import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocator
+import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings
+import io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.core.text.HebrewTextUtils
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
@@ -33,19 +36,42 @@ class DatabaseGenerator(
     private val sourceDirectory: Path,
     private val repository: SeforimRepository,
     private val acronymDbPath: String? = null,
-    private val filterSourcesForLinks: Boolean = true
+    private val filterSourcesForLinks: Boolean = true,
+    private val allocator: IdAllocator = InMemoryIdAllocator.load(path = null),
 ) {
 
     private val logger = Logger.withTag("DatabaseGenerator")
+    private val bindings = IdAllocatorBindings(allocator, repository)
 
 
     private val json = Json {
         ignoreUnknownKeys = true
         coerceInputValues = true
     }
-    private var nextBookId = 1L // Counter for book IDs
-    private var nextLineId = 1L // Counter for line IDs
-    private var nextTocEntryId = 1L // Counter for TOC entry IDs
+    // Per-(bookId, contentHash) occurrence counter so duplicate lines get distinct stable ids.
+    private val lineOccurrenceByBook = mutableMapOf<Long, MutableMap<Long, Int>>()
+    private fun nextLineOccurrence(bookId: Long, hash: ByteArray): Int {
+        val hashKey = hash.fold(0L) { acc, b -> (acc shl 5) - acc + b.toLong() }
+        val m = lineOccurrenceByBook.getOrPut(bookId) { mutableMapOf() }
+        val v = (m[hashKey] ?: -1) + 1
+        m[hashKey] = v
+        return v
+    }
+    private fun stableLineId(bookId: Long, content: String): Long {
+        val hash = IdAllocatorBindings.normalisedContentHash(content)
+        return allocator.lineId(bookId, hash, nextLineOccurrence(bookId, hash))
+    }
+    // Per-book stack of (level -> textId) used to derive a stable tocEntry ancestor path.
+    private val tocAncestorStackByBook = mutableMapOf<Long, MutableMap<Int, Long>>()
+    private fun stableTocEntryId(bookId: Long, level: Int, text: String): Pair<Long, Long> {
+        val textId = bindings.allocator.tocTextId(text)
+        val stack = tocAncestorStackByBook.getOrPut(bookId) { sortedMapOf() }
+        // Drop deeper levels (we're climbing up).
+        stack.keys.filter { it >= level }.forEach { stack.remove(it) }
+        stack[level] = textId
+        val path = stack.entries.sortedBy { it.key }.joinToString("/") { it.value.toString() }
+        return allocator.tocEntryId(bookId, path) to textId
+    }
 
     // Optional connection to the Acronymizer DB (opened lazily)
     private var acronymDb: java.sql.Connection? = null
@@ -140,15 +166,18 @@ class DatabaseGenerator(
         var currentParent = parentId
         var currentLevel = startLevel
         var lastId: Long? = null
+        val pathSoFar = StringBuilder()
 
         for (title in normalizedSegments) {
+            if (pathSoFar.isNotEmpty()) pathSoFar.append('/')
+            pathSoFar.append(title)
             val existing = findExistingCategory(currentParent, title)
-            val categoryId = existing?.id ?: repository.insertCategory(
-                Category(
-                    parentId = currentParent,
-                    title = title,
-                    level = currentLevel
-                )
+            val categoryId = existing?.id ?: bindings.upsertCategory(
+                canonicalPath = pathSoFar.toString(),
+                parentId = currentParent,
+                title = title,
+                level = currentLevel,
+                orderIndex = 999,
             )
             lastId = categoryId
             currentParent = categoryId
@@ -182,23 +211,11 @@ class DatabaseGenerator(
     // Book contents cache: maps library-relative key -> list of lines
     private val bookContentCache = mutableMapOf<String, List<String>>()
 
-    // Tracks whether ID counters have been initialized from an existing DB
-    private var idCountersInitialized = false
-
+    // No-op kept for call-site compatibility. The IdAllocator (seeded from
+    // build_state.db) now handles cross-build id continuation — see DELTA_UPDATE_PLAN.md §3.5.
+    @Suppress("UnusedPrivateMember", "RedundantSuspendModifier")
     private suspend fun initializeIdCountersFromExistingDb() {
-        if (idCountersInitialized) return
-        idCountersInitialized = true
-        val maxBookId = try { repository.getMaxBookId() } catch (_: Exception) { 0L }
-        val maxLineId = try { repository.getMaxLineId() } catch (_: Exception) { 0L }
-        val maxTocEntryId = try { repository.getMaxTocEntryId() } catch (_: Exception) { 0L }
-        nextBookId = (maxBookId + 1).coerceAtLeast(1)
-        nextLineId = (maxLineId + 1).coerceAtLeast(1)
-        nextTocEntryId = (maxTocEntryId + 1).coerceAtLeast(1)
-        if (maxBookId > 0 || maxLineId > 0 || maxTocEntryId > 0) {
-            logger.i { "Continuing from existing DB ids: nextBookId=$nextBookId, nextLineId=$nextLineId, nextTocEntryId=$nextTocEntryId" }
-        } else {
-            logger.d { "No existing rows found; starting ID counters at 1" }
-        }
+        // Intentionally empty.
     }
 
 
@@ -573,12 +590,12 @@ class DatabaseGenerator(
      */
     private suspend fun precreateSourceEntries() {
         // Always ensure 'Unknown' exists
-        val unknownId = repository.insertSource("Unknown")
+        val unknownId = bindings.upsertSource("Unknown")
         sourceNameToId["Unknown"] = unknownId
         // Insert all discovered sources
         val uniqueSources = manifestSourcesByRel.values.toSet()
         for (name in uniqueSources) {
-            val id = repository.insertSource(name)
+            val id = bindings.upsertSource(name)
             sourceNameToId[name] = id
         }
         logger.i { "Prepared ${sourceNameToId.size} sources in DB" }
@@ -699,9 +716,9 @@ class DatabaseGenerator(
             }
         }
 
-        // Assign a unique ID to this book
-        val currentBookId = nextBookId++
-        logger.d { "Assigning ID $currentBookId to book '$title' with categoryId: $categoryId" }
+        // Assign a stable ID via IdAllocator so cross-build reproducibility holds.
+        val currentBookId = allocator.bookId(srcName, title)
+        logger.d { "Assigning ID $currentBookId to book '$title' (source=$srcName) with categoryId: $categoryId" }
 
         // Create author list if author is available in metadata
         val authors = meta?.author?.let { authorName ->
@@ -852,8 +869,8 @@ class DatabaseGenerator(
                 }
 
                 val parentId = (level - 1 downTo 1).firstNotNullOfOrNull { parentStack[it] }
-                val currentTocEntryId = nextTocEntryId++
-                val currentLineId = nextLineId++
+                val (currentTocEntryId, tocTextStableId) = stableTocEntryId(bookId, level, plainText)
+                val currentLineId = stableLineId(bookId, line)
 
                 // Stocker l'info de cette entrée pour la deuxième passe
                 allTocEntries.add(TocEntryData(
@@ -869,6 +886,7 @@ class DatabaseGenerator(
                     id = currentTocEntryId,
                     bookId = bookId,
                     parentId = parentId,
+                    textId = tocTextStableId,
                     text = plainText,
                     level = level,
                     lineId = null,
@@ -902,7 +920,7 @@ class DatabaseGenerator(
                 }
             } else {
                 // Regular line
-                val currentLineId = nextLineId++
+                val currentLineId = stableLineId(bookId, line)
                 val insertedLineId = repository.insertLine(
                     Line(
                         id = currentLineId,
@@ -1112,7 +1130,7 @@ class DatabaseGenerator(
         val sourceName = manifestSourcesByRel[rel] ?: "Unknown"
         val cached = sourceNameToId[sourceName]
         if (cached != null) return cached
-        val id = repository.insertSource(sourceName)
+        val id = bindings.upsertSource(sourceName)
         sourceNameToId[sourceName] = id
         return id
     }
