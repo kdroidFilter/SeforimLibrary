@@ -19,9 +19,7 @@ INSERT OR IGNORE INTO tocText (text)
 VALUES (?);
 
 insertWithId:
-INSERT INTO tocText (id, text)
-VALUES (?, ?)
-ON CONFLICT (text) DO NOTHING;
+INSERT OR IGNORE INTO tocText (id, text) VALUES (?, ?);
 
 selectIdByText:
 SELECT id FROM tocText WHERE text = ? LIMIT 1;

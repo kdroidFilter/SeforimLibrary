@@ -35,7 +35,7 @@ INSERT INTO tocEntry (bookId, parentId, textId, level, lineId, isLastChild, hasC
 VALUES (?, ?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO tocEntry (id, bookId, parentId, textId, level, lineId, isLastChild, hasChildren)
+INSERT OR IGNORE INTO tocEntry (id, bookId, parentId, textId, level, lineId, isLastChild, hasChildren)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 updateLineId:

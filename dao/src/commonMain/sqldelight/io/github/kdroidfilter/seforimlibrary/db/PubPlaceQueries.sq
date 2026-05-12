@@ -20,9 +20,7 @@ VALUES (?)
 ON CONFLICT (name) DO NOTHING;
 
 insertWithId:
-INSERT INTO pub_place (id, name)
-VALUES (?, ?)
-ON CONFLICT (name) DO NOTHING;
+INSERT OR IGNORE INTO pub_place (id, name) VALUES (?, ?);
 
 linkBookPubPlace:
 INSERT INTO book_pub_place (bookId, pubPlaceId)

@@ -25,9 +25,7 @@ INSERT OR IGNORE INTO topic (name)
 VALUES (?);
 
 insertWithId:
-INSERT INTO topic (id, name)
-VALUES (?, ?)
-ON CONFLICT (name) DO NOTHING;
+INSERT OR IGNORE INTO topic (id, name) VALUES (?, ?);
 
 selectIdByName:
 SELECT id FROM topic WHERE name = ? LIMIT 1;

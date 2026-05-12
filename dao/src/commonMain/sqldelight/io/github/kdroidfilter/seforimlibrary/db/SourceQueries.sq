@@ -13,8 +13,7 @@ insert:
 INSERT INTO source (name) VALUES (?);
 
 insertWithId:
-INSERT INTO source (id, name) VALUES (?, ?)
-ON CONFLICT (name) DO NOTHING;
+INSERT OR IGNORE INTO source (id, name) VALUES (?, ?);
 
 lastInsertRowId:
 SELECT last_insert_rowid();

@@ -14,9 +14,7 @@ INSERT INTO connection_type (name)
 VALUES (?);
 
 insertWithId:
-INSERT INTO connection_type (id, name)
-VALUES (?, ?)
-ON CONFLICT (name) DO NOTHING;
+INSERT OR IGNORE INTO connection_type (id, name) VALUES (?, ?);
 
 update:
 UPDATE connection_type

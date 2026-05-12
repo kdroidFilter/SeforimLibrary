@@ -30,7 +30,7 @@ INSERT INTO line (bookId, lineIndex, content, heRef, tocEntryId, charCount)
 VALUES (?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO line (id, bookId, lineIndex, content, heRef, tocEntryId, charCount)
+INSERT OR IGNORE INTO line (id, bookId, lineIndex, content, heRef, tocEntryId, charCount)
 VALUES (?, ?, ?, ?, ?, ?, ?);
 
 updateTocEntryId:

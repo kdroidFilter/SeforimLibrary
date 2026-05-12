@@ -63,13 +63,14 @@ class DatabaseGenerator(
     }
     // Per-book stack of (level -> textId) used to derive a stable tocEntry ancestor path.
     private val tocAncestorStackByBook = mutableMapOf<Long, MutableMap<Int, Long>>()
-    private fun stableTocEntryId(bookId: Long, level: Int, text: String): Pair<Long, Long> {
+    private fun stableTocEntryId(bookId: Long, level: Int, text: String, lineIndex: Int): Pair<Long, Long> {
         val textId = bindings.allocator.tocTextId(text)
         val stack = tocAncestorStackByBook.getOrPut(bookId) { sortedMapOf() }
         // Drop deeper levels (we're climbing up).
         stack.keys.filter { it >= level }.forEach { stack.remove(it) }
         stack[level] = textId
-        val path = stack.entries.sortedBy { it.key }.joinToString("/") { it.value.toString() }
+        val path = stack.entries.sortedBy { it.key }.joinToString("/") { it.value.toString() } +
+            "@$lineIndex"
         return allocator.tocEntryId(bookId, path) to textId
     }
 
@@ -869,7 +870,7 @@ class DatabaseGenerator(
                 }
 
                 val parentId = (level - 1 downTo 1).firstNotNullOfOrNull { parentStack[it] }
-                val (currentTocEntryId, tocTextStableId) = stableTocEntryId(bookId, level, plainText)
+                val (currentTocEntryId, tocTextStableId) = stableTocEntryId(bookId, level, plainText, lineIndex)
                 val currentLineId = stableLineId(bookId, line)
 
                 // Stocker l'info de cette entrée pour la deuxième passe

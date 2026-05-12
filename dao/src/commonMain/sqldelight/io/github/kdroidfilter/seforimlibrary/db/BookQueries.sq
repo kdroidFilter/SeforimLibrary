@@ -44,7 +44,7 @@ INSERT INTO book (categoryId, sourceId, title, heRef, heShortDesc, notesContent,
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO book (id, categoryId, sourceId, title, heRef, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook, hasSourceConnection, hasAltStructures, hasTeamim, hasNekudot)
+INSERT OR IGNORE INTO book (id, categoryId, sourceId, title, heRef, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook, hasSourceConnection, hasAltStructures, hasTeamim, hasNekudot)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectByHeRef:

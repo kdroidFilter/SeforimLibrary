@@ -11,7 +11,7 @@ INSERT INTO alt_toc_structure (bookId, key, title, heTitle)
 VALUES (?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO alt_toc_structure (id, bookId, key, title, heTitle)
+INSERT OR IGNORE INTO alt_toc_structure (id, bookId, key, title, heTitle)
 VALUES (?, ?, ?, ?, ?);
 
 deleteByBookId:
