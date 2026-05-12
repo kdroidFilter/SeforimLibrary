@@ -1,6 +1,71 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- ID allocation note
+--   Primary keys are no longer AUTOINCREMENT. The generator drives them via
+--   IdAllocator (see generator/common/ids) so that the same natural key always
+--   resolves to the same id across builds, which is the precondition for the
+--   delta-update system (see DELTA_UPDATE_PLAN.md §3.3).
+--
+-- ON DELETE CASCADE audit (DELTA_UPDATE_PLAN.md §4.3)
+--   The schema relies heavily on ON DELETE CASCADE for referential integrity.
+--   This is safe today because the existing pipeline only inserts (no deletes
+--   on populated rows). When the client applies a delta, it MUST use
+--   INSERT ... ON CONFLICT(id) DO UPDATE (not INSERT OR REPLACE), so cascades
+--   are never triggered silently by upserts. Explicit DELETEs from delete_*
+--   tables in the patch are the only sources of cascades — which is the
+--   intended behaviour.
+--
+--   Inventory of cascades:
+--     category.parentId               -> category(id)            ON DELETE CASCADE
+--     category_closure.ancestorId     -> category(id)            ON DELETE CASCADE
+--     category_closure.descendantId   -> category(id)            ON DELETE CASCADE
+--     book.categoryId                 -> category(id)            ON DELETE CASCADE
+--     book.sourceId                   -> source(id)              ON DELETE RESTRICT
+--     book_pub_place.bookId           -> book(id)                ON DELETE CASCADE
+--     book_pub_place.pubPlaceId       -> pub_place(id)           ON DELETE CASCADE
+--     book_pub_date.bookId            -> book(id)                ON DELETE CASCADE
+--     book_pub_date.pubDateId         -> pub_date(id)            ON DELETE CASCADE
+--     book_topic.bookId               -> book(id)                ON DELETE CASCADE
+--     book_topic.topicId              -> topic(id)               ON DELETE CASCADE
+--     book_author.bookId              -> book(id)                ON DELETE CASCADE
+--     book_author.authorId            -> author(id)              ON DELETE CASCADE
+--     line.bookId                     -> book(id)                ON DELETE CASCADE
+--     line.tocEntryId                 -> tocEntry(id)            ON DELETE SET NULL
+--     tocEntry.bookId                 -> book(id)                ON DELETE CASCADE
+--     tocEntry.parentId               -> tocEntry(id)            ON DELETE CASCADE
+--     tocEntry.textId                 -> tocText(id)             ON DELETE CASCADE
+--     tocEntry.lineId                 -> line(id)                ON DELETE SET NULL
+--     link.sourceBookId               -> book(id)                ON DELETE CASCADE
+--     link.targetBookId               -> book(id)                ON DELETE CASCADE
+--     link.sourceLineId               -> line(id)                ON DELETE CASCADE
+--     link.targetLineId               -> line(id)                ON DELETE CASCADE
+--     link.connectionTypeId           -> connection_type(id)     ON DELETE CASCADE
+--     book_has_links.bookId           -> book(id)                ON DELETE CASCADE
+--     line_toc.lineId                 -> line(id)                ON DELETE CASCADE
+--     line_toc.tocEntryId             -> tocEntry(id)            ON DELETE CASCADE
+--     alt_toc_structure.bookId        -> book(id)                ON DELETE CASCADE
+--     alt_toc_entry.structureId       -> alt_toc_structure(id)   ON DELETE CASCADE
+--     alt_toc_entry.parentId          -> alt_toc_entry(id)       ON DELETE CASCADE
+--     alt_toc_entry.textId            -> tocText(id)             ON DELETE CASCADE
+--     alt_toc_entry.lineId            -> line(id)                ON DELETE SET NULL
+--     line_alt_toc.lineId             -> line(id)                ON DELETE CASCADE
+--     line_alt_toc.structureId        -> alt_toc_structure(id)   ON DELETE CASCADE
+--     line_alt_toc.altTocEntryId      -> alt_toc_entry(id)       ON DELETE CASCADE
+--     book_acronym.bookId             -> book(id)                ON DELETE CASCADE
+--     default_commentator.bookId      -> book(id)                ON DELETE CASCADE
+--     default_commentator.commentatorBookId -> book(id)          ON DELETE CASCADE
+--     default_targum.bookId           -> book(id)                ON DELETE CASCADE
+--     default_targum.targumBookId     -> book(id)                ON DELETE CASCADE
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- Schema-level metadata (db_version, db_schema_version, content_hash, ...)
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key   TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+);
+
 -- Categories table
 CREATE TABLE IF NOT EXISTS category (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY NOT NULL,
     parentId INTEGER,
     title TEXT NOT NULL,
     level INTEGER NOT NULL DEFAULT 0,
@@ -25,7 +90,7 @@ CREATE INDEX IF NOT EXISTS idx_category_closure_descendant ON category_closure(d
 
 -- Authors table
 CREATE TABLE IF NOT EXISTS author (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY NOT NULL,
     name TEXT NOT NULL UNIQUE
 );
 
@@ -33,7 +98,7 @@ CREATE INDEX IF NOT EXISTS idx_author_name ON author(name);
 
 -- Table des topics
 CREATE TABLE IF NOT EXISTS topic (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY NOT NULL,
     name TEXT NOT NULL UNIQUE
 );
 
@@ -41,7 +106,7 @@ CREATE INDEX IF NOT EXISTS idx_topic_name ON topic(name);
 
 -- Publication places table
 CREATE TABLE IF NOT EXISTS pub_place (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY NOT NULL,
     name TEXT NOT NULL UNIQUE
 );
 
@@ -49,7 +114,7 @@ CREATE INDEX IF NOT EXISTS idx_pub_place_name ON pub_place(name);
 
 -- Publication dates table
 CREATE TABLE IF NOT EXISTS pub_date (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY NOT NULL,
     date TEXT NOT NULL UNIQUE
 );
 
@@ -57,7 +122,7 @@ CREATE INDEX IF NOT EXISTS idx_pub_date_date ON pub_date(date);
 
 -- Sources table (origin of each book)
 CREATE TABLE IF NOT EXISTS source (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY NOT NULL,
     name TEXT NOT NULL UNIQUE
 );
 
@@ -65,7 +130,7 @@ CREATE INDEX IF NOT EXISTS idx_source_name ON source(name);
 
 -- Books table
 CREATE TABLE IF NOT EXISTS book (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY NOT NULL,
     categoryId INTEGER NOT NULL,
     sourceId INTEGER NOT NULL,
     title TEXT NOT NULL,
@@ -144,7 +209,7 @@ CREATE INDEX IF NOT EXISTS idx_book_author_author ON book_author(authorId);
 
 -- Lines table
 CREATE TABLE IF NOT EXISTS line (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY NOT NULL,
     bookId INTEGER NOT NULL,
     lineIndex INTEGER NOT NULL,
     content TEXT NOT NULL,
@@ -163,7 +228,7 @@ CREATE INDEX IF NOT EXISTS idx_line_heref ON line(heRef);
 
 -- TOC texts table
 CREATE TABLE IF NOT EXISTS tocText (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY NOT NULL,
     text TEXT NOT NULL UNIQUE
 );
 
@@ -172,7 +237,7 @@ CREATE INDEX IF NOT EXISTS idx_toctext_text_length ON tocText(text, length(text)
 
 -- TOC entries table
 CREATE TABLE IF NOT EXISTS tocEntry (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY NOT NULL,
     bookId INTEGER NOT NULL,
     parentId INTEGER,
     textId INTEGER NOT NULL,
@@ -195,7 +260,7 @@ CREATE INDEX IF NOT EXISTS idx_tocentry_level_book ON tocEntry(level, bookId);
 
 -- Connection types table
 CREATE TABLE IF NOT EXISTS connection_type (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY NOT NULL,
     name TEXT NOT NULL UNIQUE
 );
 
@@ -205,7 +270,7 @@ CREATE INDEX IF NOT EXISTS idx_connection_type_name ON connection_type(name);
 -- targetLineIndex mirrors line(targetLineId).lineIndex so we can sort commentaries
 -- by their natural position in the target book without an extra JOIN on `line`.
 CREATE TABLE IF NOT EXISTS link (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY NOT NULL,
     sourceBookId INTEGER NOT NULL,
     targetBookId INTEGER NOT NULL,
     sourceLineId INTEGER NOT NULL,
@@ -254,7 +319,7 @@ CREATE INDEX IF NOT EXISTS idx_linetoc_toc ON line_toc(tocEntryId);
 
 -- Alternative TOC structures (e.g., Parasha/Aliyah)
 CREATE TABLE IF NOT EXISTS alt_toc_structure (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY NOT NULL,
     bookId INTEGER NOT NULL,
     -- Stable key for the structure (e.g., "Parasha")
     key TEXT NOT NULL,
@@ -268,7 +333,7 @@ CREATE INDEX IF NOT EXISTS idx_alt_toc_structure_book ON alt_toc_structure(bookI
 CREATE INDEX IF NOT EXISTS idx_alt_toc_structure_key ON alt_toc_structure(key);
 
 CREATE TABLE IF NOT EXISTS alt_toc_entry (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY NOT NULL,
     structureId INTEGER NOT NULL,
     parentId INTEGER,
     textId INTEGER NOT NULL,

@@ -13,6 +13,11 @@ insert:
 INSERT INTO connection_type (name)
 VALUES (?);
 
+insertWithId:
+INSERT INTO connection_type (id, name)
+VALUES (?, ?)
+ON CONFLICT (name) DO NOTHING;
+
 update:
 UPDATE connection_type
 SET name = ?

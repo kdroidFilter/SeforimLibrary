@@ -131,6 +131,10 @@ insert:
 INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, connectionTypeId)
 VALUES (?, ?, ?, ?, ?, ?);
 
+insertWithId:
+INSERT INTO link (id, sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, connectionTypeId)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
 delete:
 DELETE FROM link WHERE id = ?;
 

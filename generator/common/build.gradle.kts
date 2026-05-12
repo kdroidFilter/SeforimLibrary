@@ -15,5 +15,16 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
         }
+
+        jvmMain.dependencies {
+            implementation(libs.sqlite.jdbc)
+            implementation(libs.kotlinx.coroutines.core)
+            implementation(project(":dao"))
+        }
+
+        jvmTest.dependencies {
+            implementation(kotlin("test-junit"))
+            implementation(libs.sqlDelight.driver.sqlite)
+        }
     }
 }

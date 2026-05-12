@@ -24,6 +24,11 @@ insertAndGetId:
 INSERT OR IGNORE INTO topic (name)
 VALUES (?);
 
+insertWithId:
+INSERT INTO topic (id, name)
+VALUES (?, ?)
+ON CONFLICT (name) DO NOTHING;
+
 selectIdByName:
 SELECT id FROM topic WHERE name = ? LIMIT 1;
 

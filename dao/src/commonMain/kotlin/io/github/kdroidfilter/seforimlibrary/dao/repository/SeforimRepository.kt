@@ -2434,6 +2434,86 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         result
     }
 
+    // ─── Explicit-id inserts (delta-update support) ────────────────────────────
+    // These helpers let an external IdAllocator drive primary-key allocation so
+    // that two builds with the same input produce identical row ids. They are
+    // idempotent (ON CONFLICT DO NOTHING for lookup tables): calling them twice
+    // with the same id is safe. See DELTA_UPDATE_PLAN.md §3.3.
+
+    suspend fun insertSourceWithId(id: Long, name: String) = withContext(Dispatchers.IO) {
+        database.sourceQueriesQueries.insertWithId(id, name)
+    }
+
+    suspend fun insertAuthorWithId(id: Long, name: String) = withContext(Dispatchers.IO) {
+        database.authorQueriesQueries.insertWithId(id, name)
+    }
+
+    suspend fun insertTopicWithId(id: Long, name: String) = withContext(Dispatchers.IO) {
+        database.topicQueriesQueries.insertWithId(id, name)
+    }
+
+    suspend fun insertPubPlaceWithId(id: Long, name: String) = withContext(Dispatchers.IO) {
+        database.pubPlaceQueriesQueries.insertWithId(id, name)
+    }
+
+    suspend fun insertPubDateWithId(id: Long, date: String) = withContext(Dispatchers.IO) {
+        database.pubDateQueriesQueries.insertWithId(id, date)
+    }
+
+    suspend fun insertConnectionTypeWithId(id: Long, name: String) = withContext(Dispatchers.IO) {
+        database.connectionTypeQueriesQueries.insertWithId(id, name)
+    }
+
+    suspend fun insertCategoryWithId(
+        id: Long,
+        parentId: Long?,
+        title: String,
+        level: Int,
+        orderIndex: Int,
+    ) = withContext(Dispatchers.IO) {
+        database.categoryQueriesQueries.insertWithId(
+            id = id,
+            parentId = parentId,
+            title = title,
+            level = level.toLong(),
+            orderIndex = orderIndex.toLong(),
+        )
+    }
+
+    suspend fun insertTocTextWithId(id: Long, text: String) = withContext(Dispatchers.IO) {
+        database.tocTextQueriesQueries.insertWithId(id, text)
+    }
+
+    suspend fun insertLinkWithId(
+        id: Long,
+        sourceBookId: Long,
+        targetBookId: Long,
+        sourceLineId: Long,
+        targetLineId: Long,
+        targetLineIndex: Long,
+        connectionTypeId: Long,
+    ) = withContext(Dispatchers.IO) {
+        database.linkQueriesQueries.insertWithId(
+            id = id,
+            sourceBookId = sourceBookId,
+            targetBookId = targetBookId,
+            sourceLineId = sourceLineId,
+            targetLineId = targetLineId,
+            targetLineIndex = targetLineIndex,
+            connectionTypeId = connectionTypeId,
+        )
+    }
+
+    // ─── schema_meta accessors ────────────────────────────────────────────────
+
+    suspend fun getSchemaMeta(key: String): String? = withContext(Dispatchers.IO) {
+        database.schemaMetaQueriesQueries.getSchemaMeta(key).executeAsOneOrNull()
+    }
+
+    suspend fun setSchemaMeta(key: String, value: String) = withContext(Dispatchers.IO) {
+        database.schemaMetaQueriesQueries.upsertSchemaMeta(key, value)
+    }
+
     /**
      * Closes the database connection.
      * Should be called when the repository is no longer needed.
