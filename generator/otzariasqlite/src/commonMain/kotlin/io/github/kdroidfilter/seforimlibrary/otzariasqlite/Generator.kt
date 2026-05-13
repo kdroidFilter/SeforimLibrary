@@ -67,8 +67,14 @@ class DatabaseGenerator(
     }
     // Per-book stack of (level -> textId) used to derive a stable tocEntry ancestor path.
     private val tocAncestorStackByBook = mutableMapOf<Long, MutableMap<Int, Long>>()
-    private fun stableTocEntryId(bookId: Long, level: Int, text: String, lineIndex: Int): Pair<Long, Long> {
-        val textId = bindings.allocator.tocTextId(text)
+    private suspend fun stableTocEntryId(bookId: Long, level: Int, text: String, lineIndex: Int): Pair<Long, Long> {
+        // Use upsertTocText (allocate + insertTocTextWithId) so the id reserved
+        // by the allocator matches what's actually in the tocText table.
+        // Plain bindings.allocator.tocTextId(text) only reserves an id; the
+        // subsequent repo.insertTocText(text) used a non-allocator-aware
+        // INSERT OR IGNORE path and ended up with auto-increment ids — which
+        // broke the delta producer's stable-id invariant.
+        val textId = bindings.upsertTocText(text)
         val stack = tocAncestorStackByBook.getOrPut(bookId) { sortedMapOf() }
         // Drop deeper levels (we're climbing up).
         stack.keys.filter { it >= level }.forEach { stack.remove(it) }
