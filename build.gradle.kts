@@ -62,6 +62,53 @@ tasks.register("packageSeforimBundle") {
 //    mustRunAfter("generateSeforimDb")
 //}
 
+/**
+ * Push-button release task — produces the seforim.db + catalog.pb + Lucene
+ * indexes, then derives a delta against a configured previous release and
+ * emits the JSON artefacts the client polls.
+ *
+ * Required when invoking:
+ *   -PprevReleaseDb=/path/to/previous/seforim.db
+ *   -PfromVersion=<int>           current release of the prev DB
+ *   -PtoVersion=<int>             version label this build will publish
+ *
+ * Optional (writes release_meta.json when all four are set):
+ *   -PreleaseMeta=/path/to/release_meta.json
+ *   -PfullBundleUrl=https://.../full-vN.tar.zst
+ *   -PfullBundleSha=<sha256>
+ *   -PfullBundleSize=<bytes>
+ *   -PmanifestBaseUrl=https://.../deltas
+ *
+ * Output (under <root>/build/):
+ *   - seforim.db                   freshly-built DB
+ *   - seforim.db.buildstate        IdAllocator snapshot for the next build
+ *   - catalog.pb / *.lucene/       app artefacts
+ *   - patch-v<from>-v<to>.db                  binary delta
+ *   - patch-v<from>-v<to>.db.manifest.json    per-delta manifest
+ *   - release_meta.json (optional)            release-level index
+ */
+tasks.register("publishRelease") {
+    group = "application"
+    description = "generateSeforimDb + producePatchAndVerify (+ release_meta.json upsert)."
+    dependsOn("generateSeforimDb")
+    finalizedBy(":generator-common:producePatchAndVerify")
+}
+project(":generator-common").tasks.matching { it.name == "producePatchAndVerify" }.configureEach {
+    mustRunAfter("generateSeforimDb")
+    // Map the umbrella task's -P props onto the CLI's gradle props.
+    val prev = project.findProperty("prevReleaseDb") as String?
+    val from = project.findProperty("fromVersion") as String?
+    val to = project.findProperty("toVersion") as String?
+    if (prev != null && from != null && to != null) {
+        val out = rootProject.layout.buildDirectory
+            .file("patch-v${from}-v${to}.db").get().asFile.absolutePath
+        val new = rootProject.layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+        this.extensions.extraProperties.set("prevDb", prev)
+        this.extensions.extraProperties.set("newDb", new)
+        this.extensions.extraProperties.set("out", out)
+    }
+}
+
 tasks.register<Delete>("cleanGeneratedData") {
     group = "application"
     description = "Delete all downloaded sources and generated databases/indexes."
