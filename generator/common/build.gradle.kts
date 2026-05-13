@@ -20,6 +20,7 @@ kotlin {
             implementation(libs.sqlite.jdbc)
             implementation(libs.kotlinx.coroutines.core)
             implementation(project(":dao"))
+            implementation(libs.jsoup)
         }
 
         jvmTest.dependencies {

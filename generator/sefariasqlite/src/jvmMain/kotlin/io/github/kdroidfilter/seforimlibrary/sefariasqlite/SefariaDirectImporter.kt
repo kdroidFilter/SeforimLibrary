@@ -263,10 +263,14 @@ class SefariaDirectImporter(
             val refsByLineIndex = payload.refEntries.associateBy { it.lineIndex - 1 }
 
             payload.lines.forEachIndexed { idx, content ->
-                val contentHash = IdAllocatorBindings.normalisedContentHash(content)
+                val refEntry = refsByLineIndex[idx]
+                // Prefer Sefaria's stable citation address (heRef) as natural key
+                // when available — survives Sefaria's verse-prefix renumbering
+                // (DELTA_UPDATE_PLAN.md §2.1). Fallback to content hash for
+                // headings / structural lines that have no heRef.
+                val contentHash = IdAllocatorBindings.lineNaturalKeyHash(content, refEntry?.heRef)
                 val occurrence = nextLineOccurrence(bookId, contentHash)
                 val lineId = allocator.lineId(bookId, contentHash, occurrence)
-                val refEntry = refsByLineIndex[idx]
                 val lineCharCount = countVisibleChars(content)
                 lineBatch += Line(
                     id = lineId,

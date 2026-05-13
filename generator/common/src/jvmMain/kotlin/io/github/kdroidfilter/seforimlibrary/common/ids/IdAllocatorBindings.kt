@@ -144,6 +144,25 @@ class IdAllocatorBindings(
 
     companion object {
         /**
+         * Builds the 20-byte content-hash slot of a line's natural key.
+         *
+         * When a Sefaria-style stable citation reference is available (heRef
+         * like "Genesis 1:1"), we hash `"REF:$ref"` so the natural key is
+         * decoupled from the rendered content — Sefaria's pipeline auto-
+         * generates verse prefixes `(א), (ב), …` that mutate the rendered
+         * content of every following verse on a head-insert. By keying on
+         * heRef we keep the line id stable across those reformatting passes
+         * (see DELTA_UPDATE_PLAN.md §2.1 + PHASE1_VALIDATION.md Test C).
+         *
+         * Otzaria lines and Sefaria heading lines fall back to a raw content
+         * hash since they have no stable citation address.
+         */
+        fun lineNaturalKeyHash(content: String, heRef: String?): ByteArray {
+            val prefixed = if (heRef != null) "REF:$heRef" else "CT:$content"
+            return MessageDigest.getInstance("SHA-1").digest(prefixed.toByteArray(Charsets.UTF_8))
+        }
+
+        /**
          * sha1 of the line content, used as part of the natural key for `line`.
          * Always returns 20 bytes — required by [IdAllocator.lineId].
          *
