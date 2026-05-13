@@ -66,10 +66,13 @@ tasks.register<JavaExec>("producePatchAndVerify") {
     systemProperty("out", out)
     project.findProperty("fromVersion")?.let { systemProperty("fromVersion", it as String) }
     project.findProperty("toVersion")?.let { systemProperty("toVersion", it as String) }
-    // Optional release-meta knobs.
+    // Optional release-meta knobs + the new catalog.pb path (defaults to
+    // <out>.resolveSibling("catalog.pb") when unset, which matches the
+    // standard layout produced by :catalog:buildCatalog).
     listOf(
         "releaseMeta", "fullBundleUrl", "fullBundleSha", "fullBundleSize",
         "manifestBaseUrl", "fromSchemaVersion", "toSchemaVersion",
+        "catalogPb",
     ).forEach { key ->
         project.findProperty(key)?.let { systemProperty(key, it as String) }
     }

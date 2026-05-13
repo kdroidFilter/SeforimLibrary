@@ -82,6 +82,27 @@ fun main(args: Array<String>) {
     }
     runCatching { Files.deleteIfExists(target) }
 
+    // Stuff the new catalog.pb into patch.blobs so CatalogUpdater can pull
+    // it out client-side. Without this the manifest claims a catalogBlobName
+    // but the patch.db ships with an empty blobs table — caught by the real
+    // e2e on Zayit (catalog.pb timestamp stayed at v1).
+    val catalogPath = System.getProperty("catalogPb")
+        ?: System.getenv("CATALOG_PB_PATH")
+        ?: outPath.resolveSibling("catalog.pb").toAbsolutePath().toString()
+    val catalogFile = Paths.get(catalogPath)
+    if (Files.isRegularFile(catalogFile)) {
+        DriverManager.getConnection("jdbc:sqlite:${outPath.toAbsolutePath()}").use { conn ->
+            conn.prepareStatement("INSERT OR REPLACE INTO blobs(name, content) VALUES (?, ?)").use { ps ->
+                ps.setString(1, "catalog.pb")
+                ps.setBytes(2, Files.readAllBytes(catalogFile))
+                ps.executeUpdate()
+            }
+        }
+        logger.i { "Embedded catalog.pb (${Files.size(catalogFile)} bytes) into patch.blobs" }
+    } else {
+        logger.w { "No catalog.pb at $catalogPath — patch ships without a catalog blob" }
+    }
+
     // Emit a per-delta manifest.json next to the patch.db, plus optionally
     // append/update a release_meta.json the client polls.
     ReleaseManifestWriter(logger).writeManifest(
