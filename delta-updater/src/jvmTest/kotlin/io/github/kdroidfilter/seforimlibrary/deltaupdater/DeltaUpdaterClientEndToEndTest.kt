@@ -128,8 +128,10 @@ class DeltaUpdaterClientEndToEndTest {
                 workDir = workDir,
                 releaseMetaUrl = "$base/release_meta.json",
                 indexSinks = {
-                    LuceneUpdater.DeleteSink { deletedLineIds += it } to
-                        LuceneUpdater.UpsertSink { upsertedLines += it }
+                    LuceneUpdater.SinkSession(
+                        delete = LuceneUpdater.DeleteSink { deletedLineIds += it },
+                        upsert = LuceneUpdater.UpsertSink { upsertedLines += it },
+                    )
                 },
                 localVersionProvider = { 1 },
             )
@@ -248,7 +250,10 @@ class DeltaUpdaterClientEndToEndTest {
                 workDir = tmp.newFolder().toPath(),
                 releaseMetaUrl = "http://127.0.0.1:${server.address.port}/release_meta.json",
                 indexSinks = {
-                    LuceneUpdater.DeleteSink { } to LuceneUpdater.UpsertSink { }
+                    LuceneUpdater.SinkSession(
+                        delete = LuceneUpdater.DeleteSink { },
+                        upsert = LuceneUpdater.UpsertSink { },
+                    )
                 },
                 localVersionProvider = { 1 },
             )
@@ -298,6 +303,7 @@ class DeltaUpdaterClientEndToEndTest {
             ex.responseBody.use { Files.copy(patchDb, it) }
         }
         server.start()
+        val sessionClosed = java.util.concurrent.atomic.AtomicBoolean(false)
         try {
             val client = DeltaUpdaterClient(
                 seforimDb = liveDb,
@@ -305,10 +311,15 @@ class DeltaUpdaterClientEndToEndTest {
                 workDir = tmp.newFolder().toPath(),
                 releaseMetaUrl = "$base/release_meta.json",
                 // Throwing upsert sink: simulates a Lucene-side failure
-                // after the SQLite commit succeeded.
+                // after the SQLite commit succeeded. The session's
+                // onClose hook must still fire so the caller's IndexWriter
+                // doesn't leak across runs.
                 indexSinks = {
-                    LuceneUpdater.DeleteSink { /* no-op */ } to
-                        LuceneUpdater.UpsertSink { error("simulated lucene failure") }
+                    LuceneUpdater.SinkSession(
+                        delete = LuceneUpdater.DeleteSink { /* no-op */ },
+                        upsert = LuceneUpdater.UpsertSink { error("simulated lucene failure") },
+                        onClose = { sessionClosed.set(true) },
+                    )
                 },
                 localVersionProvider = { 1 },
             )
@@ -329,6 +340,10 @@ class DeltaUpdaterClientEndToEndTest {
             // so a subsequent boot won't log a misleading recovery message.
             assertTrue(!Files.exists(liveDb.resolveSibling("${liveDb.fileName}.backup")))
             assertTrue(!Files.exists(liveDb.resolveSibling("${liveDb.fileName}.applying")))
+            // The session's onClose ran even though applyTo threw — the
+            // .use { } block in the orchestrator guarantees this so callers
+            // can commit + close their Lucene IndexWriter without leaks.
+            assertTrue(sessionClosed.get(), "SinkSession.close() must fire even on Lucene failure")
         } finally {
             server.stop(0)
         }

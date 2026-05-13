@@ -57,7 +57,7 @@ class UpdateOrchestrator(
         chain: List<DeltaEntry>,
         fetchManifest: (DeltaEntry) -> DeltaManifest,
         baseUrlForEntry: (DeltaEntry, String) -> String,
-        luceneSinks: () -> Pair<LuceneUpdater.DeleteSink, LuceneUpdater.UpsertSink>,
+        luceneSinks: () -> LuceneUpdater.SinkSession,
         progress: (current: Int, total: Int, status: String) -> Unit = { _, _, _ -> },
     ) {
         // First: recover from any half-applied previous run.
@@ -92,8 +92,9 @@ class UpdateOrchestrator(
                 // the next app launch.)
                 try {
                     progress(step, chain.size, "updating lucene")
-                    val (delSink, upSink) = luceneSinks()
-                    luceneUpdater.applyTo(mainPatch, delSink, upSink)
+                    luceneSinks().use { session ->
+                        luceneUpdater.applyTo(mainPatch, session.delete, session.upsert)
+                    }
 
                     progress(step, chain.size, "updating catalog")
                     manifest.catalogBlobName?.let { catalogUpdater.update(mainPatch, catalogPb, it) }

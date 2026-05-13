@@ -31,7 +31,7 @@ class DeltaUpdaterClient(
     private val catalogPb: Path,
     private val workDir: Path,
     private val releaseMetaUrl: String,
-    private val indexSinks: () -> Pair<LuceneUpdater.DeleteSink, LuceneUpdater.UpsertSink>,
+    private val indexSinks: () -> LuceneUpdater.SinkSession,
     private val localVersionProvider: () -> Int,
     private val httpGet: (String) -> String = ::defaultHttpGet,
     private val urlForPatchFile: (DeltaEntry, String) -> String = { entry, file ->

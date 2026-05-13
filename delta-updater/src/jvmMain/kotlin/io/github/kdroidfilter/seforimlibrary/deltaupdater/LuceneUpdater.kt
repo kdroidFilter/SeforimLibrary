@@ -32,6 +32,22 @@ class LuceneUpdater(
         fun upsertLine(line: PatchLine)
     }
 
+    /**
+     * Bundles a [DeleteSink] + [UpsertSink] with a deterministic close hook.
+     * The orchestrator obtains one of these per delta via the caller's
+     * provider lambda and closes it after [applyTo] returns, so the caller
+     * can commit + close a Lucene `IndexWriter` (or any other resource)
+     * exactly when it needs to. Without this, naive providers leak open
+     * writers — and silently drop updates that were never committed.
+     */
+    class SinkSession(
+        val delete: DeleteSink,
+        val upsert: UpsertSink,
+        private val onClose: () -> Unit = {},
+    ) : AutoCloseable {
+        override fun close() = onClose()
+    }
+
     data class PatchLine(
         val id: Long,
         val bookId: Long,
