@@ -122,6 +122,7 @@ class DeltaUpdaterClientEndToEndTest {
             // Wire Lucene sinks that record everything they see.
             val deletedLineIds = ArrayList<Long>()
             val upsertedLines = ArrayList<LuceneUpdater.PatchLine>()
+            val sessionCloseCount = java.util.concurrent.atomic.AtomicInteger(0)
             val client = DeltaUpdaterClient(
                 seforimDb = liveDb,
                 catalogPb = catalogPb,
@@ -131,6 +132,7 @@ class DeltaUpdaterClientEndToEndTest {
                     LuceneUpdater.SinkSession(
                         delete = LuceneUpdater.DeleteSink { deletedLineIds += it },
                         upsert = LuceneUpdater.UpsertSink { upsertedLines += it },
+                        onClose = { sessionCloseCount.incrementAndGet() },
                     )
                 },
                 localVersionProvider = { 1 },
@@ -170,6 +172,15 @@ class DeltaUpdaterClientEndToEndTest {
             assertTrue(progressEvents.any { "downloading patch files" in it })
             assertTrue(progressEvents.any { "applying sqlite delta" in it })
             assertTrue(progressEvents.any { "done" in it })
+
+            // The session's onClose ran exactly once per delta on the happy
+            // path — this is the hook real callers use to commit + close
+            // their IndexWriter. A regression here would silently drop
+            // every Lucene update.
+            assertEquals(
+                path.deltas.size, sessionCloseCount.get(),
+                "SinkSession.close() must fire once per delta on success",
+            )
         } finally {
             server.stop(0)
         }
