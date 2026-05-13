@@ -49,7 +49,13 @@ class DeltaApplierClient(
             )
         }
 
-        // 2. File backup + marker so recoverIfNeeded() can roll back after a crash.
+        // 2. Disk-space pre-flight: the apply needs room for a full backup
+        //    copy of seforim.db plus growth headroom for the patch itself.
+        //    Fail fast with a clear message rather than ENOSPC-ing mid-copy
+        //    and leaving a truncated backup on disk.
+        assertEnoughFreeSpace(seforimDb, patchDb)
+
+        // 3. File backup + marker so recoverIfNeeded() can roll back after a crash.
         val backup = seforimDb.resolveSibling("${seforimDb.fileName}.backup")
         val marker = seforimDb.resolveSibling("${seforimDb.fileName}.applying")
         Files.copy(seforimDb, backup, StandardCopyOption.REPLACE_EXISTING)
@@ -110,4 +116,38 @@ class DeltaApplierClient(
 
     private fun openConn(path: Path) =
         DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}")
+
+    /**
+     * Verifies the partition holding [seforimDb] has enough free space to
+     * hold a full backup copy plus enough headroom for the patch to inflate
+     * the live DB. Required ≈ size(seforimDb) + size(patchDb) + 64 MB
+     * (covers WAL + temp files on commit).
+     *
+     * Visible for testing and for callers that want to surface a
+     * disk-space prompt to the user before invoking [apply].
+     */
+    internal fun assertEnoughFreeSpace(seforimDb: Path, patchDb: Path) {
+        val dbSize = Files.size(seforimDb)
+        val patchSize = if (Files.exists(patchDb)) Files.size(patchDb) else 0L
+        val headroom = 64L * 1024 * 1024
+        val required = dbSize + patchSize + headroom
+        val available = Files.getFileStore(seforimDb.toAbsolutePath().parent).usableSpace
+        if (available < required) {
+            throw IllegalStateException(
+                "Not enough free space to apply delta: required ${humanBytes(required)} " +
+                    "(backup ${humanBytes(dbSize)} + patch ${humanBytes(patchSize)} + " +
+                    "${humanBytes(headroom)} headroom), available ${humanBytes(available)} " +
+                    "on ${seforimDb.toAbsolutePath().parent}",
+            )
+        }
+    }
+
+    private fun humanBytes(n: Long): String {
+        if (n < 1024) return "$n B"
+        val units = arrayOf("KiB", "MiB", "GiB", "TiB")
+        var d = n.toDouble() / 1024.0
+        var i = 0
+        while (d >= 1024.0 && i < units.size - 1) { d /= 1024.0; i++ }
+        return "%.1f %s".format(d, units[i])
+    }
 }

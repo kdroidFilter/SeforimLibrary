@@ -107,6 +107,17 @@ class DeltaApplierClientRecoveryTest {
     }
 
     @Test
+    fun `assertEnoughFreeSpace passes on a healthy partition`() {
+        // Sanity check: the function shouldn't throw on a normal tmpfs/disk
+        // where free space comfortably exceeds the tiny test files.
+        val db = tmp.newFile("seforim.db").toPath()
+        Files.writeString(db, "x")
+        val patch = tmp.newFile("patch.db").toPath()
+        Files.writeString(patch, "y")
+        DeltaApplierClient().assertEnoughFreeSpace(db, patch)
+    }
+
+    @Test
     fun `finalizeApply removes both backup and marker`() {
         val seforim = tmp.newFile("seforim.db").toPath()
         val backup = seforim.resolveSibling("seforim.db.backup")
