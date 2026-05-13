@@ -44,6 +44,7 @@ class PatchApplier(
         try {
             val preFkCount = countFkViolations(conn)
             attach(conn, patchDb)
+            assertPatchSchemaCompatible(conn)
             conn.createStatement().use { it.execute("PRAGMA defer_foreign_keys = ON") }
             val migrations = runMigrations(conn)
             val upserts = runUpserts(conn)
@@ -161,6 +162,37 @@ class PatchApplier(
             }
         }
         return n
+    }
+
+    /**
+     * Reads `patch.patch_meta.schema_version` and refuses to apply a patch
+     * whose schema is newer than [PatchDbSchema.CURRENT_VERSION]. Without
+     * this check, an older client could silently mis-apply a future-schema
+     * patch.db (new tables ignored, new patch_meta keys not honoured),
+     * producing a DB that "passed" the FK check but is semantically wrong.
+     */
+    private fun assertPatchSchemaCompatible(conn: Connection) {
+        val patchSchemaVersion = readPatchMetaInt(conn, "schema_version")
+            ?: throw IllegalStateException(
+                "patch.db is missing patch_meta.schema_version — refusing to apply " +
+                    "(likely a corrupt or hand-built patch).",
+            )
+        if (patchSchemaVersion > PatchDbSchema.CURRENT_VERSION) {
+            throw IllegalStateException(
+                "patch.db carries schema_version=$patchSchemaVersion but this build " +
+                    "of the applier only understands up to ${PatchDbSchema.CURRENT_VERSION}. " +
+                    "Upgrade the client before applying this patch.",
+            )
+        }
+    }
+
+    private fun readPatchMetaInt(conn: Connection, key: String): Int? {
+        conn.prepareStatement("SELECT value FROM patch.patch_meta WHERE key = ?").use { ps ->
+            ps.setString(1, key)
+            ps.executeQuery().use { rs ->
+                return if (rs.next()) rs.getString(1)?.toIntOrNull() else null
+            }
+        }
     }
 
     private fun patchHasTable(conn: Connection, name: String): Boolean {
