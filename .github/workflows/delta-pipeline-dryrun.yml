@@ -1,0 +1,174 @@
+name: Delta pipeline — dry run
+
+# Runs the full delta-update pipeline end-to-end WITHOUT publishing.
+# Useful to validate that:
+#   - generateSeforimDb works on the CI runner
+#   - stampSchemaVersion is correctly chained (schema_meta.db_version)
+#   - the v1 buildstate properly seeds v2's IdAllocator (id stability)
+#   - producePatchAndVerify's strict invariant holds (prev + patch == new)
+#
+# All artefacts are uploaded as workflow artefacts for inspection.
+# Nothing is pushed to a GitHub Release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_lucene:
+        description: "Skip Lucene index build (faster dry run, but Lucene side not exercised)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  dryrun:
+    name: Build v1 + v2 + verify delta
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout SeforimLibrary
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Free disk space on runner
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: true
+
+      - name: Disk after cleanup
+        run: df -h
+
+      - name: Install JBR 25
+        run: |
+          curl -L -o jbr.tar.gz "https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk-25.0.1-linux-x64-b268.52.tar.gz"
+          mkdir -p "$RUNNER_TEMP/jbr"
+          tar -xzf jbr.tar.gz -C "$RUNNER_TEMP/jbr"
+          JBR_DIR=$(find "$RUNNER_TEMP/jbr" -mindepth 1 -maxdepth 1 -type d -name "jbr*" -o -name "jbrsdk*" | head -n 1)
+          echo "JAVA_HOME=$JBR_DIR" >> "$GITHUB_ENV"
+          echo "$JBR_DIR/bin" >> "$GITHUB_PATH"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Gradle version
+        run: ./gradlew --version
+
+      # ─── BUILD v1 (no seed buildstate) ──────────────────────────────────────
+      - name: Build seforim.db v1 (no previous buildstate → IdAllocator starts fresh)
+        run: |
+          ./gradlew generateSeforimDb -PdbVersion=1 --no-daemon --stacktrace
+        env:
+          # The heavy work runs in JavaExec sub-processes with their own
+          # -Xmx (10g on Otzaria/Lucene tasks). Keep the Gradle daemon
+          # itself lean so the two don't compete for the runner's 16 GB.
+          GRADLE_OPTS: -Xmx2g
+
+      - name: Verify v1 schema_meta.db_version
+        run: |
+          sudo apt-get install -y --no-install-recommends sqlite3
+          VERSION=$(sqlite3 build/seforim.db "SELECT value FROM schema_meta WHERE key='db_version'")
+          echo "v1 db_version = $VERSION"
+          test "$VERSION" = "1" || { echo "❌ stampSchemaVersion didn't write db_version=1"; exit 1; }
+
+      - name: Stash v1 artefacts and free disk
+        run: |
+          # Use `mv` (rename, no copy) to save disk for the 7+ GB DB.
+          mv build/seforim.db build/seforim.db.v1
+          mv build/seforim.db.buildstate build/seforim.db.buildstate.v1
+          mv build/catalog.pb build/catalog.pb.v1
+          # Drop the v1 Lucene indexes (~3 GB) — they're not needed for the
+          # patch dry-run; the client re-derives them on apply. v2 will
+          # generate its own.
+          rm -rf build/seforim.db.lucene build/seforim.db.lookup.lucene
+          # Drop lexical.db (~54 MB, will be re-downloaded if needed).
+          rm -f build/lexical.db
+          ls -lah build/seforim.db.v1 build/seforim.db.buildstate.v1 build/catalog.pb.v1
+          df -h
+
+      # ─── BUILD v2 (seeded by v1 buildstate) ─────────────────────────────────
+      - name: Seed allocator with v1 buildstate for the v2 build
+        run: |
+          cp build/seforim.db.buildstate.v1 build/seforim.db.buildstate
+
+      - name: Build seforim.db v2 (seeded — IDs must stay stable wrt v1)
+        run: |
+          ./gradlew generateSeforimDb -PdbVersion=2 -PtoVersion=2 --no-daemon --stacktrace
+        env:
+          # The heavy work runs in JavaExec sub-processes with their own
+          # -Xmx (10g on Otzaria/Lucene tasks). Keep the Gradle daemon
+          # itself lean so the two don't compete for the runner's 16 GB.
+          GRADLE_OPTS: -Xmx2g
+
+      - name: Verify v2 schema_meta.db_version
+        run: |
+          VERSION=$(sqlite3 build/seforim.db "SELECT value FROM schema_meta WHERE key='db_version'")
+          echo "v2 db_version = $VERSION"
+          test "$VERSION" = "2" || { echo "❌ stampSchemaVersion didn't write db_version=2"; exit 1; }
+
+      # ─── PRODUCE + VERIFY THE PATCH ─────────────────────────────────────────
+      - name: producePatchAndVerify (strict prev + patch == new invariant)
+        run: |
+          ./gradlew :generator-common:producePatchAndVerify \
+            -PprevDb=$PWD/build/seforim.db.v1 \
+            -PnewDb=$PWD/build/seforim.db \
+            -Pout=$PWD/build/patch-v1-v2.db \
+            -PcatalogPb=$PWD/build/catalog.pb \
+            -PfromVersion=1 -PtoVersion=2 \
+            --no-daemon --stacktrace
+        env:
+          # The heavy work runs in JavaExec sub-processes with their own
+          # -Xmx (10g on Otzaria/Lucene tasks). Keep the Gradle daemon
+          # itself lean so the two don't compete for the runner's 16 GB.
+          GRADLE_OPTS: -Xmx2g
+
+      # ─── PATCH SIZE + MANIFEST SUMMARY ──────────────────────────────────────
+      - name: Summarise patch
+        run: |
+          echo "=== Patch artefacts ==="
+          ls -lah build/patch-v1-v2.db build/patch-v1-v2.db.manifest.json
+          echo ""
+          echo "=== Manifest ==="
+          cat build/patch-v1-v2.db.manifest.json
+          echo ""
+          echo "=== Patch.blobs ==="
+          sqlite3 build/patch-v1-v2.db "SELECT name, length(content) FROM blobs"
+          echo ""
+          echo "=== Patch upserts/deletes by table (top 5 each) ==="
+          for t in author topic tocText category book line line_toc link tocEntry; do
+            UC=$(sqlite3 build/patch-v1-v2.db "SELECT COUNT(*) FROM upsert_${t}" 2>/dev/null || echo 0)
+            DC=$(sqlite3 build/patch-v1-v2.db "SELECT COUNT(*) FROM delete_${t}" 2>/dev/null || echo 0)
+            echo "  $t: +$UC / -$DC"
+          done
+
+      # ─── ARTEFACTS ──────────────────────────────────────────────────────────
+      - name: Upload patch + manifests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: delta-dryrun-patch
+          path: |
+            build/patch-v1-v2.db
+            build/patch-v1-v2.db.manifest.json
+          retention-days: 7
+
+      - name: Upload buildstate snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: delta-dryrun-buildstates
+          path: |
+            build/seforim.db.buildstate.v1
+            build/seforim.db.buildstate
+          retention-days: 7
