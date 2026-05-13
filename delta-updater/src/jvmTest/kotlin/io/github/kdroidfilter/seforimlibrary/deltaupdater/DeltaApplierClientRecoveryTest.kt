@@ -1,10 +1,16 @@
 package io.github.kdroidfilter.seforimlibrary.deltaupdater
 
+import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import io.github.kdroidfilter.seforimlibrary.common.patch.LogicalContentHasher
+import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.nio.file.Files
+import java.nio.file.Path
+import java.sql.DriverManager
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -54,6 +60,50 @@ class DeltaApplierClientRecoveryTest {
         assertFalse(recovered)
         assertEquals("live data", Files.readString(seforim))
         assertTrue(Files.exists(marker), "marker stays so the next launch can decide")
+    }
+
+    @Test
+    fun `apply clears marker and backup when in-process restore succeeds`() {
+        // Build a real (empty) SeforimDb so the from-hash check passes, then
+        // hand the applier a bogus patch.db so PatchApplier.apply() throws
+        // mid-flight. The catch handler must restore the backup AND clear
+        // marker + backup so a later recoverIfNeeded() doesn't log a
+        // misleading "recovered from interrupted apply" warning.
+        val seforim = tmp.newFile("seforim.db").toPath()
+        Files.delete(seforim)
+        JdbcSqliteDriver("jdbc:sqlite:${seforim.toAbsolutePath()}").use { driver ->
+            SeforimDb.Schema.create(driver)
+        }
+        val fromHash = DriverManager.getConnection("jdbc:sqlite:${seforim.toAbsolutePath()}").use {
+            LogicalContentHasher().compute(it)
+        }
+        val originalBytes = Files.readAllBytes(seforim)
+
+        val patch = tmp.newFile("patch.db").toPath()
+        Files.writeString(patch, "not actually a sqlite file") // attach will fail
+
+        val manifest = DeltaManifest(
+            fromVersion = 1,
+            toVersion = 2,
+            fromSchemaVersion = 1,
+            toSchemaVersion = 1,
+            fromContentHash = fromHash,
+            toContentHash = "anything-else",
+            patchFiles = emptyList(),
+        )
+
+        assertFailsWith<Throwable> {
+            DeltaApplierClient().apply(seforim, patch, manifest)
+        }
+
+        val backup: Path = seforim.resolveSibling("seforim.db.backup")
+        val marker: Path = seforim.resolveSibling("seforim.db.applying")
+        assertFalse(Files.exists(backup), "backup must be cleared after in-process restore")
+        assertFalse(Files.exists(marker), "marker must be cleared after in-process restore")
+        assertTrue(
+            originalBytes.contentEquals(Files.readAllBytes(seforim)),
+            "seforim.db must be byte-identical to its pre-apply state",
+        )
     }
 
     @Test

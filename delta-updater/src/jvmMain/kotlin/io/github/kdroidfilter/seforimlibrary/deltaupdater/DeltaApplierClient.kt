@@ -68,9 +68,14 @@ class DeltaApplierClient(
                 return Result(applied = applied, backupPath = backup, markerPath = marker)
             }
         } catch (t: Throwable) {
-            // Restore from backup so the file is in its pre-apply state.
+            // Restore from backup so the file is in its pre-apply state,
+            // then clear the marker + backup pair: the in-process catch has
+            // fully reverted us, so a later recoverIfNeeded() must not log a
+            // misleading "recovered from interrupted apply" warning.
             Files.copy(backup, seforimDb, StandardCopyOption.REPLACE_EXISTING)
-            logger.e(t) { "Apply failed — backup restored from $backup" }
+            runCatching { Files.deleteIfExists(marker) }
+            runCatching { Files.deleteIfExists(backup) }
+            logger.e(t) { "Apply failed — backup restored, marker + backup cleared" }
             throw t
         }
     }
