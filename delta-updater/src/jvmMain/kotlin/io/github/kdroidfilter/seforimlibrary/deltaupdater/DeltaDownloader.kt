@@ -2,8 +2,8 @@ package io.github.kdroidfilter.seforimlibrary.deltaupdater
 
 import co.touchlab.kermit.Logger
 import java.io.IOException
+import java.net.HttpURLConnection
 import java.net.URI
-import java.net.URLConnection
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -32,13 +32,22 @@ class DeltaDownloader(
             return dest
         }
         val partial = dest.resolveSibling("${dest.fileName}.part")
-        val existing = if (Files.exists(partial)) Files.size(partial) else 0L
-        val conn = URI(url).toURL().openConnection()
+        var existing = if (Files.exists(partial)) Files.size(partial) else 0L
+        val conn = URI(url).toURL().openConnection() as HttpURLConnection
         if (existing > 0) {
             conn.setRequestProperty("Range", "bytes=$existing-")
             logger.i { "Resuming ${dest.fileName} from byte $existing" }
         }
         conn.connect()
+        // If we requested a Range and the server replied 200 instead of 206,
+        // it ignored the header and is streaming the whole file from byte 0.
+        // Appending those bytes onto our prefix would corrupt the result —
+        // truncate the partial and restart cleanly.
+        if (existing > 0 && conn.responseCode == HttpURLConnection.HTTP_OK) {
+            logger.w { "Server ignored Range header on ${dest.fileName}; restarting from byte 0" }
+            Files.deleteIfExists(partial)
+            existing = 0L
+        }
         val total = expectedSize ?: (conn.contentLengthLong + existing)
         val md = MessageDigest.getInstance("SHA-256")
         if (existing > 0) {
