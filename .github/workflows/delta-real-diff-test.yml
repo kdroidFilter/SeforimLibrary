@@ -48,7 +48,15 @@ jobs:
           haskell: true
           large-packages: true
           docker-images: false
-          swap-storage: true
+          swap-storage: false
+
+      - name: Bridle daemon heaps for the 16 GB runner
+        run: |
+          mkdir -p ~/.gradle
+          cat >> ~/.gradle/gradle.properties <<EOF
+          org.gradle.jvmargs=-Xmx4g
+          kotlin.daemon.jvmargs=-Xmx4g
+          EOF
 
       - name: Disk after cleanup
         run: df -h
