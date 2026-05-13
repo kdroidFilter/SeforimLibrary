@@ -71,10 +71,10 @@ Zayit/
 
 | | Count |
 |---|---:|
-| Phases implemented | 7 (1, 2, 3, 4, 4.5, 5, 6) |
-| Unit tests across all modules | ~95 |
+| Phases implemented | 8 (1, 2, 3, 4, 4.5, 5, 6, 8) |
+| Unit tests across all modules | ~100 |
 | End-to-end pipeline runs | 7 (against real 7 GB Sefaria + Otzaria) |
-| Validation reports (`PHASE*_VALIDATION.md`) | 4 |
+| Validation reports (`PHASE*_VALIDATION.md`) | 5 |
 | Operator runbook (`RELEASE.md`) | 1 |
 | Lines of new production code | ~4,000 |
 | Branches PR-ready | 2 |
@@ -92,8 +92,7 @@ Zayit/
 |-----|------|--------------|
 | Med | Periodic background check (default daily) | Policy decision: opt-in vs default. Trivial to add: launch a coroutine from main() polling once per N hours. |
 | Med | Phase 2.5 "fast-path" unchanged book | Big perf win on producer side (skip re-parse + copy lines from prev DB) — but build still completes in ~25 min today, well within CI budgets. |
-| Low | Phase 8 GC for `id_line` orphans | `build_state.db` grew from 1.1 GB to 1.8 GB at the heRef bootstrap; the old `sha1(content)`-keyed entries linger forever otherwise. Cron task on the build box solves this. |
-| Low | LineMatcher integration into PatchDbProducer | Patience-Diff currently only used at acceptance-test level. Integrating it into the producer's per-touched-book diff would shrink patches further when content changes mid-book without an heRef shift. |
+| Low | LineMatcher integration into PatchDbProducer | Patience-Diff currently only used at acceptance-test level. Integrating it into the producer's per-touched-book diff would shrink patches further when content changes mid-book without an heRef shift. Requires extending the allocator with a line-alias mechanism (not just book aliases), which is invasive. |
 
 ## Quick triage
 
