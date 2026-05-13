@@ -230,6 +230,82 @@ class DeltaUpdaterClientEndToEndTest {
         }
     }
 
+    @Test
+    fun `lucene failure after sqlite commit triggers in-process rollback`() {
+        val liveDb = tmp.newFolder().toPath().resolve("seforim.db")
+        buildClientDb(liveDb)
+        val targetDb = tmp.newFolder().toPath().resolve("target.db")
+        buildTargetDb(targetDb)
+        val patchDb = tmp.newFolder().toPath().resolve("patch.db")
+        io.github.kdroidfilter.seforimlibrary.common.patch.PatchDbProducer().produce(
+            prevDb = liveDb, newDb = targetDb, outputPath = patchDb,
+            fromVersion = 1, toVersion = 2,
+        )
+        val toHash = io.github.kdroidfilter.seforimlibrary.common.patch.LogicalContentHasher()
+            .compute(DriverManager.getConnection("jdbc:sqlite:${targetDb.toAbsolutePath()}"))
+        val fromHash = io.github.kdroidfilter.seforimlibrary.common.patch.LogicalContentHasher()
+            .compute(DriverManager.getConnection("jdbc:sqlite:${liveDb.toAbsolutePath()}"))
+        val patchSha = sha256(patchDb)
+        val patchBytes = Files.size(patchDb)
+
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val base = "http://127.0.0.1:${server.address.port}"
+        server.createContext("/release_meta.json") { ex ->
+            ex.respond(200, """
+                {"latestVersion":2,"fullBundle":{"version":2,"url":"$base/full","sha256":"x","size":1000000000},
+                 "deltas":[{"fromVersion":1,"toVersion":2,"manifestUrl":"$base/m.json","totalSize":$patchBytes}],
+                 "retentionWindow":30}
+            """.trimIndent())
+        }
+        server.createContext("/m.json") { ex ->
+            ex.respond(200, """
+                {"fromVersion":1,"toVersion":2,"fromSchemaVersion":1,"toSchemaVersion":1,
+                 "fromContentHash":"$fromHash","toContentHash":"$toHash",
+                 "patchFiles":[{"file":"patch_global.db","sha256":"$patchSha","size":$patchBytes}]}
+            """.trimIndent())
+        }
+        server.createContext("/patch_global.db") { ex ->
+            ex.responseHeaders.set("Content-Type", "application/octet-stream")
+            ex.sendResponseHeaders(200, patchBytes)
+            ex.responseBody.use { Files.copy(patchDb, it) }
+        }
+        server.start()
+        try {
+            val client = DeltaUpdaterClient(
+                seforimDb = liveDb,
+                catalogPb = tmp.newFolder().toPath().resolve("catalog.pb"),
+                workDir = tmp.newFolder().toPath(),
+                releaseMetaUrl = "$base/release_meta.json",
+                // Throwing upsert sink: simulates a Lucene-side failure
+                // after the SQLite commit succeeded.
+                indexSinks = {
+                    LuceneUpdater.DeleteSink { /* no-op */ } to
+                        LuceneUpdater.UpsertSink { error("simulated lucene failure") }
+                },
+                localVersionProvider = { 1 },
+            )
+            val path = client.checkForUpdate()
+            require(path is UpdatePath.Chain)
+
+            val thrown = kotlin.runCatching { client.applyChain(path.deltas) { _, _, _ -> } }
+                .exceptionOrNull()
+            assertNotNull(thrown, "applyChain must propagate the Lucene failure")
+
+            // SQLite was rolled back in-process: hash matches the pre-apply hash.
+            val recoveredHash = DriverManager.getConnection("jdbc:sqlite:${liveDb.toAbsolutePath()}").use {
+                io.github.kdroidfilter.seforimlibrary.common.patch.LogicalContentHasher().compute(it)
+            }
+            assertEquals(fromHash, recoveredHash, "seforim.db must be rolled back to fromContentHash")
+
+            // Marker + backup were cleared by the in-process recovery,
+            // so a subsequent boot won't log a misleading recovery message.
+            assertTrue(!Files.exists(liveDb.resolveSibling("${liveDb.fileName}.backup")))
+            assertTrue(!Files.exists(liveDb.resolveSibling("${liveDb.fileName}.applying")))
+        } finally {
+            server.stop(0)
+        }
+    }
+
     private fun buildTargetDb(path: Path) {
         buildClientDb(path)
         // Apply some changes: edit verse 1, delete verse 2, add verse 3.

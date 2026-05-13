@@ -16,11 +16,21 @@ import java.nio.file.Path
  *   4. Update `catalog.pb` via [CatalogUpdater].
  *   5. Call [DeltaApplierClient.finalizeApply] to remove the marker/backup.
  *
- * A crash anywhere up to step 5 triggers [DeltaApplierClient.recoverIfNeeded]
- * on the next launch, restoring `seforim.db.backup`. The orchestrator is
- * idempotent: re-running on the same chain entry is safe because the
- * SQLite apply is `ON CONFLICT DO UPDATE` and the Lucene sinks idempotently
- * delete-then-add per line id.
+ * Failure handling has two layers:
+ *
+ *  - **In-process** — if any post-commit step (lucene, catalog, finalize)
+ *    throws inside [applyChain], the orchestrator immediately calls
+ *    [DeltaApplierClient.recoverIfNeeded] to roll the SQLite delta back
+ *    before re-throwing. The caller observes a single all-or-nothing
+ *    outcome per delta.
+ *  - **Across process crashes** — if the JVM dies between SQLite COMMIT
+ *    and [DeltaApplierClient.finalizeApply], the marker + backup persist
+ *    on disk and the next launch's [DeltaApplierClient.recoverIfNeeded]
+ *    restores `seforim.db` to its pre-apply state.
+ *
+ * The orchestrator is idempotent: re-running on the same chain entry is
+ * safe because the SQLite apply is `ON CONFLICT DO UPDATE` and the
+ * Lucene sinks idempotently delete-then-add per line id.
  *
  * The chain is resumable at the **delta granularity** (DELTA_UPDATE_PLAN.md
  * §5.4): if delta 3/5 fails, delta 1 and 2 stay committed and the next
@@ -74,14 +84,29 @@ class UpdateOrchestrator(
                 progress(step, chain.size, "applying sqlite delta")
                 applier.apply(seforimDb = seforimDb, patchDb = mainPatch, manifest = manifest)
 
-                progress(step, chain.size, "updating lucene")
-                val (delSink, upSink) = luceneSinks()
-                luceneUpdater.applyTo(mainPatch, delSink, upSink)
+                // From here SQLite has committed but marker + backup are
+                // still on disk: if any post-commit step throws, roll back
+                // the SQLite delta in-process via recoverIfNeeded() so the
+                // process doesn't carry inconsistent state forward into a
+                // retry. (Without this, the rollback would only happen on
+                // the next app launch.)
+                try {
+                    progress(step, chain.size, "updating lucene")
+                    val (delSink, upSink) = luceneSinks()
+                    luceneUpdater.applyTo(mainPatch, delSink, upSink)
 
-                progress(step, chain.size, "updating catalog")
-                manifest.catalogBlobName?.let { catalogUpdater.update(mainPatch, catalogPb, it) }
+                    progress(step, chain.size, "updating catalog")
+                    manifest.catalogBlobName?.let { catalogUpdater.update(mainPatch, catalogPb, it) }
 
-                applier.finalizeApply(seforimDb)
+                    applier.finalizeApply(seforimDb)
+                } catch (t: Throwable) {
+                    runCatching { applier.recoverIfNeeded(seforimDb) }
+                    logger.e(t) {
+                        "Post-SQLite step failed for delta ${entry.fromVersion} → " +
+                            "${entry.toVersion}; rolled back in-process"
+                    }
+                    throw t
+                }
                 logger.i { "Delta ${entry.fromVersion} → ${entry.toVersion} applied" }
             } finally {
                 runCatching { deltaDir.toFile().deleteRecursively() }
