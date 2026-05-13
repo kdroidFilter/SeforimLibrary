@@ -319,7 +319,11 @@ internal class SefariaAltTocBuilder(
                     AltTocEntry(
                         structureId = structureId,
                         parentId = parentId,
-                        textId = null,
+                        // Pre-resolve via IdAllocator so the tocText row gets
+                        // inserted at the allocator-assigned id; otherwise the
+                        // repo's getOrCreateTocText falls back to auto-increment
+                        // and the delta producer's stable-id invariant breaks.
+                        textId = bindings.upsertTocText(text),
                         text = text,
                         level = level,
                         lineId = lineId,
@@ -353,7 +357,9 @@ internal class SefariaAltTocBuilder(
                             AltTocEntry(
                                 structureId = structureId,
                                 parentId = tocId,
-                                textId = null,
+                                // Same allocator-routing as above so child labels
+                                // get the stable id reserved by the allocator.
+                                textId = bindings.upsertTocText(label),
                                 text = label,
                                 level = level + 1,
                                 lineId = childLineId,
@@ -389,7 +395,11 @@ internal class SefariaAltTocBuilder(
                     AltTocEntry(
                         structureId = structureId,
                         parentId = parentId,
-                        textId = null,
+                        // Pre-resolve via IdAllocator so the tocText row gets
+                        // inserted at the allocator-assigned id; otherwise the
+                        // repo's getOrCreateTocText falls back to auto-increment
+                        // and the delta producer's stable-id invariant breaks.
+                        textId = bindings.upsertTocText(text),
                         text = text,
                         level = level,
                         lineId = null,
@@ -434,7 +444,9 @@ internal class SefariaAltTocBuilder(
                             AltTocEntry(
                                 structureId = structureId,
                                 parentId = currentParent,
-                                textId = null,
+                                // Same allocator-routing as above so child labels
+                                // get the stable id reserved by the allocator.
+                                textId = bindings.upsertTocText(label),
                                 text = label,
                                 level = level,
                                 lineId = childLineId,
