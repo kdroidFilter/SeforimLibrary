@@ -275,6 +275,75 @@ class DeltaUpdaterClientEndToEndTest {
     }
 
     @Test
+    fun `failed download leaves deltaDir behind so next attempt can resume`() {
+        // Stand up a server that ALWAYS returns 500 on the patch file —
+        // simulates a transient CDN failure mid-flight. The orchestrator's
+        // applyChain must propagate the IOException, but its per-delta work
+        // directory must survive on disk so the next attempt's downloader
+        // can pick up the partial .part file.
+        val patchBytes = 1024L
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val base = "http://127.0.0.1:${server.address.port}"
+        server.createContext("/release_meta.json") { ex ->
+            ex.respond(200, """
+                {"latestVersion":2,"fullBundle":{"version":2,"url":"$base/full","sha256":"x","size":1000000000},
+                 "deltas":[{"fromVersion":1,"toVersion":2,"manifestUrl":"$base/m.json","totalSize":$patchBytes}],
+                 "retentionWindow":30}
+            """.trimIndent())
+        }
+        val fakeSha = "0".repeat(64)
+        server.createContext("/m.json") { ex ->
+            ex.respond(200, """
+                {"fromVersion":1,"toVersion":2,"fromSchemaVersion":1,"toSchemaVersion":1,
+                 "fromContentHash":"fake","toContentHash":"fake",
+                 "patchFiles":[{"file":"patch_global.db","sha256":"$fakeSha","size":$patchBytes}]}
+            """.trimIndent())
+        }
+        server.createContext("/patch_global.db") { ex ->
+            // Server closes the connection partway, simulating a flaky CDN.
+            val partial = ByteArray(256) { it.toByte() }
+            ex.sendResponseHeaders(200, patchBytes)
+            ex.responseBody.use { it.write(partial); /* stop early */ }
+        }
+        server.start()
+        try {
+            val workDir = tmp.newFolder().toPath()
+            val seforim = tmp.newFolder().toPath().resolve("seforim.db")
+            buildClientDb(seforim)
+            val client = DeltaUpdaterClient(
+                seforimDb = seforim,
+                catalogPb = tmp.newFolder().toPath().resolve("catalog.pb"),
+                workDir = workDir,
+                releaseMetaUrl = "$base/release_meta.json",
+                indexSinks = {
+                    LuceneUpdater.SinkSession(
+                        delete = LuceneUpdater.DeleteSink { },
+                        upsert = LuceneUpdater.UpsertSink { },
+                    )
+                },
+                localVersionProvider = { 1 },
+            )
+            val chain = client.checkForUpdate()
+            require(chain is UpdatePath.Chain)
+            val ex = kotlin.runCatching { client.applyChain(chain.deltas) { _, _, _ -> } }
+                .exceptionOrNull()
+            assertNotNull(ex, "applyChain must propagate the download failure")
+
+            // The stable per-delta directory must survive so the next
+            // attempt's downloader can resume from whatever bytes the
+            // first attempt managed to persist. The exact .part size
+            // depends on com.sun.net.httpserver's buffering of partial
+            // writes (which isn't a contract we can rely on in tests),
+            // so we only assert the *dir* survives — that's the
+            // orchestrator-level guarantee being exercised.
+            val deltaDir = workDir.resolve("delta-v1-v2")
+            assertTrue(Files.exists(deltaDir), "deltaDir must survive a failed download")
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
     fun `lucene failure after sqlite commit triggers in-process rollback`() {
         val liveDb = tmp.newFolder().toPath().resolve("seforim.db")
         buildClientDb(liveDb)

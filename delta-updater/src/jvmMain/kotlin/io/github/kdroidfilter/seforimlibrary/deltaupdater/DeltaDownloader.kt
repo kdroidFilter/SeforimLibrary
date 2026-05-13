@@ -61,11 +61,11 @@ class DeltaDownloader(
             // We need to feed the already-downloaded bytes into the digest.
             Files.newInputStream(partial).use { it.copyTo(SinkOutputStream { b, o, l -> md.update(b, o, l) }) }
         }
+        var written = existing
         Files.newOutputStream(partial, *appendFlags(existing > 0)).use { out ->
             conn.getInputStream().use { input ->
                 val buf = ByteArray(BUFFER_SIZE)
                 var read: Int
-                var written = existing
                 while (input.read(buf).also { read = it } > 0) {
                     out.write(buf, 0, read)
                     md.update(buf, 0, read)
@@ -75,6 +75,15 @@ class DeltaDownloader(
                     }
                 }
             }
+        }
+        // Distinguish "server hung up early" (truncation — keep .part for
+        // resume) from "full bytes received but sha mismatched" (corrupt
+        // content — delete .part because resuming wouldn't help).
+        if (expectedSize != null && written < expectedSize) {
+            throw IOException(
+                "Truncated download on $url: got $written / $expectedSize bytes — " +
+                    ".part kept for resume on next attempt.",
+            )
         }
         val actual = md.digest().joinToString("") { "%02x".format(it) }
         if (actual.lowercase() != expectedSha256.lowercase()) {

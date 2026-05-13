@@ -67,7 +67,13 @@ class UpdateOrchestrator(
             val step = idx + 1
             progress(step, chain.size, "downloading manifest")
             val manifest = fetchManifest(entry)
-            val deltaDir = Files.createTempDirectory(workDir, "delta-v${entry.fromVersion}-")
+            // Stable per-delta directory (no random suffix) so a failed
+            // download's `.part` survives across orchestrator runs and the
+            // downloader can resume from where it left off. Cleaned up
+            // only on success — see `succeeded` flag below.
+            val deltaDir = workDir.resolve("delta-v${entry.fromVersion}-v${entry.toVersion}")
+            Files.createDirectories(deltaDir)
+            var succeeded = false
             try {
                 progress(step, chain.size, "downloading patch files")
                 val patchFiles = manifest.patchFiles.map { f ->
@@ -109,8 +115,15 @@ class UpdateOrchestrator(
                     throw t
                 }
                 logger.i { "Delta ${entry.fromVersion} → ${entry.toVersion} applied" }
+                succeeded = true
             } finally {
-                runCatching { deltaDir.toFile().deleteRecursively() }
+                if (succeeded) {
+                    runCatching { deltaDir.toFile().deleteRecursively() }
+                }
+                // else: leave the partial dir so the next retry's downloader
+                // can resume from its `.part` files instead of restarting at
+                // byte 0 — this is the contract DeltaDownloader.download
+                // assumes when the same `dest` path is reused.
             }
         }
         progress(chain.size, chain.size, "done")
