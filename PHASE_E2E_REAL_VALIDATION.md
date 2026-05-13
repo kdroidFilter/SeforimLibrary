@@ -83,33 +83,52 @@ produced its first real patch on production data:
   - FK violation count delta : 0 (306481 pre-existing, tolerated)
   - **Apply succeeded without exceptions.**
 
-## Remaining gap — strict-hash divergence
+### Hole 4 — `COALESCE(col, '') <> COALESCE(prev_col, '')` conflated NULL and `''`
 
-The verify-step's hash comparison still differs:
+The producer's per-row diff predicate used
+`COALESCE(new.col, '') <> COALESCE(prev.col, '')` which treats NULL
+and the empty string as the same value. The v1 build had 10 books
+where `heShortDesc IS NULL` while v2 had `heShortDesc = ''` (and
+other rows the inverse). The diff query silently dropped those
+upserts, so the patch applied cleanly but the resulting `book`
+table had stale NULL/'' values at those rows.
 
-  - `applied=1a144557005b6274558d17a2838fa8be376d5d048948bcbe42d32f8015f20b47`
-  - `expected=3a6d7dc00398294ae1987c7e8abc3791f98667933daecb7a01a8b5c88a00c434`
+Diagnostic: the new `diagnoseHashMismatch` task ran
+`LogicalContentHasher` per-table on target-after-apply vs v2 and
+bisected to exactly one table — `book`. Then a row-by-row diff
+showed the NULL/empty mismatch on `heShortDesc`.
 
-The patch applies cleanly (no FK violations introduced) but the
-resulting logical content hash doesn't match `seforim.db` (v2).
-Investigation pending. Most likely cause: a table whose content
-diverges due to the v1's auto-increment-vs-allocator drift cascading
-through FK references that the patch updates but in a way that
-introduces a not-quite-identical-to-v2 ordering or NULL state.
+Fix: switched to SQLite's `IS NOT` operator (`new.col IS NOT
+prev.col`) which treats NULL as a distinct value. Applied to both
+`scanUpserts` and `assertNoSecondaryUniqueCollisions`.
 
-The 339 MiB patch IS usable as an approximation but **must not be
-published** until the strict invariant passes — that's why
-`producePatchAndVerify` keeps the task FAILED on hash mismatch.
+## ✅ Strict-hash invariant satisfied
+
+After the fix (`<commit>`), `producePatchAndVerify` produced its
+first verified patch on production data:
+
+  - Inputs : `seforim.db.v1` (7.2 GB) → `seforim.db` (7.3 GB)
+  - Output : `patch-v1-v2.db` = **339 MiB** (4.6 % of full bundle)
+  - Manifest : 477 B JSON with sha256 + content hashes
+  - Apply target hash == `seforim.db` content hash:
+    `3a6d7dc00398294ae1987c7e8abc3791f98667933daecb7a01a8b5c88a00c434` ✅
+  - `book` upserts went from 170 (broken) → 175 (correct).
+
+This is the first time the system has produced a strictly-verified
+delta on real production data. The 339 MiB patch is shippable.
 
 ## Next steps
 
-  1. Identify which table(s) drive the hash mismatch.
-     Diagnostic: run `LogicalContentHasher` per-table on
-     target-after-apply vs `seforim.db` and bisect.
-  2. Fix the producer/applier or the FK-CASCADE side effect.
-  3. Re-run `producePatchAndVerify` → expect `✅ Patch apply verified`.
-  4. Ship v1 release notes + retire the `.v1` backup artifacts.
+  1. Commit the COALESCE → IS NOT fix and the
+     `diagnoseHashMismatch` task (the latter is a permanent
+     diagnostic tool for future regressions).
+  2. Optionally test the *client* side : start SeforimApp pointing
+     at `seforim.db.v1`, set `releaseMetaUrl` to a local file
+     server, click "Check for updates", verify the app moves to v2
+     content.
+  3. Tag a v1 release.
 
-The four shipped fixes are real production bug-fixes regardless of
-the remaining hash work — they each closed an id-stability hole
-that would have re-emerged on every release.
+Total bugs caught by this e2e run : **4** (auto-increment author/
+topic/pub_place/pub_date, Otzaria tocText reserve-without-insert,
+Sefaria alt-TOC null textId, NULL vs '' COALESCE). All caught by
+the system's own pre-checks and diagnostics (no silent drift).

@@ -143,8 +143,13 @@ class PatchDbProducer(
         val colsCsv = cols.joinToString(",") { "\"$it\"" }
         val joinCond = table.primaryKey.joinToString(" AND ") { "new.\"$it\" = prev.\"$it\"" }
         val nonPkCols = cols.filter { it !in table.primaryKey }
+        // Use SQLite's `IS NOT` so NULL is treated as a distinct value from
+        // '' and from any other column value. The previous COALESCE-based
+        // comparison conflated NULL and empty string, silently dropping
+        // upserts where a column toggled between NULL and '' (or vice
+        // versa) — caught by the real-data v1→v2 e2e on book.heShortDesc.
         val diffPredicate = if (nonPkCols.isEmpty()) "FALSE" else nonPkCols.joinToString(" OR ") {
-            "COALESCE(new.\"$it\", '') <> COALESCE(prev.\"$it\", '')"
+            "new.\"$it\" IS NOT prev.\"$it\""
         }
         // First PK column is enough to detect "prev row absent".
         val firstPk = table.primaryKey.first()
@@ -196,7 +201,7 @@ class PatchDbProducer(
                 val firstUnique = uniqueCols.first()
                 val joinUnique = uniqueCols.joinToString(" AND ") { "new.\"$it\" = prev.\"$it\"" }
                 val pkDiffers = pkCols.joinToString(" OR ") {
-                    "COALESCE(new.\"$it\", '') <> COALESCE(prev.\"$it\", '')"
+                    "new.\"$it\" IS NOT prev.\"$it\""
                 }
                 val selectCols = (pkCols + uniqueCols).joinToString(",") { "new.\"$it\" AS new_$it" } +
                     "," + pkCols.joinToString(",") { "prev.\"$it\" AS prev_$it" }

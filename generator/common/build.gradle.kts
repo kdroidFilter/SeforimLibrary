@@ -76,3 +76,18 @@ tasks.register<JavaExec>("producePatchAndVerify") {
 
     jvmArgs = listOf("-Xmx10g", "-XX:+UseG1GC")
 }
+
+tasks.register<JavaExec>("diagnoseHashMismatch") {
+    group = "verification"
+    description = "Apply a patch.db onto a copy of prevDb and report which tables hash-differ from newDb."
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.common.patch.DiagnoseHashMismatchCliKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+    val prev = project.findProperty("prevDb") as String? ?: error("-PprevDb= missing")
+    val new = project.findProperty("newDb") as String? ?: error("-PnewDb= missing")
+    val patch = project.findProperty("patch") as String? ?: error("-Ppatch= missing")
+    systemProperty("prevDb", prev)
+    systemProperty("newDb", new)
+    systemProperty("patch", patch)
+    jvmArgs = listOf("-Xmx10g", "-XX:+UseG1GC")
+}
