@@ -217,15 +217,28 @@ class SefariaDirectImporter(
             // Detect teamim and nekudot in book lines
             val (hasTeamim, hasNekudot) = detectTeamimAndNekudot(payload.lines)
 
+            // Pre-resolve author + pubDate IDs through the IdAllocator so they
+            // stay stable across builds (without this, INSERT OR IGNORE INTO author
+            // would assign a fresh auto-increment id on every build and break the
+            // delta producer's secondary-UNIQUE collision pre-check).
+            val resolvedAuthors = payload.authors.map { name ->
+                Author(id = bindings.upsertAuthor(name), name = name)
+            }
+            val resolvedPubDates = payload.pubDates.map { pd ->
+                io.github.kdroidfilter.seforimlibrary.core.models.PubDate(
+                    id = bindings.upsertPubDate(pd.date),
+                    date = pd.date,
+                )
+            }
             val book = Book(
                 id = bookId,
                 categoryId = catId,
                 sourceId = sourceId,
                 title = payload.heTitle,
                 heRef = payload.heTitle,
-                authors = payload.authors.map { Author(name = it) },
+                authors = resolvedAuthors,
                 pubPlaces = emptyList(),
-                pubDates = payload.pubDates,
+                pubDates = resolvedPubDates,
                 heShortDesc = payload.description,
                 notesContent = null,
                 order = bookOrder,

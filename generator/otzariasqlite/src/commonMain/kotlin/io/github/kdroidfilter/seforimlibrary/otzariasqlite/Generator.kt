@@ -773,19 +773,17 @@ class DatabaseGenerator(
         val currentBookId = allocator.bookId(srcName, title)
         logger.d { "Assigning ID $currentBookId to book '$title' (source=$srcName) with categoryId: $categoryId" }
 
-        // Create author list if author is available in metadata
+        // Pre-resolve author / pubPlace / pubDate IDs through the IdAllocator
+        // so they remain stable across builds (required for the delta producer's
+        // secondary-UNIQUE collision pre-check).
         val authors = meta?.author?.let { authorName ->
-            listOf(Author(name = authorName))
+            listOf(Author(id = bindings.upsertAuthor(authorName), name = authorName))
         } ?: emptyList()
-
-        // Create publication places list if pubPlace is available in metadata
         val pubPlaces = meta?.pubPlace?.let { pubPlaceName ->
-            listOf(PubPlace(name = pubPlaceName))
+            listOf(PubPlace(id = bindings.upsertPubPlace(pubPlaceName), name = pubPlaceName))
         } ?: emptyList()
-
-        // Create publication dates list if pubDate is available in metadata
         val pubDates = meta?.pubDate?.let { pubDateValue ->
-            listOf(PubDate(date = pubDateValue))
+            listOf(PubDate(id = bindings.upsertPubDate(pubDateValue), date = pubDateValue))
         } ?: emptyList()
 
         // Detect companion notes file named 'הערות על <title>.txt' in the same directory
@@ -1489,13 +1487,14 @@ class DatabaseGenerator(
      * @param path The path to the book file
      * @return A list of topics extracted from the path
      */
-    private fun extractTopics(path: Path): List<Topic> {
+    private suspend fun extractTopics(path: Path): List<Topic> {
         // Extract topics from the path
         val parts = path.toString().split(File.separator)
         val topicNames = parts.dropLast(1).takeLast(2)
 
+        // Pre-resolve through IdAllocator so topic IDs stay stable across builds.
         return topicNames.map { name ->
-            Topic(name = name)
+            Topic(id = bindings.upsertTopic(name), name = name)
         }
     }
 
