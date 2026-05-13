@@ -92,6 +92,31 @@ tasks.register("publishRelease") {
     description = "generateSeforimDb + producePatchAndVerify (+ release_meta.json upsert)."
     dependsOn("generateSeforimDb")
     finalizedBy(":generator-common:producePatchAndVerify")
+    // Operator footgun guard: if -PprevReleaseDb is set we're producing a
+    // delta against a previous release, which requires the IdAllocator to
+    // be seeded from that release's build_state. Without it, the allocator
+    // starts fresh and assigns brand-new ids to every row — the producer
+    // would then emit a "delta" containing the entire corpus, useless as
+    // an incremental patch. Fail fast with the path the operator forgot.
+    doFirst {
+        val prev = project.findProperty("prevReleaseDb") as String?
+        if (prev != null) {
+            val explicit = System.getProperty("buildStatePath")
+                ?: System.getenv("BUILD_STATE_PATH")
+            val buildStateFile = if (explicit != null) {
+                file(explicit)
+            } else {
+                layout.buildDirectory.file("seforim.db.buildstate").get().asFile
+            }
+            check(buildStateFile.exists()) {
+                "publishRelease: -PprevReleaseDb=$prev was set but " +
+                    "$buildStateFile is missing. Copy the previous release's " +
+                    "seforim.db.buildstate into place (see RELEASE.md) — without it, " +
+                    "the IdAllocator restarts from scratch and produces a patch with " +
+                    "every id renumbered."
+            }
+        }
+    }
 }
 project(":generator-common").tasks.matching { it.name == "producePatchAndVerify" }.configureEach {
     // Use the absolute task path so the lookup succeeds when this task is
