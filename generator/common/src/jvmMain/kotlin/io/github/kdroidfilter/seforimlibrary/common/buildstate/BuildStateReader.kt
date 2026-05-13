@@ -43,10 +43,12 @@ class BuildStateReader(private val logger: Logger = Logger.withTag("BuildStateRe
         val altEntries = readAltTocEntries(conn)
         val links = readLinks(conn)
         val aliases = readBookAliases(conn)
+        val sourceHashes = readSourceHashes(conn)
 
         logger.i {
             "Loaded build_state: ${books.size} books, ${lines.size} lines, " +
-                "${tocEntries.size} tocEntries, ${links.size} links, ${aliases.size} aliases"
+                "${tocEntries.size} tocEntries, ${links.size} links, ${aliases.size} aliases, " +
+                "${sourceHashes.size} sourceHashes"
         }
         return BuildStateSnapshot(
             schemaVersion = schemaVersion,
@@ -60,7 +62,24 @@ class BuildStateReader(private val logger: Logger = Logger.withTag("BuildStateRe
             altTocEntries = altEntries,
             links = links,
             bookAliases = aliases,
+            sourceHashes = sourceHashes,
         )
+    }
+
+    private fun readSourceHashes(conn: Connection): Map<BookKey, BookSourceHash> {
+        if (!tableExists(conn, "book_source_hashes")) return emptyMap()
+        val out = HashMap<BookKey, BookSourceHash>()
+        conn.createStatement().use { st ->
+            st.executeQuery(
+                "SELECT source_name, canonical_he_title, source_hash, last_seen_version FROM book_source_hashes",
+            ).use { rs ->
+                while (rs.next()) {
+                    out[BookKey(rs.getString(1), rs.getString(2))] =
+                        BookSourceHash(rs.getBytes(3), rs.getInt(4))
+                }
+            }
+        }
+        return out
     }
 
     private fun readMeta(conn: Connection): Map<String, String> {

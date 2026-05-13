@@ -1,6 +1,9 @@
 package io.github.kdroidfilter.seforimlibrary.otzariasqlite
 
 import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookKey
+import io.github.kdroidfilter.seforimlibrary.common.changes.OtzariaSourceHashComputer
+import io.github.kdroidfilter.seforimlibrary.common.changes.TouchedBookDetector
 import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
 import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocator
 import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings
@@ -38,6 +41,7 @@ class DatabaseGenerator(
     private val acronymDbPath: String? = null,
     private val filterSourcesForLinks: Boolean = true,
     private val allocator: IdAllocator = InMemoryIdAllocator.load(path = null),
+    private val buildVersion: Int = 0,
 ) {
 
     private val logger = Logger.withTag("DatabaseGenerator")
@@ -219,6 +223,26 @@ class DatabaseGenerator(
         // Intentionally empty.
     }
 
+    // Source hashes captured by the Phase 2 detector at the start of import.
+    // Recorded onto the IdAllocator at the end of import (see [recordSourceHashesAtEndOfImport]).
+    private var otzariaSourceHashes: Map<
+        BookKey,
+        io.github.kdroidfilter.seforimlibrary.common.buildstate.BookSourceHash,
+    > = emptyMap()
+
+    /** Public hook called by the importer once all Otzaria books are inserted. */
+    internal fun recordSourceHashesAtEndOfImport() {
+        if (otzariaSourceHashes.isEmpty()) return
+        var recorded = 0
+        for ((key, hash) in otzariaSourceHashes) {
+            if (allocator.peekBookId(key.sourceName, key.canonicalHeTitle) != null) {
+                allocator.recordSourceHash(key, hash)
+                recorded++
+            }
+        }
+        logger.i { "Recorded source hashes for $recorded / ${otzariaSourceHashes.size} Otzaria books" }
+    }
+
 
     /**
      * Generates the database by processing metadata, directories, and links.
@@ -326,6 +350,7 @@ class DatabaseGenerator(
         logger.i { "Starting phase 1: categories/books/lines generation..." }
         try {
             initializeIdCountersFromExistingDb()
+
             // Performance PRAGMAs
             disableForeignKeys()
             repository.setSynchronousOff()
@@ -335,6 +360,32 @@ class DatabaseGenerator(
                 val metadata = loadMetadata()
                 // Load sources and create entries upfront
                 loadSourcesFromManifest()
+
+                // ─── Phase 2: touched-book detection ────────────────────────
+                // Runs after manifestSourcesByRel is loaded so the BookKey we
+                // emit matches what the importer will record below
+                // (via getSourceNameFor + normalizeBookTitle).
+                val currentSourceHashes: Map<
+                    BookKey,
+                    io.github.kdroidfilter.seforimlibrary.common.buildstate.BookSourceHash,
+                > = runCatching {
+                    OtzariaSourceHashComputer(
+                        sourceNameResolver = ::getSourceNameFor,
+                    ).compute(sourceDirectory, buildVersion)
+                }.getOrElse {
+                    logger.w(it) { "Skipping Otzaria touched-book detection: ${it.message}" }
+                    emptyMap()
+                }
+                run {
+                    val prev = currentSourceHashes.keys
+                        .mapNotNull { key -> allocator.previousSourceHash(key)?.let { key to it } }
+                        .toMap()
+                    val classification = TouchedBookDetector.classify(prev, currentSourceHashes)
+                    logger.i { "Source-hash classification (Otzaria): ${classification.summary()}" }
+                }
+                // Capture for later — recorded onto allocator at end of import.
+                otzariaSourceHashes = currentSourceHashes
+
                 precreateSourceEntries()
                 backfillAcronymsForExistingBooks()
                 val libraryPath = sourceDirectory.resolve("אוצריא")
@@ -363,6 +414,7 @@ class DatabaseGenerator(
                 logger.i { "Building category_closure table (phase 1)..." }
                 repository.rebuildCategoryClosure()
             }
+            recordSourceHashesAtEndOfImport()
         } finally {
             runCatching { enableForeignKeys() }
             runCatching { repository.setSynchronousNormal() }

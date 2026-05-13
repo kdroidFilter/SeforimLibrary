@@ -27,6 +27,8 @@ data class BuildStateSnapshot(
     // (srcLineId, tgtLineId, connectionTypeId) -> id
     val links: Map<LinkKey, Long>,
     val bookAliases: List<BookAlias>,
+    // Per-book sha256 of the source artefact (Phase 2 touched-book detection).
+    val sourceHashes: Map<BookKey, BookSourceHash>,
 ) {
     companion object {
         fun empty(): BuildStateSnapshot = BuildStateSnapshot(
@@ -41,8 +43,34 @@ data class BuildStateSnapshot(
             altTocEntries = emptyMap(),
             links = emptyMap(),
             bookAliases = emptyList(),
+            sourceHashes = emptyMap(),
         )
     }
+}
+
+/**
+ * 32-byte sha256 of the canonical source artefact for a book, paired with the
+ * build version that produced it. Compared structurally on [hash] in equality.
+ */
+class BookSourceHash(val hash: ByteArray, val lastSeenVersion: Int) {
+    init {
+        require(hash.size == 32) { "BookSourceHash must be 32 bytes (sha256), got ${hash.size}" }
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is BookSourceHash) return false
+        return lastSeenVersion == other.lastSeenVersion && hash.contentEquals(other.hash)
+    }
+
+    override fun hashCode(): Int {
+        var result = hash.contentHashCode()
+        result = 31 * result + lastSeenVersion
+        return result
+    }
+
+    override fun toString(): String =
+        "BookSourceHash(hash=${hash.joinToString("") { "%02x".format(it) }.take(16)}…, version=$lastSeenVersion)"
 }
 
 data class BookKey(val sourceName: String, val canonicalHeTitle: String)

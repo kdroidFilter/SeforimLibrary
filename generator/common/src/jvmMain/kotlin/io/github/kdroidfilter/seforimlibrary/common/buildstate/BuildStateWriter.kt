@@ -60,6 +60,27 @@ class BuildStateWriter(private val logger: Logger = Logger.withTag("BuildStateWr
         writeAltTocEntries(conn, snapshot.altTocEntries)
         writeLinks(conn, snapshot.links)
         writeAliases(conn, snapshot.bookAliases)
+        writeSourceHashes(conn, snapshot.sourceHashes)
+    }
+
+    private fun writeSourceHashes(conn: Connection, hashes: Map<BookKey, BookSourceHash>) {
+        if (hashes.isEmpty()) return
+        conn.prepareStatement(
+            """
+            INSERT INTO book_source_hashes(
+                source_name, canonical_he_title, source_hash, last_seen_version
+            ) VALUES (?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { ps ->
+            for ((key, hash) in hashes) {
+                ps.setString(1, key.sourceName)
+                ps.setString(2, key.canonicalHeTitle)
+                ps.setBytes(3, hash.hash)
+                ps.setInt(4, hash.lastSeenVersion)
+                ps.addBatch()
+            }
+            ps.executeBatch()
+        }
     }
 
     private fun writeMeta(conn: Connection, snapshot: BuildStateSnapshot) {

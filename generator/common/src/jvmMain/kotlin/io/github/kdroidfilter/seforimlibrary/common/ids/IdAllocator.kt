@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.common.ids
 
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookKey
+import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookSourceHash
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.AltTocEntryKey
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.AltTocStructureKey
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BuildStateSnapshot
@@ -48,6 +49,16 @@ interface IdAllocator {
      * assigned to [oldKey].
      */
     fun registerBookAlias(oldKey: BookKey, newKey: BookKey, atVersion: Int)
+
+    /**
+     * Records the canonical sha256 source hash for a book observed at the
+     * current build. Persisted in build_state.db and consumed by
+     * `TouchedBookDetector` on the next run.
+     */
+    fun recordSourceHash(key: BookKey, sourceHash: BookSourceHash)
+
+    /** Returns the source hash recorded in a previous build for [key], if any. */
+    fun previousSourceHash(key: BookKey): BookSourceHash?
 
     /** Stats for logging / metrics. */
     fun stats(): AllocatorStats

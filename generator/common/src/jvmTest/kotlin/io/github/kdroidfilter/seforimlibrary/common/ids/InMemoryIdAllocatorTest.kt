@@ -116,6 +116,7 @@ class InMemoryIdAllocatorTest {
             altTocEntries = emptyMap(),
             links = emptyMap(),
             bookAliases = emptyList(),
+            sourceHashes = emptyMap(),
         )
         val allocator = InMemoryIdAllocator.fromSnapshot(state)
         val freshId = allocator.bookId("Sefaria", "Y")

@@ -80,11 +80,18 @@ fun main(args: Array<String>) = runBlocking {
         logger.i { "No previous build_state at $buildStatePath — starting fresh." }
     }
 
+    // Build version: pulled from -PbuildVersion / BUILD_VERSION env, defaults to current epoch seconds.
+    val buildVersion: Int = (System.getProperty("buildVersion")
+        ?: System.getenv("BUILD_VERSION"))
+        ?.toIntOrNull()
+        ?: (System.currentTimeMillis() / 1000).toInt()
+
     try {
         val importer = SefariaDirectImporter(
             exportRoot = exportRoot,
             repository = repository,
             allocator = allocator,
+            buildVersion = buildVersion,
             logger = Logger.withTag("SefariaDirect")
         )
         importer.import()
@@ -114,6 +121,7 @@ fun main(args: Array<String>) = runBlocking {
                 extraMeta = mapOf(
                     "generator" to "sefariasqlite",
                     "generated_at" to java.time.Instant.now().toString(),
+                    "build_version" to buildVersion.toString(),
                 ),
             )
         }.onFailure { logger.w(it) { "Failed to write build_state to $buildStatePath" } }

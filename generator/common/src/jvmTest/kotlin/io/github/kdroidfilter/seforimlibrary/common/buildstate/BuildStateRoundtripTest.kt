@@ -60,6 +60,10 @@ class BuildStateRoundtripTest {
                     detectedAtVersion = 42,
                 ),
             ),
+            sourceHashes = mapOf(
+                BookKey("Sefaria", "בראשית") to BookSourceHash(ByteArray(32) { 1 }, 41),
+                BookKey("Sefaria", "שמות")   to BookSourceHash(ByteArray(32) { 2 }, 42),
+            ),
         )
 
         val target = tmp.newFolder().toPath().resolve("build_state.db")
@@ -83,6 +87,12 @@ class BuildStateRoundtripTest {
         assertEquals(original.lines.size, reloaded.lines.size)
         for ((k, v) in original.lines) {
             assertEquals(v, reloaded.lines[k], "line id mismatch for $k")
+        }
+
+        // BookSourceHash also has structural equals on the byte array.
+        assertEquals(original.sourceHashes.size, reloaded.sourceHashes.size)
+        for ((k, v) in original.sourceHashes) {
+            assertEquals(v, reloaded.sourceHashes[k], "source hash mismatch for $k")
         }
     }
 

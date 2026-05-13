@@ -5,6 +5,7 @@ import io.github.kdroidfilter.seforimlibrary.common.buildstate.AltTocEntryKey
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.AltTocStructureKey
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookAlias
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookKey
+import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookSourceHash
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BuildStateReader
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BuildStateSchema
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BuildStateSnapshot
@@ -52,6 +53,12 @@ class InMemoryIdAllocator private constructor(
     private val bookAliases = ConcurrentHashMap<BookKey, BookAlias>().apply {
         previous.bookAliases.forEach { put(it.oldKey, it) }
     }
+
+    // Snapshot of source hashes recorded by previous builds; immutable in this run.
+    private val previousSourceHashes: Map<BookKey, BookSourceHash> = previous.sourceHashes
+    // Source hashes recorded during the current run; merged with `previousSourceHashes`
+    // for unaffected keys when [snapshotTo] is called.
+    private val currentSourceHashes = ConcurrentHashMap<BookKey, BookSourceHash>()
 
     // Per-table counters: max(snapshot.next_id, max(known ids)+1, 1).
     private val counters: Map<IdTable, AtomicLong> = run {
@@ -194,6 +201,13 @@ class InMemoryIdAllocator private constructor(
         logger.i { "Registered book alias: $oldKey -> $newKey (id=$existing, version=$atVersion)" }
     }
 
+    override fun recordSourceHash(key: BookKey, sourceHash: BookSourceHash) {
+        currentSourceHashes[key] = sourceHash
+    }
+
+    override fun previousSourceHash(key: BookKey): BookSourceHash? =
+        previousSourceHashes[key]
+
     override fun stats(): AllocatorStats {
         val perTable = IdTable.values().associateWith { table ->
             val reused = reusedCount.getValue(table).get()
@@ -204,6 +218,12 @@ class InMemoryIdAllocator private constructor(
     }
 
     override fun snapshotTo(target: Path, extraMeta: Map<String, String>) {
+        // Merge previous source hashes with the ones recorded this run.
+        // Current run wins (touched / added books emit fresh hashes); previous
+        // hashes for unaffected keys are preserved so future builds still see them.
+        val mergedSourceHashes = HashMap<BookKey, BookSourceHash>(previousSourceHashes)
+        mergedSourceHashes.putAll(currentSourceHashes)
+
         val snapshot = BuildStateSnapshot(
             schemaVersion = BuildStateSchema.CURRENT_VERSION,
             meta = previousMeta + extraMeta,
@@ -216,6 +236,7 @@ class InMemoryIdAllocator private constructor(
             altTocEntries = altTocEntries.toMap(),
             links = links.toMap(),
             bookAliases = bookAliases.values.toList(),
+            sourceHashes = mergedSourceHashes,
         )
         BuildStateWriter(logger).write(snapshot, target)
         val stats = stats()

@@ -133,5 +133,20 @@ internal object BuildStateSchema {
             PRIMARY KEY (old_source_name, old_canonical_he_title)
         )
         """.trimIndent(),
+
+        // ─── Per-book source content hashes (touched-book detection — §6.2) ────
+        // `source_hash` is a 32-byte sha256 of the canonical source artefact for
+        // the book (Sefaria: merged.json; Otzaria: txt manifest entry).
+        // `last_seen_version` records the build version that last observed this
+        // hash for the book — used to prune stale entries.
+        """
+        CREATE TABLE IF NOT EXISTS book_source_hashes (
+            source_name           TEXT    NOT NULL,
+            canonical_he_title    TEXT    NOT NULL,
+            source_hash           BLOB    NOT NULL,
+            last_seen_version     INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (source_name, canonical_he_title)
+        )
+        """.trimIndent(),
     )
 }

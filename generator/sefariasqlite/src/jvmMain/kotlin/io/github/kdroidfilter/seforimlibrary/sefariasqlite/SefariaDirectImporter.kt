@@ -1,6 +1,9 @@
 package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
 import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookKey
+import io.github.kdroidfilter.seforimlibrary.common.changes.SefariaSourceHashComputer
+import io.github.kdroidfilter.seforimlibrary.common.changes.TouchedBookDetector
 import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
 import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocator
 import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings
@@ -28,6 +31,7 @@ class SefariaDirectImporter(
     private val exportRoot: Path,
     private val repository: SeforimRepository,
     private val allocator: IdAllocator = InMemoryIdAllocator.load(path = null),
+    private val buildVersion: Int = 0,
     private val logger: Logger = Logger.withTag("SefariaDirectImporter")
 ) {
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
@@ -38,6 +42,21 @@ class SefariaDirectImporter(
         val dbRoot = findDatabaseExportRoot(exportRoot)
         val jsonDir = dbRoot.resolve("json")
         val schemaDir = dbRoot.resolve("schemas")
+
+        // ─── Phase 2: touched-book detection ───────────────────────────────────
+        // Computes a per-book sha256 of the source artefact and classifies books
+        // against the previous build's hashes. The classification is logged for
+        // observability; the fast-path that skips unchanged books is Phase 2.5.
+        // Source hashes are recorded on the allocator at the END of import() so
+        // the snapshot persists them for the next build.
+        val currentSourceHashes = SefariaSourceHashComputer(sourceName).compute(dbRoot, buildVersion)
+        run {
+            val previousHashes = currentSourceHashes.keys
+                .mapNotNull { key -> allocator.previousSourceHash(key)?.let { key to it } }
+                .toMap()
+            val classification = TouchedBookDetector.classify(previousHashes, currentSourceHashes)
+            logger.i { "Source-hash classification: ${classification.summary()}" }
+        }
 
         // Parse table of contents for ordering
         val (categoryOrders, bookOrders) = parseTableOfContentsOrders(dbRoot, json, logger)
@@ -356,6 +375,19 @@ class SefariaDirectImporter(
 
         repository.rebuildCategoryClosure()
         linksImporter.updateBookHasLinks()
+
+        // Persist current source hashes for next build's touched-book detection.
+        // We only record hashes for books that actually went through the importer
+        // (i.e. whose natural key now exists in the allocator), so books that were
+        // filtered out (blacklists, dedup vs Sefaria) don't get spurious hashes.
+        var recorded = 0
+        for ((key, hash) in currentSourceHashes) {
+            if (allocator.peekBookId(key.sourceName, key.canonicalHeTitle) != null) {
+                allocator.recordSourceHash(key, hash)
+                recorded++
+            }
+        }
+        logger.i { "Recorded source hashes for $recorded / ${currentSourceHashes.size} Sefaria books" }
 
         logger.i { "Direct Sefaria import completed." }
     }

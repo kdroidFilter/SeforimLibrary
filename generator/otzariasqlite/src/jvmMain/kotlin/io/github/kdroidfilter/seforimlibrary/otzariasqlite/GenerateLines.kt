@@ -131,11 +131,17 @@ fun main(args: Array<String>) = runBlocking {
     val allocator = InMemoryIdAllocator.load(prev, Logger.withTag("IdAllocator"))
 
     try {
+        val buildVersion: Int = (System.getProperty("buildVersion")
+            ?: System.getenv("BUILD_VERSION"))
+            ?.toIntOrNull()
+            ?: (System.currentTimeMillis() / 1000).toInt()
+
         val generator = DatabaseGenerator(
             sourceDirectory = Paths.get(sourceDir),
             repository = repository,
             acronymDbPath = acronymDbPath,
             allocator = allocator,
+            buildVersion = buildVersion,
         )
         generator.generateLinesOnly()
         if (useMemoryDb) {
