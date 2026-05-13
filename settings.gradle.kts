@@ -38,6 +38,7 @@ include(":packaging")
 include(":sefariasqlite")
 include(":otzariasqlite")
 include(":generator-common")
+include(":delta-updater")
 
 project(":catalog").projectDir = file("generator/catalog")
 project(":searchindex").projectDir = file("generator/searchindex")
