@@ -104,7 +104,11 @@ class RenameAliasFlowTest {
     fun `source hashes round-trip through snapshot reload`() {
         val statePath = tmp.newFolder().toPath().resolve("build_state.db")
         val alloc1 = InMemoryIdAllocator.load(path = null)
+        // The Phase 8 GC at snapshot-time drops sourceHashes whose BookKey
+        // doesn't appear in the books map (orphans). Allocate the book id
+        // first so the hash survives the snapshot.
         val key = BookKey("Otzaria", "Foo")
+        alloc1.bookId(key.sourceName, key.canonicalHeTitle)
         alloc1.recordSourceHash(key, hash32(42))
         alloc1.snapshotTo(statePath)
 

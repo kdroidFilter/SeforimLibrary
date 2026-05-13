@@ -224,6 +224,33 @@ class InMemoryIdAllocator private constructor(
         val mergedSourceHashes = HashMap<BookKey, BookSourceHash>(previousSourceHashes)
         mergedSourceHashes.putAll(currentSourceHashes)
 
+        // ─── Phase 8 orphan GC ─────────────────────────────────────────────
+        // Drop any composite-keyed entries whose bookId / structureId is no
+        // longer present in this build. Without this pass, removed books leak
+        // their line/tocEntry/link/altToc entries into build_state forever.
+        // Source hashes for removed books are pruned along with them — a
+        // future re-add would be classified as `added`, not `unchanged`.
+        val liveBookIds = books.values.toHashSet()
+        val gcLines = lines.entries.removeIfMatches { it.key.bookId !in liveBookIds }
+        val gcTocs = tocEntries.entries.removeIfMatches { it.key.bookId !in liveBookIds }
+        val gcAltStructs = altTocStructures.entries.removeIfMatches { it.key.bookId !in liveBookIds }
+        val liveStructureIds = altTocStructures.values.toHashSet()
+        val gcAltEntries = altTocEntries.entries.removeIfMatches { it.key.structureId !in liveStructureIds }
+        val liveLineIds = lines.values.toHashSet()
+        val gcLinks = links.entries.removeIfMatches { k ->
+            k.key.srcLineId !in liveLineIds || k.key.tgtLineId !in liveLineIds
+        }
+        val liveBookKeys = books.keys.toHashSet()
+        val gcSourceHashes = mergedSourceHashes.entries.removeIfMatches { it.key !in liveBookKeys }
+        if (gcLines + gcTocs + gcAltStructs + gcAltEntries + gcLinks + gcSourceHashes > 0) {
+            logger.i {
+                "Phase-8 GC pruned orphan entries: " +
+                    "lines=$gcLines, tocEntries=$gcTocs, " +
+                    "altStructures=$gcAltStructs, altEntries=$gcAltEntries, " +
+                    "links=$gcLinks, sourceHashes=$gcSourceHashes"
+            }
+        }
+
         val snapshot = BuildStateSnapshot(
             schemaVersion = BuildStateSchema.CURRENT_VERSION,
             meta = previousMeta + extraMeta,
@@ -246,6 +273,24 @@ class InMemoryIdAllocator private constructor(
                 .entries
                 .joinToString { (t, s) -> "${t.tableName}(reused=${s.reused}, fresh=${s.freshlyAllocated})" }
         }
+    }
+
+    /**
+     * Removes entries matching [predicate] from this mutable entry set and
+     * returns how many it removed. Avoids the explicit double-iteration
+     * (collect candidates, then remove) that the call sites would otherwise
+     * need for each map.
+     */
+    private inline fun <K, V> MutableSet<MutableMap.MutableEntry<K, V>>.removeIfMatches(
+        crossinline predicate: (MutableMap.MutableEntry<K, V>) -> Boolean,
+    ): Int {
+        var count = 0
+        val it = iterator()
+        while (it.hasNext()) {
+            val e = it.next()
+            if (predicate(e)) { it.remove(); count++ }
+        }
+        return count
     }
 
     companion object {
