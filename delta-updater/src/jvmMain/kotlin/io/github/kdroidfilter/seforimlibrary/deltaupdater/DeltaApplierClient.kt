@@ -56,10 +56,30 @@ class DeltaApplierClient(
         assertEnoughFreeSpace(seforimDb, patchDb)
 
         // 3. File backup + marker so recoverIfNeeded() can roll back after a crash.
+        //    The marker doubles as a concurrency lock: if it already exists,
+        //    either (a) a previous run crashed and recoverIfNeeded() wasn't
+        //    called yet, or (b) another apply is in flight. Both cases mean
+        //    "do not run a fresh apply right now". Callers must either invoke
+        //    recoverIfNeeded() at boot or serialise their apply calls.
         val backup = seforimDb.resolveSibling("${seforimDb.fileName}.backup")
         val marker = seforimDb.resolveSibling("${seforimDb.fileName}.applying")
+        if (Files.exists(marker)) {
+            throw IllegalStateException(
+                "Apply marker already present at $marker: another apply is in flight or " +
+                    "a previous run crashed without recovery. Call recoverIfNeeded() at app " +
+                    "startup, or wait for the in-flight apply to finish, before retrying.",
+            )
+        }
         Files.copy(seforimDb, backup, StandardCopyOption.REPLACE_EXISTING)
-        Files.writeString(marker, "from=${manifest.fromVersion} to=${manifest.toVersion}")
+        // Use CREATE_NEW so two concurrent threads that both passed the
+        // existence check above can't both end up holding the marker — the
+        // second writeString call will throw FileAlreadyExistsException.
+        Files.writeString(
+            marker,
+            "from=${manifest.fromVersion} to=${manifest.toVersion}",
+            java.nio.file.StandardOpenOption.CREATE_NEW,
+            java.nio.file.StandardOpenOption.WRITE,
+        )
         logger.i { "Backup written to $backup, marker at $marker" }
 
         try {

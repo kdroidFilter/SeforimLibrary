@@ -107,6 +107,41 @@ class DeltaApplierClientRecoveryTest {
     }
 
     @Test
+    fun `apply refuses to run when marker already exists`() {
+        // Build a real DB so the from-hash check would pass, then pre-create
+        // the marker to simulate a concurrent apply or an un-recovered crash.
+        val seforim = tmp.newFile("seforim.db").toPath()
+        Files.delete(seforim)
+        JdbcSqliteDriver("jdbc:sqlite:${seforim.toAbsolutePath()}").use { driver ->
+            SeforimDb.Schema.create(driver)
+        }
+        val fromHash = DriverManager.getConnection("jdbc:sqlite:${seforim.toAbsolutePath()}").use {
+            LogicalContentHasher().compute(it)
+        }
+        val marker = seforim.resolveSibling("seforim.db.applying")
+        Files.writeString(marker, "from=1 to=2")
+
+        val patch = tmp.newFile("patch.db").toPath()
+        Files.writeString(patch, "irrelevant")
+
+        val manifest = DeltaManifest(
+            fromVersion = 1, toVersion = 2,
+            fromSchemaVersion = 1, toSchemaVersion = 1,
+            fromContentHash = fromHash, toContentHash = "x",
+            patchFiles = emptyList(),
+        )
+
+        val ex = assertFailsWith<IllegalStateException> {
+            DeltaApplierClient().apply(seforim, patch, manifest)
+        }
+        val msg = ex.message.orEmpty()
+        assertTrue("marker already present" in msg, "error must name the concurrency cause: $msg")
+        // Pre-existing marker is preserved — the second caller didn't trample
+        // the first caller's bookkeeping.
+        assertTrue(Files.exists(marker))
+    }
+
+    @Test
     fun `assertEnoughFreeSpace passes on a healthy partition`() {
         // Sanity check: the function shouldn't throw on a normal tmpfs/disk
         // where free space comfortably exceeds the tiny test files.
