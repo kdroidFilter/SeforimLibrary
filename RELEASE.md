@@ -53,6 +53,17 @@ invariant before publishing: it applies the patch onto a fresh copy of
 the new `seforim.db`'s hash. A mismatch aborts publishing — never ship
 a delta that can't be applied cleanly.
 
+The producer also runs a **secondary-UNIQUE collision pre-check**: for
+any table with a UNIQUE constraint on a non-PK column (e.g. `topic.name`),
+it refuses to produce a patch whose upserts would introduce the same
+unique value at a different primary-key than `prev` already carries. In
+practice this catches the operator error of pointing `prevReleaseDb` at
+a database that **wasn't** built from the same `build_state.db` lineage
+as the current build — the patch would otherwise crash mid-transaction
+in the client's applier with an opaque `UNIQUE constraint failed` error.
+If the pre-check trips, double-check that `seforim.db.buildstate` was
+seeded from the same release line that produced `prevReleaseDb`.
+
 ## Step-by-step (if you prefer staged commands)
 
 ```bash

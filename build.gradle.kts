@@ -94,7 +94,10 @@ tasks.register("publishRelease") {
     finalizedBy(":generator-common:producePatchAndVerify")
 }
 project(":generator-common").tasks.matching { it.name == "producePatchAndVerify" }.configureEach {
-    mustRunAfter("generateSeforimDb")
+    // Use the absolute task path so the lookup succeeds when this task is
+    // invoked directly (e.g. for a producer-only e2e), without requiring
+    // generateSeforimDb to exist in :generator-common.
+    mustRunAfter(rootProject.tasks.named("generateSeforimDb"))
     // Map the umbrella task's -P props onto the CLI's gradle props.
     val prev = project.findProperty("prevReleaseDb") as String?
     val from = project.findProperty("fromVersion") as String?

@@ -73,6 +73,13 @@ class PatchDbProducer(
                 deleteCounts[table.name] = scanDeletes(conn, table)
             }
 
+            // Fail fast on secondary-UNIQUE collisions: catches the case
+            // where prev and new were generated from different build_state.db
+            // lineages (e.g. same `topic.name` allocated under different ids),
+            // which would otherwise blow up mid-transaction in the applier
+            // with an opaque "UNIQUE constraint failed" error.
+            assertNoSecondaryUniqueCollisions(conn)
+
             // Commit BEFORE detach so SQLite isn't holding locks on the
             // attached DBs through an open transaction.
             conn.commit()
@@ -165,6 +172,97 @@ class PatchDbProducer(
             WHERE new."$firstPk" IS NULL
         """.trimIndent()
         return conn.createStatement().use { it.executeUpdate(sql) }
+    }
+
+    /**
+     * For every patch table that has at least one secondary UNIQUE index
+     * (i.e. a UNIQUE on a non-PK column set), verify that no row in
+     * `upsert_<table>` would collide with an existing row in `prev.<table>`
+     * on those unique columns at a different primary-key value.
+     *
+     * Such collisions are almost always caused by feeding the producer two
+     * `seforim.db` files that didn't share an `IdAllocator` lineage —
+     * surfacing them here gives the operator a clear, actionable error
+     * instead of a mid-transaction crash in [PatchApplier].
+     */
+    private fun assertNoSecondaryUniqueCollisions(conn: Connection) {
+        for (table in PATCH_TABLES_IN_FK_ORDER) {
+            if (!tableExists(conn, "new", table.name)) continue
+            if (!tableExists(conn, "main", "upsert_${table.name}")) continue
+            val pkCols = table.primaryKey
+            if (pkCols.isEmpty()) continue
+            val uniqueGroups = readSecondaryUniqueGroups(conn, "new", table.name, pkCols.toSet())
+            for (uniqueCols in uniqueGroups) {
+                val firstUnique = uniqueCols.first()
+                val joinUnique = uniqueCols.joinToString(" AND ") { "new.\"$it\" = prev.\"$it\"" }
+                val pkDiffers = pkCols.joinToString(" OR ") {
+                    "COALESCE(new.\"$it\", '') <> COALESCE(prev.\"$it\", '')"
+                }
+                val selectCols = (pkCols + uniqueCols).joinToString(",") { "new.\"$it\" AS new_$it" } +
+                    "," + pkCols.joinToString(",") { "prev.\"$it\" AS prev_$it" }
+                val sql = """
+                    SELECT $selectCols
+                    FROM main."upsert_${table.name}" AS new
+                    JOIN prev."${table.name}" AS prev ON $joinUnique
+                    WHERE prev."$firstUnique" IS NOT NULL AND ($pkDiffers)
+                    LIMIT 1
+                """.trimIndent()
+                conn.createStatement().use { st ->
+                    st.executeQuery(sql).use { rs ->
+                        if (rs.next()) {
+                            val meta = rs.metaData
+                            val sample = (1..meta.columnCount).joinToString(", ") {
+                                "${meta.getColumnLabel(it)}=${rs.getObject(it)}"
+                            }
+                            error(
+                                "Secondary UNIQUE collision detected in '${table.name}' on " +
+                                    "(${uniqueCols.joinToString(", ")}): a row exists in prev " +
+                                    "with a different PK than the row being upserted. " +
+                                    "This usually means prev and new were generated from " +
+                                    "different build_state.db lineages. Sample: $sample",
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Reads `PRAGMA index_list` / `PRAGMA index_info` for a table and
+     * returns the column-name sets of every secondary (non-PK) UNIQUE
+     * index. Auto-indexes named `sqlite_autoindex_<table>_1` that back
+     * the PRIMARY KEY are filtered out.
+     */
+    private fun readSecondaryUniqueGroups(
+        conn: Connection,
+        schemaAlias: String,
+        table: String,
+        pkColSet: Set<String>,
+    ): List<List<String>> {
+        val out = ArrayList<List<String>>()
+        val indexNames = ArrayList<String>()
+        conn.createStatement().use { st ->
+            st.executeQuery("PRAGMA $schemaAlias.index_list(\"$table\")").use { rs ->
+                while (rs.next()) {
+                    val unique = rs.getInt("unique") == 1
+                    if (unique) indexNames += rs.getString("name")
+                }
+            }
+        }
+        for (idx in indexNames) {
+            val cols = ArrayList<String>()
+            conn.createStatement().use { st ->
+                st.executeQuery("PRAGMA $schemaAlias.index_info(\"$idx\")").use { rs ->
+                    while (rs.next()) cols += rs.getString("name")
+                }
+            }
+            if (cols.isEmpty()) continue
+            // Skip the index that backs the primary key.
+            if (cols.toSet() == pkColSet) continue
+            out += cols
+        }
+        return out
     }
 
     private fun tableExists(conn: Connection, schema: String, name: String): Boolean {
