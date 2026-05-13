@@ -71,10 +71,11 @@ Zayit/
 
 | | Count |
 |---|---:|
-| Phases implemented | 8 (1, 2, 3, 4, 4.5, 5, 6, 8) |
-| Unit tests across all modules | ~100 |
+| Phases implemented | 9 (1, 2, 3, 4, 4.5, 5, 6, 7, 8) |
+| Unit tests across all modules | ~115 |
 | End-to-end pipeline runs | 7 (against real 7 GB Sefaria + Otzaria) |
 | Validation reports (`PHASE*_VALIDATION.md`) | 5 |
+| Adversarial-audit hardening fixes | 16 |
 | Operator runbook (`RELEASE.md`) | 1 |
 | Lines of new production code | ~4,000 |
 | Branches PR-ready | 2 |
@@ -85,6 +86,35 @@ Zayit/
     https://github.com/kdroidFilter/SeforimLibrary/tree/feat/delta-stable-ids
   - **Zayit** : `feat/delta-update-client`
     https://github.com/kdroidFilter/Zayit/tree/feat/delta-update-client
+
+## Adversarial-audit hardening (Phase 7)
+
+Sixteen bugs caught and fixed through deliberate adversarial code review.
+Each one is something that could have surfaced in production but wasn't
+exercised by the happy-path tests.
+
+| Layer | Bug class | Commit |
+|-------|-----------|--------|
+| Producer | Mismatched build_state.db lineage → broken patch slips through verify | `4cf7347` |
+| Producer | `release_meta.json` half-written → clients see partial JSON | `3affa0f` |
+| Producer | `publishRelease` without `seforim.db.buildstate` → giant patch with every id renumbered | `e0f5774` |
+| Producer | `producePatchAndVerify` errors instead of skipping on first release | `00f5e25` |
+| Wire | CDN returns 200 to a Range request → file corruption | `aaff468` |
+| Wire | Hung CDN → client blocks forever (default JVM HTTP timeouts) | `29fc24b` |
+| Wire | Server has no releases yet (404) → misleading UI error | `6d31814` |
+| Applier | ENOSPC mid-backup → truncated backup → boot recovery corrupts live DB | `765db14` |
+| Applier | In-process restore leaves marker → misleading "recovered" log on next boot | `9d5b813` |
+| Applier | Concurrent apply / un-recovered crash trampling backup | `f97e41e` |
+| Applier | Patch with newer `schema_version` silently mis-applied | `0412cd7` |
+| Applier | Manifest's `fromSchemaVersion` never enforced → mixed-schema DB possible | `3aad596` |
+| Applier | JDBC connection leak on pre-apply content hash check | `59fc290` |
+| Orchestrator | SQLite-vs-Lucene divergence on post-commit failure → only recovered on next boot | `9d62414` |
+| Orchestrator | Lucene IndexWriter never committed/closed → updates silently dropped | `c5c2d9c` + `67403882` |
+| Orchestrator | Regression-coverage gap: happy-path close not asserted | `c694081` + `ef15f04b` |
+
+All sixteen are backed by tests: localhost HTTP servers for wire bugs,
+real SeforimDb fixtures for applier bugs, real producer output for the
+manifest / lineage bugs.
 
 ## Open items (not blocking shipping)
 
