@@ -38,6 +38,25 @@ tasks.register<JavaExec>("producePatchAndVerify") {
     mainClass.set("io.github.kdroidfilter.seforimlibrary.common.patch.PatchPipelineCliKt")
     classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
 
+    // Skip cleanly when no previous release was supplied — this is the
+    // first-release path, where there's no prior DB to diff against.
+    // Without this, publishRelease for a v1 release would fail at the
+    // finalizedBy step with a confusing "prev db missing" error.
+    // Capture properties at config time so onlyIf {} stays config-cache safe.
+    val hasPrevReleaseDb = project.findProperty("prevDb") != null ||
+        project.findProperty("prevReleaseDb") != null ||
+        rootProject.findProperty("prevReleaseDb") != null
+    onlyIf {
+        if (!hasPrevReleaseDb) {
+            logger.lifecycle(
+                "producePatchAndVerify: no prevDb / prevReleaseDb supplied — skipping " +
+                    "(first release? ship the full bundle and re-run with -PprevReleaseDb " +
+                    "next time)."
+            )
+        }
+        hasPrevReleaseDb
+    }
+
     val prev = project.findProperty("prevDb") as String?
     val new = project.findProperty("newDb") as String?
     val out = project.findProperty("out") as String?
