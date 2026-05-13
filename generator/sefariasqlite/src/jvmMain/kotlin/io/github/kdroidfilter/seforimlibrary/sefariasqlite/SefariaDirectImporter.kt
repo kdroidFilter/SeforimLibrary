@@ -429,9 +429,13 @@ private fun detectTeamimAndNekudot(lines: List<String>): Pair<Boolean, Boolean> 
     var hasTeamim = false
     var hasNekudot = false
     for (line in lines) {
-        if (!hasTeamim && HebrewTextUtils.containsTeamim(line)) hasTeamim = true
-        if (!hasNekudot && HebrewTextUtils.containsNikud(line)) hasNekudot = true
-        if (hasTeamim && hasNekudot) break // Early exit once both are found
+        // detectNikudAndTeamim does both scans in a single char-by-char
+        // pass and bails as soon as both are seen — roughly halves the
+        // work vs the previous two-regex approach on a fresh line.
+        val (n, t) = HebrewTextUtils.detectNikudAndTeamim(line)
+        if (n) hasNekudot = true
+        if (t) hasTeamim = true
+        if (hasTeamim && hasNekudot) break
     }
     return hasTeamim to hasNekudot
 }

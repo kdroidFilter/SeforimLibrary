@@ -92,7 +92,7 @@ internal class SefariaAltTocBuilder(
 
             fun parseDafIndex(address: String?): Int? {
                 if (address.isNullOrBlank()) return null
-                val match = Regex("(\\d+)([ab])?", RegexOption.IGNORE_CASE).find(address.trim())
+                val match = DAF_INDEX_REGEX.find(address.trim())
                 val (pageStr, amudRaw) = match?.destructured ?: return null
                 val page = pageStr.toIntOrNull() ?: return null
                 val amud = amudRaw.lowercase()
@@ -142,8 +142,8 @@ internal class SefariaAltTocBuilder(
                     val variants = linkedSetOf(key).apply {
                         if (key.contains('.')) {
                             add(key.replace('.', ' '))
-                            add(key.replace(Regex("\\.(\\d+)")) { match -> ":${match.groupValues[1]}" })
-                            add(key.replace(Regex("\\.(\\d+)")) { match -> " ${match.groupValues[1]}" })
+                            add(key.replace(DOTTED_INDEX_REGEX) { match -> ":${match.groupValues[1]}" })
+                            add(key.replace(DOTTED_INDEX_REGEX) { match -> " ${match.groupValues[1]}" })
                             add(key.replace(".", ""))
                         }
                     }.filter { it.isNotBlank() }
@@ -525,5 +525,13 @@ internal class SefariaAltTocBuilder(
             }
         }
         return hasGeneratedAltStructures
+    }
+
+    companion object {
+        // Lift these out of the hot loop — regex compile is non-trivial and
+        // these were being created per call to parseDafIndex / per key
+        // replace (called millions of times for the alt-TOC builder).
+        private val DAF_INDEX_REGEX = Regex("(\\d+)([ab])?", RegexOption.IGNORE_CASE)
+        private val DOTTED_INDEX_REGEX = Regex("\\.(\\d+)")
     }
 }

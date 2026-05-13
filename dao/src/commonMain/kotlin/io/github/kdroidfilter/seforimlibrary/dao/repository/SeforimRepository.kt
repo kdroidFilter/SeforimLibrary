@@ -1498,6 +1498,27 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         logger.d{"Repository updated TOC entry $tocEntryId with isLastChild: $isLastChild"}
     }
 
+    /**
+     * Bulk-update the `hasChildren` and `isLastChild` flags on tocEntry in a
+     * single transaction — avoids the per-row coroutine + transaction
+     * overhead that dominated SefariaTocInserter's finalisation phase (JFR
+     * 2026-05-13 showed ~979 samples on insertTocEntriesOptimized).
+     */
+    suspend fun bulkUpdateTocEntryFlags(
+        hasChildrenIds: Collection<Long>,
+        lastChildIds: Collection<Long>,
+    ) = withContext(Dispatchers.IO) {
+        if (hasChildrenIds.isEmpty() && lastChildIds.isEmpty()) return@withContext
+        database.transaction {
+            for (id in hasChildrenIds) {
+                database.tocQueriesQueries.updateHasChildren(1, id)
+            }
+            for (id in lastChildIds) {
+                database.tocQueriesQueries.updateIsLastChild(1, id)
+            }
+        }
+    }
+
     // --- Connection Types ---
 
     /**

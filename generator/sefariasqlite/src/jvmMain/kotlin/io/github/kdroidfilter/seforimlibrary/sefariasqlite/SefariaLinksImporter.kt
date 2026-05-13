@@ -111,6 +111,10 @@ internal class SefariaLinksImporter(
                 val toRefs = resolveRefs(c2, refsByCanonical, refsByBase)
                 if (fromRefs.isEmpty() || toRefs.isEmpty()) continue
 
+                // Hoisted: `conn` is constant across the inner pair loop, no
+                // reason to re-parse it for every (from, to) combination.
+                val baseConnectionType = ConnectionType.fromString(conn)
+
                 for (from in fromRefs) {
                     for (to in toRefs) {
                         val srcLineIndex = from.lineIndex - 1
@@ -119,7 +123,6 @@ internal class SefariaLinksImporter(
                         val tgtLine = lineKeyToId[to.path to tgtLineIndex] ?: continue
                         // Skip links where source or target is a heading line
                         if (srcLine in headingLineIds || tgtLine in headingLineIds) continue
-                        val baseConnectionType = ConnectionType.fromString(conn)
                         val srcBookId = lineBookId(srcLine, lineIdToBookId)
                         val tgtBookId = lineBookId(tgtLine, lineIdToBookId)
                         // Drop self-commentary / self-targum links. Sefaria ships a handful

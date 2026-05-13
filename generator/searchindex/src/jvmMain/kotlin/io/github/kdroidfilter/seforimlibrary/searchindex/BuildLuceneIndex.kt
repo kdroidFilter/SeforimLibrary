@@ -255,37 +255,48 @@ fun main() = runBlocking {
     repo.close()
 }
 
+// One-pass normalizer for Lucene indexing. Replaces a chain of 10+ String
+// allocations + a recompiled "\\s+".toRegex() per call with a single char
+// scan into a StringBuilder. Combines: diacritics strip (nikud + teamim),
+// gershayim/geresh drop, maqaf → space, whitespace collapse, final-letter
+// remap (ך/ם/ן/ף/ץ → כ/מ/נ/פ/צ). Jsoup is still required to strip HTML.
 private fun normalizeForIndexDefault(html: String): String {
     val cleaned = Jsoup.clean(html, Safelist.none())
-        .trim()
-        .replace("\\s+".toRegex(), " ")
-    val withoutMaqaf = HebrewTextUtils.replaceMaqaf(cleaned, " ")
-    // Drop gershayim (U+05F4) and geresh (U+05F3)
-    val withoutGeresh = withoutMaqaf
-        .replace("\u05F4", "")
-        .replace("\u05F3", "")
-    // Normalize final forms (ך/ם/ן/ף/ץ) -> base letters (כ/מ/נ/פ/צ)
-    val noFinals = normalizeFinalLetters(withoutGeresh)
-    // Drop diacritics entirely to index unpointed text
-    return HebrewTextUtils.removeAllDiacritics(noFinals)
+    return normalizePostHtmlForIndex(cleaned)
 }
 
+private fun normalizePostHtmlForIndex(text: String): String {
+    val sb = StringBuilder(text.length)
+    var prevWasSpace = true
+    for (c in text) {
+        val code = c.code
+        if ((code in 0x05B0..0x05BD) || code == 0x05C1 || code == 0x05C2 || code == 0x05C7) continue
+        if (code in 0x0591..0x05AF) continue
+        if (code == 0x05F4 || code == 0x05F3) continue
+        if (code == 0x05BE || c.isWhitespace()) {
+            if (!prevWasSpace) {
+                sb.append(' ')
+                prevWasSpace = true
+            }
+            continue
+        }
+        val mapped = when (code) {
+            0x05DA -> 'כ' // ך -> כ
+            0x05DD -> 'מ' // ם -> מ
+            0x05DF -> 'נ' // ן -> נ
+            0x05E3 -> 'פ' // ף -> פ
+            0x05E5 -> 'צ' // ץ -> צ
+            else -> c
+        }
+        sb.append(mapped)
+        prevWasSpace = false
+    }
+    if (sb.isNotEmpty() && sb.last() == ' ') sb.setLength(sb.length - 1)
+    return sb.toString()
+}
+
+// Acronym terms don't carry HTML — same single-pass treatment, skip Jsoup.
 private fun sanitizeAcronymTerm(raw: String): String {
-    var s = raw.trim()
-    if (s.isEmpty()) return ""
-    s = HebrewTextUtils.removeAllDiacritics(s)
-    s = HebrewTextUtils.replaceMaqaf(s, " ")
-    s = s.replace("\u05F4", "") // gershayim
-    s = s.replace("\u05F3", "") // geresh
-    s = normalizeFinalLetters(s)
-    s = s.replace("\\s+".toRegex(), " ").trim()
-    return s
+    if (raw.isEmpty()) return ""
+    return normalizePostHtmlForIndex(raw)
 }
-
-/** Replace Hebrew final letters (sofit) by their base forms. */
-private fun normalizeFinalLetters(text: String): String = text
-    .replace('\u05DA', '\u05DB') // ך -> כ
-    .replace('\u05DD', '\u05DE') // ם -> מ
-    .replace('\u05DF', '\u05E0') // ן -> נ
-    .replace('\u05E3', '\u05E4') // ף -> פ
-    .replace('\u05E5', '\u05E6') // ץ -> צ

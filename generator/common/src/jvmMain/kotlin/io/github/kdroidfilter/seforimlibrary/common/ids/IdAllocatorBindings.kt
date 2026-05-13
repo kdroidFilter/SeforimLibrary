@@ -24,41 +24,62 @@ class IdAllocatorBindings(
     val allocator: IdAllocator,
     private val repo: SeforimRepository,
 ) {
+    // Per-process memo of (lookup kind → already-inserted natural keys). The
+    // allocator's id_lookup short-circuits the ID resolution in O(1), but the
+    // repo's `insertXxxWithId` blindly issued an INSERT OR IGNORE for every
+    // call — burning ~0.1 ms of SQLite native step per useless attempt. On
+    // ~7.5 M Sefaria links calling upsertConnectionType, that's > 10 min of
+    // wasted I/O on a table that holds 5 rows total. JFR profile from
+    // 2026-05-13 showed `insertConnectionTypeWithId` second on the hot list.
+    //
+    // The memo is a per-build cache: it starts empty so the first sighting of
+    // any name still triggers the INSERT (covers builds seeded from an empty
+    // DB even if the allocator's lookup is pre-populated). Subsequent calls
+    // for the same name skip the SQL.
+    private val sourcesInserted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val authorsInserted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val topicsInserted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val pubPlacesInserted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val pubDatesInserted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val connectionTypesInserted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val categoriesInserted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val tocTextsInserted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     // ─── Lookup-table helpers ──────────────────────────────────────────────────
 
     suspend fun upsertSource(name: String): Long {
         val id = allocator.sourceId(name)
-        repo.insertSourceWithId(id, name)
+        if (sourcesInserted.add(name)) repo.insertSourceWithId(id, name)
         return id
     }
 
     suspend fun upsertAuthor(name: String): Long {
         val id = allocator.authorId(name)
-        repo.insertAuthorWithId(id, name)
+        if (authorsInserted.add(name)) repo.insertAuthorWithId(id, name)
         return id
     }
 
     suspend fun upsertTopic(name: String): Long {
         val id = allocator.topicId(name)
-        repo.insertTopicWithId(id, name)
+        if (topicsInserted.add(name)) repo.insertTopicWithId(id, name)
         return id
     }
 
     suspend fun upsertPubPlace(name: String): Long {
         val id = allocator.pubPlaceId(name)
-        repo.insertPubPlaceWithId(id, name)
+        if (pubPlacesInserted.add(name)) repo.insertPubPlaceWithId(id, name)
         return id
     }
 
     suspend fun upsertPubDate(date: String): Long {
         val id = allocator.pubDateId(date)
-        repo.insertPubDateWithId(id, date)
+        if (pubDatesInserted.add(date)) repo.insertPubDateWithId(id, date)
         return id
     }
 
     suspend fun upsertConnectionType(name: String): Long {
         val id = allocator.connectionTypeId(name)
-        repo.insertConnectionTypeWithId(id, name)
+        if (connectionTypesInserted.add(name)) repo.insertConnectionTypeWithId(id, name)
         return id
     }
 
@@ -70,13 +91,15 @@ class IdAllocatorBindings(
         orderIndex: Int,
     ): Long {
         val id = allocator.categoryId(canonicalPath)
-        repo.insertCategoryWithId(id, parentId, title, level, orderIndex)
+        if (categoriesInserted.add(canonicalPath)) {
+            repo.insertCategoryWithId(id, parentId, title, level, orderIndex)
+        }
         return id
     }
 
     suspend fun upsertTocText(text: String): Long {
         val id = allocator.tocTextId(text)
-        repo.insertTocTextWithId(id, text)
+        if (tocTextsInserted.add(text)) repo.insertTocTextWithId(id, text)
         return id
     }
 
