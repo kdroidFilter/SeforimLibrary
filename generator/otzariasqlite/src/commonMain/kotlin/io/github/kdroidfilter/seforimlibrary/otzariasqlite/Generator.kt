@@ -35,6 +35,8 @@ import kotlin.io.path.readText
  * @property sourceDirectory The path to the source directory containing the data files
  * @property repository The repository used to store the generated data
  */
+private const val LINE_FLUSH_THRESHOLD = 1000
+
 class DatabaseGenerator(
     private val sourceDirectory: Path,
     private val repository: SeforimRepository,
@@ -911,6 +913,28 @@ class DatabaseGenerator(
         val entriesByParent = mutableMapOf<Long?, MutableList<Long>>()
         var currentOwningTocEntryId: Long? = null
         val lineTocBuffer = ArrayList<Pair<Long, Long>>(minOf(lines.size, 200_000))
+        // Batch line inserts + the FK back-link updates that depend on them.
+        // JFR showed each `repository.insertLine` ≈ 1 withContext(Dispatchers.IO)
+        // switch + 1 prepareStatement, run 4M times. Buffering collapses the
+        // dispatcher churn and lets us flush via insertLinesBatch.
+        val lineBuffer = ArrayList<Line>(LINE_FLUSH_THRESHOLD)
+        val tocEntryLineIdUpdates = ArrayList<Pair<Long, Long>>()
+        val lineTocEntryUpdates = ArrayList<Pair<Long, Long>>()
+
+        suspend fun flushLineBatch() {
+            if (lineBuffer.isEmpty()) return
+            repository.insertLinesBatch(lineBuffer)
+            lineBuffer.clear()
+            // Flush back-link updates only after the lines exist in the DB.
+            if (tocEntryLineIdUpdates.isNotEmpty()) {
+                repository.bulkUpdateTocEntryLineIds(tocEntryLineIdUpdates)
+                tocEntryLineIdUpdates.clear()
+            }
+            if (lineTocEntryUpdates.isNotEmpty()) {
+                repository.bulkUpdateLineTocEntryIds(lineTocEntryUpdates)
+                lineTocEntryUpdates.clear()
+            }
+        }
 
         // PREMIÈRE PASSE : Créer toutes les entrées et lignes
         for ((lineIndex, line) in lines.withIndex()) {
@@ -956,7 +980,8 @@ class DatabaseGenerator(
                 entriesByParent.getOrPut(parentId) { mutableListOf() }.add(tocEntryId)
                 currentOwningTocEntryId = tocEntryId
 
-                val lineId = repository.insertLine(
+                // Buffer the line — id is allocator-stable so we know it before insert.
+                lineBuffer.add(
                     Line(
                         id = currentLineId,
                         bookId = bookId,
@@ -966,19 +991,15 @@ class DatabaseGenerator(
                     )
                 )
                 // Track this as a heading line for link filtering
-                headingLineIds.add(lineId)
-                repository.updateTocEntryLineId(tocEntryId, lineId)
-                repository.updateLineTocEntry(lineId, tocEntryId)
-                // Buffer this mapping instead of writing immediately
-                lineTocBuffer.add(lineId to tocEntryId)
-                if (lineTocBuffer.size >= 200_000) {
-                    repository.bulkUpsertLineToc(lineTocBuffer)
-                    lineTocBuffer.clear()
-                }
+                headingLineIds.add(currentLineId)
+                // Back-links — applied after the next flush, when lines exist.
+                tocEntryLineIdUpdates.add(tocEntryId to currentLineId)
+                lineTocEntryUpdates.add(currentLineId to tocEntryId)
+                lineTocBuffer.add(currentLineId to tocEntryId)
             } else {
                 // Regular line
                 val currentLineId = stableLineId(bookId, line)
-                val insertedLineId = repository.insertLine(
+                lineBuffer.add(
                     Line(
                         id = currentLineId,
                         bookId = bookId,
@@ -990,12 +1011,16 @@ class DatabaseGenerator(
                 )
                 // Buffer mapping for regular line if there is a current owner
                 currentOwningTocEntryId?.let { ownerId ->
-                    lineTocBuffer.add(insertedLineId to ownerId)
-                    if (lineTocBuffer.size >= 200_000) {
-                        repository.bulkUpsertLineToc(lineTocBuffer)
-                        lineTocBuffer.clear()
-                    }
+                    lineTocBuffer.add(currentLineId to ownerId)
                 }
+            }
+
+            if (lineBuffer.size >= LINE_FLUSH_THRESHOLD) {
+                flushLineBatch()
+            }
+            if (lineTocBuffer.size >= 200_000) {
+                repository.bulkUpsertLineToc(lineTocBuffer)
+                lineTocBuffer.clear()
             }
 
             if (lineIndex % 1000 == 0) {
@@ -1004,6 +1029,8 @@ class DatabaseGenerator(
             }
         }
 
+        // Flush remaining line + back-link buffers
+        flushLineBatch()
         // Flush buffered line→toc mappings in bulk
         repository.bulkUpsertLineToc(lineTocBuffer)
 
@@ -1013,22 +1040,12 @@ class DatabaseGenerator(
         // Créer un set des IDs qui ont des enfants
         val parentIds = allTocEntries.mapNotNull { it.parentId }.toSet()
 
-        // Mettre à jour hasChildren pour les entrées qui ont des enfants
-        for (entry in allTocEntries) {
-            if (entry.id in parentIds) {
-                logger.d { "Updating TOC entry ${entry.id} as having children" }
-                repository.updateTocEntryHasChildren(entry.id, true)
-            }
-        }
-
-        // Mettre à jour isLastChild
-        for ((parentId, children) in entriesByParent) {
-            if (children.isNotEmpty()) {
-                val lastChildId = children.last()
-                logger.d { "Marking TOC entry $lastChildId as last child of parent $parentId" }
-                repository.updateTocEntryIsLastChild(lastChildId, true)
-            }
-        }
+        // Collect hasChildren + isLastChild ids and flush them in a single batch
+        // (replaces 2 × per-row update calls; was up to ~2k withContext switches
+        // per book on large hierarchies).
+        val hasChildrenIds = allTocEntries.asSequence().filter { it.id in parentIds }.map { it.id }.toList()
+        val lastChildIds = entriesByParent.values.mapNotNull { it.lastOrNull() }
+        repository.bulkUpdateTocEntryFlags(hasChildrenIds, lastChildIds)
 
         logger.i { "✅ Finished processing lines and TOC entries for book ID: $bookId" }
         logger.i { "   Total TOC entries: ${allTocEntries.size}" }

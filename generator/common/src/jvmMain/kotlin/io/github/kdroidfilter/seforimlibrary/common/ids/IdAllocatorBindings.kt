@@ -7,6 +7,7 @@ import io.github.kdroidfilter.seforimlibrary.core.models.AltTocStructure
 import io.github.kdroidfilter.seforimlibrary.core.models.AltTocEntry
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Glue between [IdAllocator] and [SeforimRepository]. Importers should use these
@@ -192,7 +193,21 @@ class IdAllocatorBindings(
          * Phase 1 keeps this minimal (raw content); Phase 3 will swap in the
          * Lucene-style normalisation pipeline (HTML strip + nikud strip + ...).
          */
-        fun normalisedContentHash(content: String): ByteArray =
-            MessageDigest.getInstance("SHA-1").digest(content.toByteArray(Charsets.UTF_8))
+        // Memoize SHA-1 of common line contents. The Otzaria corpus has many
+        // duplicate lines (blank, recurring headers, fixed liturgy phrasing)
+        // that hash to the same value over and over — JFR showed
+        // `normalisedContentHash` as the #1 project hotspot (~3% wall) on the
+        // GenerateLines phase. Bounded so adversarial inputs can't blow up
+        // the heap; LRU-ish behaviour via simple drop-when-full.
+        private const val CONTENT_HASH_CACHE_MAX = 200_000
+        private val contentHashCache = ConcurrentHashMap<String, ByteArray>()
+
+        fun normalisedContentHash(content: String): ByteArray {
+            contentHashCache[content]?.let { return it }
+            val hash = MessageDigest.getInstance("SHA-1").digest(content.toByteArray(Charsets.UTF_8))
+            if (contentHashCache.size > CONTENT_HASH_CACHE_MAX) contentHashCache.clear()
+            contentHashCache[content] = hash
+            return hash
+        }
     }
 }

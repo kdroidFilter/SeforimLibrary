@@ -1201,6 +1201,33 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         logger.d{"Repository updated line $lineId with tocEntryId: $tocEntryId"}
     }
 
+    /**
+     * Bulk variant of [updateLineTocEntry] for the Otzaria importer hot path.
+     * Each pair is (lineId, tocEntryId). Wrapped in a single transaction —
+     * avoids one Dispatchers.IO context switch per row (the per-row
+     * `withContext` was burning park/unpark cycles on 4M+ header lines).
+     */
+    suspend fun bulkUpdateLineTocEntryIds(pairs: List<Pair<Long, Long>>) = withContext(Dispatchers.IO) {
+        if (pairs.isEmpty()) return@withContext
+        database.transaction {
+            for ((lineId, tocEntryId) in pairs) {
+                database.lineQueriesQueries.updateTocEntryId(tocEntryId, lineId)
+            }
+        }
+    }
+
+    /**
+     * Bulk variant of [updateTocEntryLineId]. Each pair is (tocEntryId, lineId).
+     */
+    suspend fun bulkUpdateTocEntryLineIds(pairs: List<Pair<Long, Long>>) = withContext(Dispatchers.IO) {
+        if (pairs.isEmpty()) return@withContext
+        database.transaction {
+            for ((tocEntryId, lineId) in pairs) {
+                database.tocQueriesQueries.updateLineId(lineId, tocEntryId)
+            }
+        }
+    }
+
     // --- Table of Contents ---
 
     override suspend fun getTocEntry(id: Long): TocEntry? = withContext(Dispatchers.IO) {
