@@ -83,10 +83,12 @@ class PatchDbProducer(
                 deleteCounts[table] = scanDeletes(conn, table)
             }
 
-            detach(conn, "new")
-            detach(conn, "prev")
+            // Commit BEFORE detach so SQLite isn't holding locks on the
+            // attached DBs through an open transaction.
             conn.commit()
             conn.autoCommit = true
+            detach(conn, "new")
+            detach(conn, "prev")
             conn.createStatement().use { it.execute("VACUUM") }
         }
 

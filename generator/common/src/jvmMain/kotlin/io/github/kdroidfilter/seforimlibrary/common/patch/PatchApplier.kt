@@ -56,14 +56,30 @@ class PatchApplier(
         expectedToContentHash: String? = null,
     ): Result {
         val wasAutoCommit = conn.autoCommit
+        // SQLite's JDBC driver starts an implicit transaction the moment we
+        // flip autoCommit off — issuing BEGIN IMMEDIATE on top of that fails
+        // with "cannot start a transaction within a transaction". Rely on
+        // autoCommit=false for the boundary; we already get an IMMEDIATE
+        // write lock by the first INSERT/DELETE.
         conn.autoCommit = false
         try {
-            conn.prepareStatement("BEGIN IMMEDIATE").use { it.executeUpdate() }
+            // Snapshot pre-apply FK violation count so we can detect *new* ones
+            // introduced by the patch. The production pipeline currently emits
+            // some pre-existing violations (typically tocEntry.textId pointing
+            // at tocTexts that never made it into the DB); we tolerate those
+            // and only fail when the patch makes things worse.
+            val preCount = countFkViolations(conn)
             attach(conn, patchDb)
             val migrations = runMigrations(conn)
             val upserts = runUpserts(conn)
             val deletes = runDeletes(conn)
-            verifyFkIntegrity(conn)
+            val postCount = countFkViolations(conn)
+            check(postCount <= preCount) {
+                "Patch introduced ${postCount - preCount} new FK violations (pre=$preCount, post=$postCount)"
+            }
+            if (preCount > 0) {
+                logger.w { "DB carries $preCount pre-existing FK violations — tolerated, not introduced by this patch." }
+            }
 
             if (expectedToContentHash != null) {
                 val actual = LogicalContentHasher().compute(conn)
@@ -74,8 +90,11 @@ class PatchApplier(
                 }
             }
 
-            detach(conn)
+            // Commit BEFORE detach so SQLite isn't holding locks on the
+            // attached patch DB through the open transaction.
             conn.commit()
+            conn.autoCommit = true
+            detach(conn)
             logger.i { "Patch applied — migrations=$migrations, upserts=$upserts, deletes=$deletes" }
             return Result(migrations, upserts, deletes)
         } catch (t: Throwable) {
@@ -115,14 +134,15 @@ class PatchApplier(
 
     private fun runUpserts(conn: Connection): Map<String, Int> {
         // Parents before children. The order roughly tracks the FK topology of seforim.db.
-        val order = listOf(
+        // `line_toc` has a composite PK (lineId, tocEntryId) — handle separately below.
+        val singleIdTables = listOf(
             "source", "author", "topic", "pub_place", "pub_date",
             "connection_type", "category", "tocText", "book",
-            "tocEntry", "line", "line_toc", "link",
+            "tocEntry", "line", "link",
         )
         val counts = LinkedHashMap<String, Int>()
-        for (table in order) {
-            val (cols, upsertCols) = readPatchColumns(conn, "upsert_$table") ?: continue
+        for (table in singleIdTables) {
+            val (cols, _) = readPatchColumns(conn, "upsert_$table") ?: continue
             if (cols.isEmpty()) continue
             val colsCsv = cols.joinToString(",") { "\"$it\"" }
             val updateAssignments = cols.filter { it != "id" }
@@ -136,6 +156,13 @@ class PatchApplier(
             val n = conn.createStatement().use { it.executeUpdate(sql) }
             counts[table] = n
             if (n > 0) logger.d { "Upserted $n row(s) into $table" }
+        }
+        // line_toc: composite PK (lineId, tocEntryId). Plain INSERT OR REPLACE is safe because
+        // it has no children with FKs back into it.
+        if (readPatchColumns(conn, "upsert_line_toc") != null) {
+            val sql = "INSERT OR REPLACE INTO line_toc(lineId, tocEntryId) " +
+                "SELECT lineId, tocEntryId FROM patch.upsert_line_toc"
+            counts["line_toc"] = conn.createStatement().use { it.executeUpdate(sql) }
         }
         return counts
     }
@@ -158,16 +185,15 @@ class PatchApplier(
         return counts
     }
 
-    private fun verifyFkIntegrity(conn: Connection) {
-        val violations = ArrayList<String>()
+    private fun countFkViolations(conn: Connection): Long {
+        var n = 0L
         conn.createStatement().use { st ->
-            st.executeQuery("PRAGMA foreign_key_check").use { rs ->
-                while (rs.next()) {
-                    violations += "table=${rs.getString(1)} rowid=${rs.getLong(2)} parent=${rs.getString(3)} fkid=${rs.getInt(4)}"
-                }
+            // `pragma_foreign_key_check` is the table-valued form usable from a SELECT.
+            st.executeQuery("SELECT COUNT(*) FROM pragma_foreign_key_check").use { rs ->
+                if (rs.next()) n = rs.getLong(1)
             }
         }
-        require(violations.isEmpty()) { "FK violations after apply: $violations" }
+        return n
     }
 
     /** Returns (raw cols, raw cols without `id`) or null if the patch table doesn't exist. */
