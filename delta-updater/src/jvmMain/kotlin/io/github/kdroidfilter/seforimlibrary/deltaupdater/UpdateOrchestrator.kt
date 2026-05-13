@@ -99,7 +99,15 @@ class UpdateOrchestrator(
                 try {
                     progress(step, chain.size, "updating lucene")
                     luceneSinks().use { session ->
-                        luceneUpdater.applyTo(mainPatch, session.delete, session.upsert)
+                        // Pass seforimDb so book-metadata-only changes
+                        // (no line edits) also trigger a re-index of the
+                        // book's lines — otherwise the Lucene Document's
+                        // stored book_title / category_id / … fields would
+                        // drift from the live DB.
+                        luceneUpdater.applyTo(
+                            mainPatch, session.delete, session.upsert,
+                            liveDbPath = seforimDb,
+                        )
                     }
 
                     progress(step, chain.size, "updating catalog")
