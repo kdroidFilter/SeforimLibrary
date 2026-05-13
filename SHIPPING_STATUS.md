@@ -73,9 +73,11 @@ Zayit/
 |---|---:|
 | Phases implemented | 9 (1, 2, 3, 4, 4.5, 5, 6, 7, 8) |
 | Unit tests across all modules | ~115 |
-| End-to-end pipeline runs | 7 (against real 7 GB Sefaria + Otzaria) |
-| Validation reports (`PHASE*_VALIDATION.md`) | 5 |
+| End-to-end pipeline runs | 8 (incl. 2026-05-13 strictly-verified real v1→v2) |
+| Validation reports (`PHASE*_VALIDATION.md`) | 6 |
 | Adversarial-audit hardening fixes | 16 |
+| Real-data e2e bug fixes (NULL/'', allocator wiring, …) | 5 |
+| **First strictly-verified delta on production data** | **2026-05-13** ✅ |
 | Operator runbook (`RELEASE.md`) | 1 |
 | Lines of new production code | ~4,000 |
 | Branches PR-ready | 2 |
@@ -111,6 +113,24 @@ exercised by the happy-path tests.
 | Orchestrator | SQLite-vs-Lucene divergence on post-commit failure → only recovered on next boot | `9d62414` |
 | Orchestrator | Lucene IndexWriter never committed/closed → updates silently dropped | `c5c2d9c` + `67403882` |
 | Orchestrator | Regression-coverage gap: happy-path close not asserted | `c694081` + `ef15f04b` |
+
+## Real-data e2e on production-sized v1 → v2 (Phase 9)
+
+Five bugs that only the actual data could surface — each one
+unstable id wiring that v1's import had silently committed. All
+caught by the producer's own pre-checks + the per-table diagnostic.
+
+| Layer | Bug class | Commit |
+|-------|-----------|--------|
+| Importer | author/topic/pub_place/pub_date routed via auto-increment instead of IdAllocator | `a6244c1` |
+| Importer | Otzaria stableTocEntryId reserved tocText id but actual row inserted with auto-increment | `86801ed` |
+| Build infra | Havrouta task -Xmx4g OOM'd once id_lookup covered tocText (1.8 GB buildstate) | `37e1694` |
+| Importer | SefariaAltTocBuilder passed textId=null, repo fell back to auto-increment | `2c43478` |
+| Producer | `COALESCE(col, '') <> COALESCE(prev_col, '')` treated NULL == '', dropped 10+ book upserts | `0862ccd` |
+
+Final result : on 7.2 GB → 7.3 GB across new Sefaria + Otzaria
+releases, the producer emits a **339 MiB** patch and the verify-step
+hash matches v2 exactly (3a6d7dc0…).
 
 All sixteen are backed by tests: localhost HTTP servers for wire bugs,
 real SeforimDb fixtures for applier bugs, real producer output for the
