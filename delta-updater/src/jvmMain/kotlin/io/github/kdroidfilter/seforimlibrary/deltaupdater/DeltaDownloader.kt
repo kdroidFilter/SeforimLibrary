@@ -23,6 +23,8 @@ import java.security.MessageDigest
  */
 class DeltaDownloader(
     private val logger: Logger = Logger.withTag("DeltaDownloader"),
+    private val connectTimeoutMs: Int = DEFAULT_CONNECT_TIMEOUT_MS,
+    private val readTimeoutMs: Int = DEFAULT_READ_TIMEOUT_MS,
 ) {
 
     fun download(url: String, dest: Path, expectedSha256: String, expectedSize: Long?): Path {
@@ -34,6 +36,11 @@ class DeltaDownloader(
         val partial = dest.resolveSibling("${dest.fileName}.part")
         var existing = if (Files.exists(partial)) Files.size(partial) else 0L
         val conn = URI(url).toURL().openConnection() as HttpURLConnection
+        // Default JVM timeouts are 0 = "infinite" — a hung proxy or stalled
+        // peer would block forever. The read timeout applies per read(), so
+        // 60 s is the inter-packet stall budget, not the whole-transfer cap.
+        conn.connectTimeout = connectTimeoutMs
+        conn.readTimeout = readTimeoutMs
         if (existing > 0) {
             conn.setRequestProperty("Range", "bytes=$existing-")
             logger.i { "Resuming ${dest.fileName} from byte $existing" }
@@ -99,6 +106,8 @@ class DeltaDownloader(
 
     companion object {
         private const val BUFFER_SIZE: Int = 1 shl 16
+        const val DEFAULT_CONNECT_TIMEOUT_MS: Int = 30_000
+        const val DEFAULT_READ_TIMEOUT_MS: Int = 60_000
     }
 }
 
