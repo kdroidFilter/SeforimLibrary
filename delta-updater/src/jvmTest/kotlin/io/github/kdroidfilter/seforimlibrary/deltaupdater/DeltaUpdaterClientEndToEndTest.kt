@@ -231,6 +231,34 @@ class DeltaUpdaterClientEndToEndTest {
     }
 
     @Test
+    fun `checkForUpdate treats a 404 release_meta as up-to-date`() {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/release_meta.json") { ex ->
+            val body = "Not Found".toByteArray()
+            ex.sendResponseHeaders(404, body.size.toLong())
+            ex.responseBody.use { it.write(body) }
+        }
+        server.start()
+        try {
+            val seforim = tmp.newFolder().toPath().resolve("seforim.db")
+            buildClientDb(seforim)
+            val client = DeltaUpdaterClient(
+                seforimDb = seforim,
+                catalogPb = tmp.newFolder().toPath().resolve("catalog.pb"),
+                workDir = tmp.newFolder().toPath(),
+                releaseMetaUrl = "http://127.0.0.1:${server.address.port}/release_meta.json",
+                indexSinks = {
+                    LuceneUpdater.DeleteSink { } to LuceneUpdater.UpsertSink { }
+                },
+                localVersionProvider = { 1 },
+            )
+            assertEquals(UpdatePath.UpToDate, client.checkForUpdate())
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
     fun `lucene failure after sqlite commit triggers in-process rollback`() {
         val liveDb = tmp.newFolder().toPath().resolve("seforim.db")
         buildClientDb(liveDb)

@@ -2,6 +2,7 @@ package io.github.kdroidfilter.seforimlibrary.deltaupdater
 
 import co.touchlab.kermit.Logger
 import kotlinx.serialization.json.Json
+import java.io.FileNotFoundException
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
@@ -56,9 +57,24 @@ class DeltaUpdaterClient(
     /** Must be called at app startup so a half-applied chain can be unwound. */
     fun recoverIfNeeded(): Boolean = applier.recoverIfNeeded(seforimDb)
 
-    /** Polls the server's `release_meta.json` and picks an update path. */
+    /**
+     * Polls the server's `release_meta.json` and picks an update path.
+     *
+     * A 404 is treated as [UpdatePath.UpToDate]: it means the server has
+     * never published a release yet (common in early deployments), or has
+     * temporarily un-published the manifest — neither is a user-facing
+     * error condition.
+     */
     fun checkForUpdate(): UpdatePath {
-        val meta = json.decodeFromString<ReleaseMeta>(httpGet(releaseMetaUrl))
+        val body = try {
+            httpGet(releaseMetaUrl)
+        } catch (e: FileNotFoundException) {
+            // HttpURLConnection.getInputStream() throws FileNotFoundException
+            // on HTTP 404. Treat as "nothing on the server yet".
+            logger.i { "release_meta.json not found at $releaseMetaUrl — treating as up-to-date" }
+            return UpdatePath.UpToDate
+        }
+        val meta = json.decodeFromString<ReleaseMeta>(body)
         return chooseUpdatePath(localVersionProvider(), meta)
     }
 
