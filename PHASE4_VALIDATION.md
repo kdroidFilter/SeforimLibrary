@@ -80,3 +80,32 @@ the order of magnitude is encouraging:
 Once Phase 4.5 closes the junction-table gap, the `verifyApplyChain` CI
 gate (DELTA_UPDATE_PLAN.md §6.8) will become a strict `prev + patch ==
 new` invariant rather than a "no new FK violations" check.
+
+---
+
+## Phase 4.5 closing the gap
+
+The producer and applier are now schema-introspecting: for every entry in
+`PATCH_TABLES_IN_FK_ORDER`, they read `PRAGMA table_info` on the source
+DB at producer time to mirror the column shape into `upsert_<table>` and
+`delete_<table>`, then `INSERT … ON CONFLICT(<pk…>) DO UPDATE/NOTHING` at
+apply time. Composite-PK junctions (`category_closure`, `book_*`,
+`line_toc`, `line_alt_toc`, `book_acronym`, `default_*`) and string-PK
+metadata (`schema_meta`) are all covered.
+
+End-to-end re-validation against the same Phase-3 Test C scenario:
+
+```
+$ ./gradlew :generator-common:producePatchAndVerify …
+Info: Produced patch.db — upserts=595,724, deletes=51 (from v1 to v2)
+Info: Patch applied — migrations=0
+       upserts={book=1, tocEntry=49, line=1583, line_toc=1552,
+                line_alt_toc=1, link=592,538}
+       deletes={tocEntry=49, link=2}
+Info: ✅ Patch apply verified: target hash matches new
+       (9cd4a8c846992badf90081b134f73b5499a3e12c0ef85e4e3659d743e25fa23a)
+```
+
+The `verifyApplyChain` invariant from §6.8 — `prev + patch ⟹ new (by
+logical content hash)` — now holds strictly. Adding tables to the
+config is a one-line change.

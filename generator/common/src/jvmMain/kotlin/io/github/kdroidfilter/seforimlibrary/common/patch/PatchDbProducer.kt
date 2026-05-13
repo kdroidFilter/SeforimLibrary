@@ -10,24 +10,15 @@ import java.sql.DriverManager
 /**
  * Produces a `patch.db` from two seforim.db snapshots (previous + current).
  *
- * The algorithm is pure SQL once both DBs are attached:
+ * For each table in [PATCH_TABLES_IN_FK_ORDER]:
+ *   1. Reads the column list + PK from the **new** DB.
+ *   2. Creates `upsert_<table>` mirroring those columns + PK.
+ *   3. Inserts every row of `new.<table>` that either isn't in `prev.<table>`
+ *      (joined on the PK) or differs from `prev` on any non-PK column.
+ *   4. Creates `delete_<table>` with just the PK columns and inserts every
+ *      `(pk…)` tuple present in `prev` but missing from `new`.
  *
- *   INSERT INTO upsert_<table>
- *   SELECT new.* FROM new.<table> new
- *   LEFT JOIN prev.<table> prev ON new.id = prev.id
- *   WHERE prev.id IS NULL
- *      OR <any non-id column differs>;
- *
- *   INSERT INTO delete_<table>(id)
- *   SELECT prev.id FROM prev.<table> prev
- *   LEFT JOIN new.<table> new ON prev.id = new.id
- *   WHERE new.id IS NULL;
- *
- * Output: a single SQLite file at [outputPath]. Per-book patch splitting
- * (`patch_book_<id>.db`) is a follow-up — for Phase 4 MVP we ship the whole
- * thing in one file, which the client can ATTACH directly.
- *
- * See DELTA_UPDATE_PLAN.md §6.6.
+ * See `DELTA_UPDATE_PLAN.md` §6.6.
  */
 class PatchDbProducer(
     private val logger: Logger = Logger.withTag("PatchDbProducer"),
@@ -41,16 +32,6 @@ class PatchDbProducer(
         val deleteCounts: Map<String, Int>,
     )
 
-    /**
-     * @param prevDb path to the previous build's seforim.db
-     * @param newDb path to the current build's seforim.db
-     * @param outputPath path where the resulting patch.db will be written
-     *   (atomically via a `.tmp` rename)
-     * @param fromVersion / toVersion pairs of integer build versions
-     * @param migrations DDL statements to embed in `patch.migrations`,
-     *   produced by [io.github.kdroidfilter.seforimlibrary.common.changes.
-     *   computeSchemaMigrations] (TBD) when `db_schema_version` differs.
-     */
     fun produce(
         prevDb: Path,
         newDb: Path,
@@ -69,18 +50,27 @@ class PatchDbProducer(
 
         DriverManager.getConnection("jdbc:sqlite:${tmp.toAbsolutePath()}").use { conn ->
             conn.autoCommit = false
-            applyDdl(conn)
+            applyBaseDdl(conn)
             writeMetadata(conn, fromVersion, toVersion)
             writeMigrations(conn, migrations)
 
             attach(conn, "prev", prevDb)
             attach(conn, "new", newDb)
 
-            for (table in TABLES_IN_FK_ORDER) {
-                upsertCounts[table] = scanUpserts(conn, table)
+            // Materialise upsert_/delete_ tables based on the new DB's actual
+            // schema. The producer is generic — every table in our config list
+            // is processed identically.
+            for (table in PATCH_TABLES_IN_FK_ORDER) {
+                if (!tableExists(conn, "new", table.name)) continue
+                PatchDbSchema.createUpsertTable(conn, "new", table)
+                PatchDbSchema.createDeleteTable(conn, "new", table)
             }
-            for (table in TABLES_IN_FK_ORDER) {
-                deleteCounts[table] = scanDeletes(conn, table)
+
+            for (table in PATCH_TABLES_IN_FK_ORDER) {
+                upsertCounts[table.name] = scanUpserts(conn, table)
+            }
+            for (table in PATCH_TABLES_IN_FK_ORDER) {
+                deleteCounts[table.name] = scanDeletes(conn, table)
             }
 
             // Commit BEFORE detach so SQLite isn't holding locks on the
@@ -102,9 +92,9 @@ class PatchDbProducer(
         return Output(outputPath, fromVersion, toVersion, upsertCounts, deleteCounts)
     }
 
-    private fun applyDdl(conn: Connection) {
+    private fun applyBaseDdl(conn: Connection) {
         conn.createStatement().use { st ->
-            PatchDbSchema.statements.forEach { st.executeUpdate(it) }
+            PatchDbSchema.baseStatements.forEach { st.executeUpdate(it) }
         }
     }
 
@@ -140,50 +130,44 @@ class PatchDbProducer(
         conn.createStatement().use { it.execute("DETACH DATABASE $alias") }
     }
 
-    /** Returns the number of rows scanned into upsert_<table>. */
-    private fun scanUpserts(conn: Connection, table: String): Int {
-        val cols = readColumns(conn, "main", "upsert_$table") ?: return 0
-        if (!hasTable(conn, "new", table)) return 0
+    private fun scanUpserts(conn: Connection, table: PatchTable): Int {
+        val cols = PatchDbSchema.readTableInfo(conn, "new", table.name).map { it.name }
+        if (cols.isEmpty()) return 0
         val colsCsv = cols.joinToString(",") { "\"$it\"" }
-        val nonIdCols = cols.filter { it != "id" }
-        val diffPredicate = if (nonIdCols.isEmpty()) "FALSE" else nonIdCols.joinToString(" OR ") {
+        val joinCond = table.primaryKey.joinToString(" AND ") { "new.\"$it\" = prev.\"$it\"" }
+        val nonPkCols = cols.filter { it !in table.primaryKey }
+        val diffPredicate = if (nonPkCols.isEmpty()) "FALSE" else nonPkCols.joinToString(" OR ") {
             "COALESCE(new.\"$it\", '') <> COALESCE(prev.\"$it\", '')"
         }
+        // First PK column is enough to detect "prev row absent".
+        val firstPk = table.primaryKey.first()
         val sql = """
-            INSERT INTO upsert_$table ($colsCsv)
+            INSERT INTO "upsert_${table.name}" ($colsCsv)
             SELECT ${cols.joinToString(",") { "new.\"$it\"" }}
-            FROM new."$table" AS new
-            LEFT JOIN prev."$table" AS prev ON new.id = prev.id
-            WHERE prev.id IS NULL OR ($diffPredicate)
+            FROM new."${table.name}" AS new
+            LEFT JOIN prev."${table.name}" AS prev ON $joinCond
+            WHERE prev."$firstPk" IS NULL OR ($diffPredicate)
         """.trimIndent()
         return conn.createStatement().use { it.executeUpdate(sql) }
     }
 
-    /** Returns the number of ids scanned into delete_<table>. */
-    private fun scanDeletes(conn: Connection, table: String): Int {
-        if (!hasTable(conn, "main", "delete_$table")) return 0
-        if (!hasTable(conn, "prev", table)) return 0
+    private fun scanDeletes(conn: Connection, table: PatchTable): Int {
+        if (table.primaryKey.isEmpty()) return 0
+        if (!tableExists(conn, "prev", table.name)) return 0
+        val pkCsv = table.primaryKey.joinToString(",") { "\"$it\"" }
+        val joinCond = table.primaryKey.joinToString(" AND ") { "new.\"$it\" = prev.\"$it\"" }
+        val firstPk = table.primaryKey.first()
         val sql = """
-            INSERT INTO delete_$table(id)
-            SELECT prev.id FROM prev."$table" AS prev
-            LEFT JOIN new."$table" AS new ON prev.id = new.id
-            WHERE new.id IS NULL
+            INSERT INTO "delete_${table.name}" ($pkCsv)
+            SELECT ${table.primaryKey.joinToString(",") { "prev.\"$it\"" }}
+            FROM prev."${table.name}" AS prev
+            LEFT JOIN new."${table.name}" AS new ON $joinCond
+            WHERE new."$firstPk" IS NULL
         """.trimIndent()
         return conn.createStatement().use { it.executeUpdate(sql) }
     }
 
-    private fun readColumns(conn: Connection, schema: String, table: String): List<String>? {
-        if (!hasTable(conn, schema, table)) return null
-        val cols = ArrayList<String>()
-        conn.createStatement().use { st ->
-            st.executeQuery("PRAGMA $schema.table_info(\"$table\")").use { rs ->
-                while (rs.next()) cols += rs.getString("name")
-            }
-        }
-        return cols
-    }
-
-    private fun hasTable(conn: Connection, schema: String, name: String): Boolean {
+    private fun tableExists(conn: Connection, schema: String, name: String): Boolean {
         conn.prepareStatement("SELECT 1 FROM $schema.sqlite_master WHERE type='table' AND name=?").use { ps ->
             ps.setString(1, name)
             ps.executeQuery().use { rs -> return rs.next() }
@@ -191,11 +175,7 @@ class PatchDbProducer(
     }
 
     companion object {
-        // FK order: parents → children. Same order the applier uses for upserts.
-        val TABLES_IN_FK_ORDER: List<String> = listOf(
-            "source", "author", "topic", "pub_place", "pub_date",
-            "connection_type", "category", "tocText", "book",
-            "tocEntry", "line", "link",
-        )
+        // Kept for backwards-compat with callers (and the docs reference it).
+        val TABLES_IN_FK_ORDER: List<String> = PATCH_TABLES_IN_FK_ORDER.map { it.name }
     }
 }
