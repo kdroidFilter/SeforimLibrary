@@ -1,7 +1,13 @@
 package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
 import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookKey
+import io.github.kdroidfilter.seforimlibrary.common.changes.SefariaSourceHashComputer
+import io.github.kdroidfilter.seforimlibrary.common.changes.TouchedBookDetector
 import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
+import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocator
+import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings
+import io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator
 import io.github.kdroidfilter.seforimlibrary.core.models.Author
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
@@ -12,7 +18,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
 
@@ -25,14 +30,33 @@ import kotlin.io.path.isDirectory
 class SefariaDirectImporter(
     private val exportRoot: Path,
     private val repository: SeforimRepository,
+    private val allocator: IdAllocator = InMemoryIdAllocator.load(path = null),
+    private val buildVersion: Int = 0,
     private val logger: Logger = Logger.withTag("SefariaDirectImporter")
 ) {
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
+    private val bindings = IdAllocatorBindings(allocator, repository)
+    private val sourceName = "Sefaria"
 
     suspend fun import() = coroutineScope {
         val dbRoot = findDatabaseExportRoot(exportRoot)
         val jsonDir = dbRoot.resolve("json")
         val schemaDir = dbRoot.resolve("schemas")
+
+        // ─── Phase 2: touched-book detection ───────────────────────────────────
+        // Computes a per-book sha256 of the source artefact and classifies books
+        // against the previous build's hashes. The classification is logged for
+        // observability; the fast-path that skips unchanged books is Phase 2.5.
+        // Source hashes are recorded on the allocator at the END of import() so
+        // the snapshot persists them for the next build.
+        val currentSourceHashes = SefariaSourceHashComputer(sourceName).compute(dbRoot, buildVersion)
+        run {
+            val previousHashes = currentSourceHashes.keys
+                .mapNotNull { key -> allocator.previousSourceHash(key)?.let { key to it } }
+                .toMap()
+            val classification = TouchedBookDetector.classify(previousHashes, currentSourceHashes)
+            logger.i { "Source-hash classification: ${classification.summary()}" }
+        }
 
         // Parse table of contents for ordering
         val (categoryOrders, bookOrders) = parseTableOfContentsOrders(dbRoot, json, logger)
@@ -119,8 +143,8 @@ class SefariaDirectImporter(
         repository.executeRawQuery("PRAGMA journal_mode = MEMORY")
         repository.executeRawQuery("PRAGMA cache_size = -64000") // 64MB cache
 
-        // Build DB entries
-        val sourceId = repository.insertSource("Sefaria")
+        // Build DB entries (ids driven by IdAllocator for cross-build stability)
+        val sourceId = bindings.upsertSource(sourceName)
         val categoryIds = ConcurrentHashMap<String, Long>()
         val categoryLevelsById = ConcurrentHashMap<Long, Int>()
 
@@ -137,14 +161,13 @@ class SefariaDirectImporter(
                     return@forEachIndexed
                 }
                 val categoryOrder = categoryOrders[key] ?: categoryOrders[part] ?: 999
-                val cat = Category(
-                    id = 0,
+                val id = bindings.upsertCategory(
+                    canonicalPath = key,
                     parentId = parentId,
                     title = part,
                     level = idx,
-                    order = categoryOrder
+                    orderIndex = categoryOrder,
                 )
-                val id = repository.insertCategory(cat)
                 categoryIds[key] = id
                 categoryLevelsById[id] = idx
                 parentId = id
@@ -152,8 +175,17 @@ class SefariaDirectImporter(
             return parentId ?: throw IllegalStateException("No category created for $pathParts")
         }
 
-        val nextBookId = AtomicLong(1L)
-        val nextLineId = AtomicLong(1L)
+        // Per-(bookId, contentHash) occurrence counter, so identical lines within
+        // the same book still receive distinct stable ids.
+        val lineOccurrenceByBook = ConcurrentHashMap<Long, ConcurrentHashMap<Long, Int>>()
+        fun nextLineOccurrence(bookId: Long, contentHash: ByteArray): Int {
+            // contentHash key: lossy 64-bit hash is enough since collisions inside a
+            // single book are vanishingly rare; we only need a per-book counter.
+            val hashKey = contentHash.fold(0L) { acc, b -> (acc shl 5) - acc + b.toLong() }
+            val map = lineOccurrenceByBook.computeIfAbsent(bookId) { ConcurrentHashMap() }
+            return map.compute(hashKey) { _, v -> (v ?: -1) + 1 }!!
+        }
+
         val lineKeyToId = ConcurrentHashMap<Pair<String, Int>, Long>()
         val lineIdToBookId = ConcurrentHashMap<Long, Long>()
         val allRefsWithPath = mutableListOf<RefEntry>()
@@ -165,16 +197,16 @@ class SefariaDirectImporter(
         val lineBatch = mutableListOf<Line>()
         val lineTocBatch = mutableListOf<Pair<Long, Long>>() // lineId, tocId
 
-        val tocInserter = SefariaTocInserter(repository)
-        val altTocBuilder = SefariaAltTocBuilder(repository)
-        val linksImporter = SefariaLinksImporter(repository, logger)
+        val tocInserter = SefariaTocInserter(repository, bindings)
+        val altTocBuilder = SefariaAltTocBuilder(repository, bindings)
+        val linksImporter = SefariaLinksImporter(repository, bindings, logger)
 
         logger.i { "Inserting books and lines..." }
         var processedBooks = 0
 
         for (payload in orderedBookPayloads) {
             val catId = ensureCategoryPath(payload.categoriesHe)
-            val bookId = nextBookId.getAndIncrement()
+            val bookId = allocator.bookId(sourceName, canonicalHeTitle(payload))
             val bookPath = buildBookPath(payload.categoriesHe, payload.heTitle)
             val bookOrder = (bookOrders[payload.enTitle]
                 ?: bookOrders[payload.heTitle]
@@ -185,15 +217,28 @@ class SefariaDirectImporter(
             // Detect teamim and nekudot in book lines
             val (hasTeamim, hasNekudot) = detectTeamimAndNekudot(payload.lines)
 
+            // Pre-resolve author + pubDate IDs through the IdAllocator so they
+            // stay stable across builds (without this, INSERT OR IGNORE INTO author
+            // would assign a fresh auto-increment id on every build and break the
+            // delta producer's secondary-UNIQUE collision pre-check).
+            val resolvedAuthors = payload.authors.map { name ->
+                Author(id = bindings.upsertAuthor(name), name = name)
+            }
+            val resolvedPubDates = payload.pubDates.map { pd ->
+                io.github.kdroidfilter.seforimlibrary.core.models.PubDate(
+                    id = bindings.upsertPubDate(pd.date),
+                    date = pd.date,
+                )
+            }
             val book = Book(
                 id = bookId,
                 categoryId = catId,
                 sourceId = sourceId,
                 title = payload.heTitle,
                 heRef = payload.heTitle,
-                authors = payload.authors.map { Author(name = it) },
+                authors = resolvedAuthors,
                 pubPlaces = emptyList(),
-                pubDates = payload.pubDates,
+                pubDates = resolvedPubDates,
                 heShortDesc = payload.description,
                 notesContent = null,
                 order = bookOrder,
@@ -231,8 +276,14 @@ class SefariaDirectImporter(
             val refsByLineIndex = payload.refEntries.associateBy { it.lineIndex - 1 }
 
             payload.lines.forEachIndexed { idx, content ->
-                val lineId = nextLineId.getAndIncrement()
                 val refEntry = refsByLineIndex[idx]
+                // Prefer Sefaria's stable citation address (heRef) as natural key
+                // when available — survives Sefaria's verse-prefix renumbering
+                // (DELTA_UPDATE_PLAN.md §2.1). Fallback to content hash for
+                // headings / structural lines that have no heRef.
+                val contentHash = IdAllocatorBindings.lineNaturalKeyHash(content, refEntry?.heRef)
+                val occurrence = nextLineOccurrence(bookId, contentHash)
+                val lineId = allocator.lineId(bookId, contentHash, occurrence)
                 val lineCharCount = countVisibleChars(content)
                 lineBatch += Line(
                     id = lineId,
@@ -342,9 +393,30 @@ class SefariaDirectImporter(
         repository.rebuildCategoryClosure()
         linksImporter.updateBookHasLinks()
 
+        // Persist current source hashes for next build's touched-book detection.
+        // We only record hashes for books that actually went through the importer
+        // (i.e. whose natural key now exists in the allocator), so books that were
+        // filtered out (blacklists, dedup vs Sefaria) don't get spurious hashes.
+        var recorded = 0
+        for ((key, hash) in currentSourceHashes) {
+            if (allocator.peekBookId(key.sourceName, key.canonicalHeTitle) != null) {
+                allocator.recordSourceHash(key, hash)
+                recorded++
+            }
+        }
+        logger.i { "Recorded source hashes for $recorded / ${currentSourceHashes.size} Sefaria books" }
+
         logger.i { "Direct Sefaria import completed." }
     }
 }
+
+/**
+ * Canonical hebrew-title key used as part of a book's natural key. Picking
+ * `heTitle` (the raw payload key) keeps the natural key stable as long as
+ * Sefaria doesn't rename the title; a renamed book is handled by the alias
+ * mechanism (§4.5) in a later phase.
+ */
+private fun canonicalHeTitle(payload: BookPayload): String = payload.heTitle
 
 /**
  * Detects whether any line in the list contains teamim (cantillation marks) or nekudot (vowel points).

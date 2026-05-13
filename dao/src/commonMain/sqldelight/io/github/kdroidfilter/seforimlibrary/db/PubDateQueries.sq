@@ -19,6 +19,9 @@ INSERT INTO pub_date (date)
 VALUES (?)
 ON CONFLICT (date) DO NOTHING;
 
+insertWithId:
+INSERT OR IGNORE INTO pub_date (id, date) VALUES (?, ?);
+
 linkBookPubDate:
 INSERT INTO book_pub_date (bookId, pubDateId)
 VALUES (?, ?)

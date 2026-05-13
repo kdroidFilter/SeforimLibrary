@@ -1,7 +1,13 @@
 package io.github.kdroidfilter.seforimlibrary.otzariasqlite
 
 import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookKey
+import io.github.kdroidfilter.seforimlibrary.common.changes.OtzariaSourceHashComputer
+import io.github.kdroidfilter.seforimlibrary.common.changes.TouchedBookDetector
 import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
+import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocator
+import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings
+import io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator
 import io.github.kdroidfilter.seforimlibrary.core.models.*
 import io.github.kdroidfilter.seforimlibrary.core.text.HebrewTextUtils
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
@@ -33,19 +39,50 @@ class DatabaseGenerator(
     private val sourceDirectory: Path,
     private val repository: SeforimRepository,
     private val acronymDbPath: String? = null,
-    private val filterSourcesForLinks: Boolean = true
+    private val filterSourcesForLinks: Boolean = true,
+    private val allocator: IdAllocator = InMemoryIdAllocator.load(path = null),
+    private val buildVersion: Int = 0,
 ) {
 
     private val logger = Logger.withTag("DatabaseGenerator")
+    private val bindings = IdAllocatorBindings(allocator, repository)
 
 
     private val json = Json {
         ignoreUnknownKeys = true
         coerceInputValues = true
     }
-    private var nextBookId = 1L // Counter for book IDs
-    private var nextLineId = 1L // Counter for line IDs
-    private var nextTocEntryId = 1L // Counter for TOC entry IDs
+    // Per-(bookId, contentHash) occurrence counter so duplicate lines get distinct stable ids.
+    private val lineOccurrenceByBook = mutableMapOf<Long, MutableMap<Long, Int>>()
+    private fun nextLineOccurrence(bookId: Long, hash: ByteArray): Int {
+        val hashKey = hash.fold(0L) { acc, b -> (acc shl 5) - acc + b.toLong() }
+        val m = lineOccurrenceByBook.getOrPut(bookId) { mutableMapOf() }
+        val v = (m[hashKey] ?: -1) + 1
+        m[hashKey] = v
+        return v
+    }
+    private fun stableLineId(bookId: Long, content: String): Long {
+        val hash = IdAllocatorBindings.normalisedContentHash(content)
+        return allocator.lineId(bookId, hash, nextLineOccurrence(bookId, hash))
+    }
+    // Per-book stack of (level -> textId) used to derive a stable tocEntry ancestor path.
+    private val tocAncestorStackByBook = mutableMapOf<Long, MutableMap<Int, Long>>()
+    private suspend fun stableTocEntryId(bookId: Long, level: Int, text: String, lineIndex: Int): Pair<Long, Long> {
+        // Use upsertTocText (allocate + insertTocTextWithId) so the id reserved
+        // by the allocator matches what's actually in the tocText table.
+        // Plain bindings.allocator.tocTextId(text) only reserves an id; the
+        // subsequent repo.insertTocText(text) used a non-allocator-aware
+        // INSERT OR IGNORE path and ended up with auto-increment ids — which
+        // broke the delta producer's stable-id invariant.
+        val textId = bindings.upsertTocText(text)
+        val stack = tocAncestorStackByBook.getOrPut(bookId) { sortedMapOf() }
+        // Drop deeper levels (we're climbing up).
+        stack.keys.filter { it >= level }.forEach { stack.remove(it) }
+        stack[level] = textId
+        val path = stack.entries.sortedBy { it.key }.joinToString("/") { it.value.toString() } +
+            "@$lineIndex"
+        return allocator.tocEntryId(bookId, path) to textId
+    }
 
     // Optional connection to the Acronymizer DB (opened lazily)
     private var acronymDb: java.sql.Connection? = null
@@ -140,15 +177,18 @@ class DatabaseGenerator(
         var currentParent = parentId
         var currentLevel = startLevel
         var lastId: Long? = null
+        val pathSoFar = StringBuilder()
 
         for (title in normalizedSegments) {
+            if (pathSoFar.isNotEmpty()) pathSoFar.append('/')
+            pathSoFar.append(title)
             val existing = findExistingCategory(currentParent, title)
-            val categoryId = existing?.id ?: repository.insertCategory(
-                Category(
-                    parentId = currentParent,
-                    title = title,
-                    level = currentLevel
-                )
+            val categoryId = existing?.id ?: bindings.upsertCategory(
+                canonicalPath = pathSoFar.toString(),
+                parentId = currentParent,
+                title = title,
+                level = currentLevel,
+                orderIndex = 999,
             )
             lastId = categoryId
             currentParent = categoryId
@@ -182,23 +222,31 @@ class DatabaseGenerator(
     // Book contents cache: maps library-relative key -> list of lines
     private val bookContentCache = mutableMapOf<String, List<String>>()
 
-    // Tracks whether ID counters have been initialized from an existing DB
-    private var idCountersInitialized = false
-
+    // No-op kept for call-site compatibility. The IdAllocator (seeded from
+    // build_state.db) now handles cross-build id continuation — see DELTA_UPDATE_PLAN.md §3.5.
+    @Suppress("UnusedPrivateMember", "RedundantSuspendModifier")
     private suspend fun initializeIdCountersFromExistingDb() {
-        if (idCountersInitialized) return
-        idCountersInitialized = true
-        val maxBookId = try { repository.getMaxBookId() } catch (_: Exception) { 0L }
-        val maxLineId = try { repository.getMaxLineId() } catch (_: Exception) { 0L }
-        val maxTocEntryId = try { repository.getMaxTocEntryId() } catch (_: Exception) { 0L }
-        nextBookId = (maxBookId + 1).coerceAtLeast(1)
-        nextLineId = (maxLineId + 1).coerceAtLeast(1)
-        nextTocEntryId = (maxTocEntryId + 1).coerceAtLeast(1)
-        if (maxBookId > 0 || maxLineId > 0 || maxTocEntryId > 0) {
-            logger.i { "Continuing from existing DB ids: nextBookId=$nextBookId, nextLineId=$nextLineId, nextTocEntryId=$nextTocEntryId" }
-        } else {
-            logger.d { "No existing rows found; starting ID counters at 1" }
+        // Intentionally empty.
+    }
+
+    // Source hashes captured by the Phase 2 detector at the start of import.
+    // Recorded onto the IdAllocator at the end of import (see [recordSourceHashesAtEndOfImport]).
+    private var otzariaSourceHashes: Map<
+        BookKey,
+        io.github.kdroidfilter.seforimlibrary.common.buildstate.BookSourceHash,
+    > = emptyMap()
+
+    /** Public hook called by the importer once all Otzaria books are inserted. */
+    internal fun recordSourceHashesAtEndOfImport() {
+        if (otzariaSourceHashes.isEmpty()) return
+        var recorded = 0
+        for ((key, hash) in otzariaSourceHashes) {
+            if (allocator.peekBookId(key.sourceName, key.canonicalHeTitle) != null) {
+                allocator.recordSourceHash(key, hash)
+                recorded++
+            }
         }
+        logger.i { "Recorded source hashes for $recorded / ${otzariaSourceHashes.size} Otzaria books" }
     }
 
 
@@ -308,6 +356,7 @@ class DatabaseGenerator(
         logger.i { "Starting phase 1: categories/books/lines generation..." }
         try {
             initializeIdCountersFromExistingDb()
+
             // Performance PRAGMAs
             disableForeignKeys()
             repository.setSynchronousOff()
@@ -317,6 +366,32 @@ class DatabaseGenerator(
                 val metadata = loadMetadata()
                 // Load sources and create entries upfront
                 loadSourcesFromManifest()
+
+                // ─── Phase 2: touched-book detection ────────────────────────
+                // Runs after manifestSourcesByRel is loaded so the BookKey we
+                // emit matches what the importer will record below
+                // (via getSourceNameFor + normalizeBookTitle).
+                val currentSourceHashes: Map<
+                    BookKey,
+                    io.github.kdroidfilter.seforimlibrary.common.buildstate.BookSourceHash,
+                > = runCatching {
+                    OtzariaSourceHashComputer(
+                        sourceNameResolver = ::getSourceNameFor,
+                    ).compute(sourceDirectory, buildVersion)
+                }.getOrElse {
+                    logger.w(it) { "Skipping Otzaria touched-book detection: ${it.message}" }
+                    emptyMap()
+                }
+                run {
+                    val prev = currentSourceHashes.keys
+                        .mapNotNull { key -> allocator.previousSourceHash(key)?.let { key to it } }
+                        .toMap()
+                    val classification = TouchedBookDetector.classify(prev, currentSourceHashes)
+                    logger.i { "Source-hash classification (Otzaria): ${classification.summary()}" }
+                }
+                // Capture for later — recorded onto allocator at end of import.
+                otzariaSourceHashes = currentSourceHashes
+
                 precreateSourceEntries()
                 backfillAcronymsForExistingBooks()
                 val libraryPath = sourceDirectory.resolve("אוצריא")
@@ -345,6 +420,7 @@ class DatabaseGenerator(
                 logger.i { "Building category_closure table (phase 1)..." }
                 repository.rebuildCategoryClosure()
             }
+            recordSourceHashesAtEndOfImport()
         } finally {
             runCatching { enableForeignKeys() }
             runCatching { repository.setSynchronousNormal() }
@@ -573,12 +649,12 @@ class DatabaseGenerator(
      */
     private suspend fun precreateSourceEntries() {
         // Always ensure 'Unknown' exists
-        val unknownId = repository.insertSource("Unknown")
+        val unknownId = bindings.upsertSource("Unknown")
         sourceNameToId["Unknown"] = unknownId
         // Insert all discovered sources
         val uniqueSources = manifestSourcesByRel.values.toSet()
         for (name in uniqueSources) {
-            val id = repository.insertSource(name)
+            val id = bindings.upsertSource(name)
             sourceNameToId[name] = id
         }
         logger.i { "Prepared ${sourceNameToId.size} sources in DB" }
@@ -699,23 +775,21 @@ class DatabaseGenerator(
             }
         }
 
-        // Assign a unique ID to this book
-        val currentBookId = nextBookId++
-        logger.d { "Assigning ID $currentBookId to book '$title' with categoryId: $categoryId" }
+        // Assign a stable ID via IdAllocator so cross-build reproducibility holds.
+        val currentBookId = allocator.bookId(srcName, title)
+        logger.d { "Assigning ID $currentBookId to book '$title' (source=$srcName) with categoryId: $categoryId" }
 
-        // Create author list if author is available in metadata
+        // Pre-resolve author / pubPlace / pubDate IDs through the IdAllocator
+        // so they remain stable across builds (required for the delta producer's
+        // secondary-UNIQUE collision pre-check).
         val authors = meta?.author?.let { authorName ->
-            listOf(Author(name = authorName))
+            listOf(Author(id = bindings.upsertAuthor(authorName), name = authorName))
         } ?: emptyList()
-
-        // Create publication places list if pubPlace is available in metadata
         val pubPlaces = meta?.pubPlace?.let { pubPlaceName ->
-            listOf(PubPlace(name = pubPlaceName))
+            listOf(PubPlace(id = bindings.upsertPubPlace(pubPlaceName), name = pubPlaceName))
         } ?: emptyList()
-
-        // Create publication dates list if pubDate is available in metadata
         val pubDates = meta?.pubDate?.let { pubDateValue ->
-            listOf(PubDate(date = pubDateValue))
+            listOf(PubDate(id = bindings.upsertPubDate(pubDateValue), date = pubDateValue))
         } ?: emptyList()
 
         // Detect companion notes file named 'הערות על <title>.txt' in the same directory
@@ -852,8 +926,8 @@ class DatabaseGenerator(
                 }
 
                 val parentId = (level - 1 downTo 1).firstNotNullOfOrNull { parentStack[it] }
-                val currentTocEntryId = nextTocEntryId++
-                val currentLineId = nextLineId++
+                val (currentTocEntryId, tocTextStableId) = stableTocEntryId(bookId, level, plainText, lineIndex)
+                val currentLineId = stableLineId(bookId, line)
 
                 // Stocker l'info de cette entrée pour la deuxième passe
                 allTocEntries.add(TocEntryData(
@@ -869,6 +943,7 @@ class DatabaseGenerator(
                     id = currentTocEntryId,
                     bookId = bookId,
                     parentId = parentId,
+                    textId = tocTextStableId,
                     text = plainText,
                     level = level,
                     lineId = null,
@@ -902,7 +977,7 @@ class DatabaseGenerator(
                 }
             } else {
                 // Regular line
-                val currentLineId = nextLineId++
+                val currentLineId = stableLineId(bookId, line)
                 val insertedLineId = repository.insertLine(
                     Line(
                         id = currentLineId,
@@ -1112,7 +1187,7 @@ class DatabaseGenerator(
         val sourceName = manifestSourcesByRel[rel] ?: "Unknown"
         val cached = sourceNameToId[sourceName]
         if (cached != null) return cached
-        val id = repository.insertSource(sourceName)
+        val id = bindings.upsertSource(sourceName)
         sourceNameToId[sourceName] = id
         return id
     }
@@ -1418,13 +1493,14 @@ class DatabaseGenerator(
      * @param path The path to the book file
      * @return A list of topics extracted from the path
      */
-    private fun extractTopics(path: Path): List<Topic> {
+    private suspend fun extractTopics(path: Path): List<Topic> {
         // Extract topics from the path
         val parts = path.toString().split(File.separator)
         val topicNames = parts.dropLast(1).takeLast(2)
 
+        // Pre-resolve through IdAllocator so topic IDs stay stable across builds.
         return topicNames.map { name ->
-            Topic(name = name)
+            Topic(id = bindings.upsertTopic(name), name = name)
         }
     }
 

@@ -29,7 +29,7 @@ INSERT INTO alt_toc_entry (structureId, parentId, textId, level, lineId, isLastC
 VALUES (?, ?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO alt_toc_entry (id, structureId, parentId, textId, level, lineId, isLastChild, hasChildren)
+INSERT OR IGNORE INTO alt_toc_entry (id, structureId, parentId, textId, level, lineId, isLastChild, hasChildren)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 updateLineId:

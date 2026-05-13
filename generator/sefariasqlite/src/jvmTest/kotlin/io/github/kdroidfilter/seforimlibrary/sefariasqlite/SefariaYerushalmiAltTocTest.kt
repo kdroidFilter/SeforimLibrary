@@ -97,7 +97,11 @@ class SefariaYerushalmiAltTocTest {
             lineKeyToId["Jerusalem Talmud Berakhot" to idx] = lineId
         }
 
-        val altTocBuilder = SefariaAltTocBuilder(repo)
+        val bindings = io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings(
+            io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator.load(path = null),
+            repo,
+        )
+        val altTocBuilder = SefariaAltTocBuilder(repo, bindings)
         val ok = altTocBuilder.buildAltTocStructuresForBook(
             payload = payload,
             bookId = 1,

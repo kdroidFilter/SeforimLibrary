@@ -1,0 +1,14 @@
+-- Generated content from schema_meta (see Database.sq).
+
+getSchemaMeta:
+SELECT value FROM schema_meta WHERE key = ?;
+
+upsertSchemaMeta:
+INSERT INTO schema_meta(key, value) VALUES (?, ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+
+deleteSchemaMeta:
+DELETE FROM schema_meta WHERE key = ?;
+
+allSchemaMeta:
+SELECT key, value FROM schema_meta ORDER BY key;

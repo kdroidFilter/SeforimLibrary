@@ -123,6 +123,13 @@ class LuceneTextIndexWriter(
         writer.addDocument(doc)
     }
 
+    override fun deleteLineById(lineId: Long) {
+        // line_id is indexed as IntPoint (point field), so target it with an
+        // exact-match point query. Deletes every line-document whose
+        // line_id equals this value — typically exactly one.
+        writer.deleteDocuments(IntPoint.newExactQuery(FIELD_LINE_ID, lineId.toInt()))
+    }
+
     override fun commit() {
         writer.commit()
     }

@@ -5,10 +5,13 @@ import app.cash.sqldelight.db.SqlCursor
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
+import io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import kotlinx.coroutines.runBlocking
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.Paths
 
 /**
@@ -119,11 +122,26 @@ fun main(args: Array<String>) = runBlocking {
         }
     }
 
+    // ─── IdAllocator (delta-update support) ────────────────────────────────────
+    val buildStatePath: Path = run {
+        val explicit = System.getProperty("buildStatePath") ?: System.getenv("BUILD_STATE_PATH")
+        if (explicit != null) Paths.get(explicit) else Paths.get("$persistDbPath.buildstate")
+    }
+    val prev = buildStatePath.takeIf { Files.exists(it) }
+    val allocator = InMemoryIdAllocator.load(prev, Logger.withTag("IdAllocator"))
+
     try {
+        val buildVersion: Int = (System.getProperty("buildVersion")
+            ?: System.getenv("BUILD_VERSION"))
+            ?.toIntOrNull()
+            ?: (System.currentTimeMillis() / 1000).toInt()
+
         val generator = DatabaseGenerator(
             sourceDirectory = Paths.get(sourceDir),
             repository = repository,
-            acronymDbPath = acronymDbPath
+            acronymDbPath = acronymDbPath,
+            allocator = allocator,
+            buildVersion = buildVersion,
         )
         generator.generateLinesOnly()
         if (useMemoryDb) {
@@ -144,6 +162,17 @@ fun main(args: Array<String>) = runBlocking {
                 throw e
             }
         }
+        // Persist build_state so subsequent phases/builds reuse the same ids.
+        runCatching {
+            allocator.snapshotTo(
+                target = buildStatePath,
+                extraMeta = mapOf(
+                    "generator" to "otzariasqlite/generateLines",
+                    "generated_at" to java.time.Instant.now().toString(),
+                ),
+            )
+        }.onFailure { logger.w(it) { "Failed to write build_state to $buildStatePath" } }
+        Unit
         logger.i { "Phase 1 completed successfully. DB at ${if (useMemoryDb) persistDbPath else dbPath}" }
     } catch (e: Exception) {
         logger.e(e) { "Error during phase 1 generation" }

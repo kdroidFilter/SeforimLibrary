@@ -19,6 +19,19 @@ tasks.register("generateSeforimDb") {
     dependsOn(":searchindex:buildLuceneIndexDefault")
     dependsOn(":packaging:writeReleaseInfo")
     dependsOn(":packaging:downloadLexicalDb")
+    // Stamps schema_meta.db_version into the produced seforim.db so the
+    // delta client can read it. Without this, every client reads
+    // db_version=0 (default) and the path chooser always picks FullBundle
+    // instead of the incremental chain.
+    finalizedBy(":generator-common:stampSchemaVersion")
+}
+// Force stamp ordering after every step that writes to seforim.db, so the
+// stamp runs at the very end of the pipeline (not concurrently with content
+// inserts).
+project(":generator-common").tasks.matching { it.name == "stampSchemaVersion" }.configureEach {
+    mustRunAfter(":packaging:writeReleaseInfo")
+    mustRunAfter(":catalog:buildCatalog")
+    mustRunAfter(":searchindex:buildLuceneIndexDefault")
 }
 
 // Ensure ordering inside the pipeline task graph
@@ -61,6 +74,81 @@ tasks.register("packageSeforimBundle") {
 //project(":packaging").tasks.matching { it.name == "packageArtifacts" }.configureEach {
 //    mustRunAfter("generateSeforimDb")
 //}
+
+/**
+ * Push-button release task — produces the seforim.db + catalog.pb + Lucene
+ * indexes, then derives a delta against a configured previous release and
+ * emits the JSON artefacts the client polls.
+ *
+ * Required when invoking:
+ *   -PprevReleaseDb=/path/to/previous/seforim.db
+ *   -PfromVersion=<int>           current release of the prev DB
+ *   -PtoVersion=<int>             version label this build will publish
+ *
+ * Optional (writes release_meta.json when all four are set):
+ *   -PreleaseMeta=/path/to/release_meta.json
+ *   -PfullBundleUrl=https://.../full-vN.tar.zst
+ *   -PfullBundleSha=<sha256>
+ *   -PfullBundleSize=<bytes>
+ *   -PmanifestBaseUrl=https://.../deltas
+ *
+ * Output (under <root>/build/):
+ *   - seforim.db                   freshly-built DB
+ *   - seforim.db.buildstate        IdAllocator snapshot for the next build
+ *   - catalog.pb / *.lucene/       app artefacts
+ *   - patch-v<from>-v<to>.db                  binary delta
+ *   - patch-v<from>-v<to>.db.manifest.json    per-delta manifest
+ *   - release_meta.json (optional)            release-level index
+ */
+tasks.register("publishRelease") {
+    group = "application"
+    description = "generateSeforimDb + producePatchAndVerify (+ release_meta.json upsert)."
+    dependsOn("generateSeforimDb")
+    finalizedBy(":generator-common:producePatchAndVerify")
+    // Operator footgun guard: if -PprevReleaseDb is set we're producing a
+    // delta against a previous release, which requires the IdAllocator to
+    // be seeded from that release's build_state. Without it, the allocator
+    // starts fresh and assigns brand-new ids to every row — the producer
+    // would then emit a "delta" containing the entire corpus, useless as
+    // an incremental patch. Fail fast with the path the operator forgot.
+    doFirst {
+        val prev = project.findProperty("prevReleaseDb") as String?
+        if (prev != null) {
+            val explicit = System.getProperty("buildStatePath")
+                ?: System.getenv("BUILD_STATE_PATH")
+            val buildStateFile = if (explicit != null) {
+                file(explicit)
+            } else {
+                layout.buildDirectory.file("seforim.db.buildstate").get().asFile
+            }
+            check(buildStateFile.exists()) {
+                "publishRelease: -PprevReleaseDb=$prev was set but " +
+                    "$buildStateFile is missing. Copy the previous release's " +
+                    "seforim.db.buildstate into place (see RELEASE.md) — without it, " +
+                    "the IdAllocator restarts from scratch and produces a patch with " +
+                    "every id renumbered."
+            }
+        }
+    }
+}
+project(":generator-common").tasks.matching { it.name == "producePatchAndVerify" }.configureEach {
+    // Use the absolute task path so the lookup succeeds when this task is
+    // invoked directly (e.g. for a producer-only e2e), without requiring
+    // generateSeforimDb to exist in :generator-common.
+    mustRunAfter(rootProject.tasks.named("generateSeforimDb"))
+    // Map the umbrella task's -P props onto the CLI's gradle props.
+    val prev = project.findProperty("prevReleaseDb") as String?
+    val from = project.findProperty("fromVersion") as String?
+    val to = project.findProperty("toVersion") as String?
+    if (prev != null && from != null && to != null) {
+        val out = rootProject.layout.buildDirectory
+            .file("patch-v${from}-v${to}.db").get().asFile.absolutePath
+        val new = rootProject.layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+        this.extensions.extraProperties.set("prevDb", prev)
+        this.extensions.extraProperties.set("newDb", new)
+        this.extensions.extraProperties.set("out", out)
+    }
+}
 
 tasks.register<Delete>("cleanGeneratedData") {
     group = "application"

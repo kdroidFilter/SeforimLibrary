@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
 import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings
 import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
 import io.github.kdroidfilter.seforimlibrary.core.models.Link
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
@@ -14,6 +15,7 @@ import java.nio.file.Path
 
 internal class SefariaLinksImporter(
     private val repository: SeforimRepository,
+    private val bindings: IdAllocatorBindings,
     private val logger: Logger
 ) {
     suspend fun processLinksInParallel(
@@ -25,6 +27,10 @@ internal class SefariaLinksImporter(
         bookMetaById: Map<Long, BookMeta>,
         headingLineIds: Set<Long> = emptySet()
     ) = coroutineScope {
+        // Pre-register all connection types we'll use so their ids are stable
+        // (so `link.connectionTypeId` is reproducible across builds).
+        ConnectionType.values().forEach { bindings.upsertConnectionType(it.name) }
+
         val csvFiles = Files.list(linksDir)
             .filter { it.fileName.toString().endsWith(".csv") }
             .toList()
@@ -135,9 +141,14 @@ internal class SefariaLinksImporter(
                             bookMetaById = bookMetaById
                         )
 
-                        // Send links to channel
+                        // Resolve connection type ids via the allocator so the link id can be stable.
+                        val forwardTypeId = bindings.upsertConnectionType(forwardType.name)
+                        val reverseTypeId = bindings.upsertConnectionType(reverseType.name)
+
+                        // Send links to channel — ids resolved by allocator for cross-build stability.
                         linkChannel.send(
                             Link(
+                                id = bindings.allocator.linkId(srcLine, tgtLine, forwardTypeId),
                                 sourceBookId = srcBookId,
                                 targetBookId = tgtBookId,
                                 sourceLineId = srcLine,
@@ -149,6 +160,7 @@ internal class SefariaLinksImporter(
 
                         linkChannel.send(
                             Link(
+                                id = bindings.allocator.linkId(tgtLine, srcLine, reverseTypeId),
                                 sourceBookId = tgtBookId,
                                 targetBookId = srcBookId,
                                 sourceLineId = tgtLine,

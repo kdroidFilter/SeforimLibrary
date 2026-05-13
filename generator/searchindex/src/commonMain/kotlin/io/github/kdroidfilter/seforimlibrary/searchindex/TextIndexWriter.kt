@@ -47,6 +47,14 @@ interface TextIndexWriter : AutoCloseable {
     )
 
     /**
+     * Removes the line document whose stored `line_id` matches [lineId].
+     * Default no-op for non-line stores. Used by the delta-update client
+     * to keep Lucene in lockstep with `seforim.db` when the patch deletes
+     * a line.
+     */
+    fun deleteLineById(lineId: Long) { /* default no-op */ }
+
+    /**
      * Flush and commit pending writes.
      */
     fun commit()

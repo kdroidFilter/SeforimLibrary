@@ -12,6 +12,9 @@ SELECT * FROM source WHERE name = ? LIMIT 1;
 insert:
 INSERT INTO source (name) VALUES (?);
 
+insertWithId:
+INSERT OR IGNORE INTO source (id, name) VALUES (?, ?);
+
 lastInsertRowId:
 SELECT last_insert_rowid();
 
