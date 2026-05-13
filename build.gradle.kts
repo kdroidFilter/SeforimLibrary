@@ -19,6 +19,19 @@ tasks.register("generateSeforimDb") {
     dependsOn(":searchindex:buildLuceneIndexDefault")
     dependsOn(":packaging:writeReleaseInfo")
     dependsOn(":packaging:downloadLexicalDb")
+    // Stamps schema_meta.db_version into the produced seforim.db so the
+    // delta client can read it. Without this, every client reads
+    // db_version=0 (default) and the path chooser always picks FullBundle
+    // instead of the incremental chain.
+    finalizedBy(":generator-common:stampSchemaVersion")
+}
+// Force stamp ordering after every step that writes to seforim.db, so the
+// stamp runs at the very end of the pipeline (not concurrently with content
+// inserts).
+project(":generator-common").tasks.matching { it.name == "stampSchemaVersion" }.configureEach {
+    mustRunAfter(":packaging:writeReleaseInfo")
+    mustRunAfter(":catalog:buildCatalog")
+    mustRunAfter(":searchindex:buildLuceneIndexDefault")
 }
 
 // Ensure ordering inside the pipeline task graph

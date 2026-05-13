@@ -80,6 +80,40 @@ tasks.register<JavaExec>("producePatchAndVerify") {
     jvmArgs = listOf("-Xmx10g", "-XX:+UseG1GC")
 }
 
+tasks.register<JavaExec>("compareLogicalContent") {
+    group = "verification"
+    description = "Per-table LogicalContentHasher comparison between two seforim.db files."
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.common.patch.CompareLogicalContentCliKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+    val left = project.findProperty("leftDb") as String? ?: error("-PleftDb= missing")
+    val right = project.findProperty("rightDb") as String? ?: error("-PrightDb= missing")
+    systemProperty("leftDb", left)
+    systemProperty("rightDb", right)
+    jvmArgs = listOf("-Xmx10g", "-XX:+UseG1GC")
+}
+
+tasks.register<JavaExec>("stampSchemaVersion") {
+    group = "application"
+    description = "Stamps schema_meta.db_version + db_schema_version into the freshly-built seforim.db so the client can read the current release version."
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.common.patch.StampSchemaVersionCliKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+    // Default the dbPath to <root>/build/seforim.db (where generateSeforimDb
+    // emits) so the operator only needs to pass -PdbVersion in the common case.
+    val dbPath = project.findProperty("dbPath") as String?
+        ?: rootProject.layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+    // dbVersion falls back to toVersion (release timeline) for convenience
+    // when called through publishRelease, then to "1" for the first release.
+    val dbVersion = (project.findProperty("dbVersion") as String?)
+        ?: (project.findProperty("toVersion") as String?)
+        ?: "1"
+    systemProperty("dbPath", dbPath)
+    systemProperty("dbVersion", dbVersion)
+    project.findProperty("dbSchemaVersion")?.let { systemProperty("dbSchemaVersion", it as String) }
+    jvmArgs = listOf("-Xmx512m")
+}
+
 tasks.register<JavaExec>("diagnoseHashMismatch") {
     group = "verification"
     description = "Apply a patch.db onto a copy of prevDb and report which tables hash-differ from newDb."
