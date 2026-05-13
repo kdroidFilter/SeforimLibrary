@@ -87,6 +87,36 @@ class ReleaseManifestWriterTest {
     }
 
     @Test
+    fun `manifest writes are atomic — no tmp lingers on success`() {
+        val patchFile = tmp.newFile("patch.db").toPath()
+        Files.writeString(patchFile, "fake patch bytes")
+        val writer = ReleaseManifestWriter()
+        val manifest = writer.writeManifest(
+            patchFile = patchFile,
+            fromVersion = 1, toVersion = 2,
+            fromSchemaVersion = 1, toSchemaVersion = 1,
+            fromContentHash = "from", toContentHash = "to",
+        )
+        assertTrue(Files.exists(manifest), "manifest must exist")
+        assertTrue(
+            !Files.exists(manifest.resolveSibling("${manifest.fileName}.tmp")),
+            ".tmp companion must be moved away, not left on disk",
+        )
+        val metaPath = tmp.newFolder().toPath().resolve("release_meta.json")
+        writer.upsertReleaseMeta(
+            releaseMetaPath = metaPath,
+            latestVersion = 2,
+            fullBundle = ReleaseManifestWriter.FullBundleSpec(2, "u", "s", 1L),
+            newEntry = ReleaseManifestWriter.DeltaEntrySpec(1, 2, "m", 1L),
+        )
+        assertTrue(Files.exists(metaPath))
+        assertTrue(
+            !Files.exists(metaPath.resolveSibling("${metaPath.fileName}.tmp")),
+            "release_meta.json.tmp companion must not linger",
+        )
+    }
+
+    @Test
     fun `release_meta survives quotes and slashes in URLs`() {
         val metaPath = tmp.newFolder().toPath().resolve("release_meta.json")
         ReleaseManifestWriter().upsertReleaseMeta(

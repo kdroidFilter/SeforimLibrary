@@ -3,6 +3,7 @@ package io.github.kdroidfilter.seforimlibrary.common.patch
 import co.touchlab.kermit.Logger
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 
 /**
@@ -61,7 +62,7 @@ class ReleaseManifestWriter(
             }
             append("\n}\n")
         }
-        Files.writeString(target, body)
+        atomicWriteString(target, body)
         logger.i { "Manifest written: $target" }
         return target
     }
@@ -113,9 +114,22 @@ class ReleaseManifestWriter(
             append("  ]\n")
             append("}\n")
         }
-        Files.writeString(releaseMetaPath, body)
+        atomicWriteString(releaseMetaPath, body)
         logger.i { "release_meta.json updated: $releaseMetaPath (${merged.size} delta entries)" }
         return releaseMetaPath
+    }
+
+    /**
+     * Writes [body] to [target] via a same-directory `.tmp` plus
+     * `ATOMIC_MOVE`. Either the file at [target] holds the previous content
+     * or it holds the fully-written new content — never a partial state, so
+     * a client polling mid-write can't observe a half-written manifest.
+     */
+    private fun atomicWriteString(target: Path, body: String) {
+        Files.createDirectories(target.toAbsolutePath().parent)
+        val tmp = target.resolveSibling("${target.fileName}.tmp")
+        Files.writeString(tmp, body)
+        Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
     }
 
     data class FullBundleSpec(
