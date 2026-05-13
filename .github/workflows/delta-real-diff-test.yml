@@ -112,8 +112,6 @@ jobs:
       # ─── BUILD v1 BASELINE ─────────────────────────────────────────────────
       - name: Build v1 baseline (uses pre-staged N-1 sources)
         run: ./gradlew generateSeforimDb -PdbVersion=1 --no-daemon --stacktrace
-        env:
-          GRADLE_OPTS: -Xmx2g
 
       - name: Verify v1 stamp
         run: |
@@ -144,8 +142,6 @@ jobs:
 
       - name: Build v2 (lets fetcher download /releases/latest)
         run: ./gradlew generateSeforimDb -PdbVersion=2 -PtoVersion=2 --no-daemon --stacktrace
-        env:
-          GRADLE_OPTS: -Xmx2g
 
       - name: Verify v2 stamp
         run: |
@@ -163,8 +159,6 @@ jobs:
             -PcatalogPb=$PWD/build/catalog.pb \
             -PfromVersion=1 -PtoVersion=2 \
             --no-daemon --stacktrace
-        env:
-          GRADLE_OPTS: -Xmx2g
 
       - name: Summarise patch
         run: |

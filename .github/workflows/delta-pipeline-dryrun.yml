@@ -69,11 +69,6 @@ jobs:
       - name: Build seforim.db v1 (no previous buildstate → IdAllocator starts fresh)
         run: |
           ./gradlew generateSeforimDb -PdbVersion=1 --no-daemon --stacktrace
-        env:
-          # The heavy work runs in JavaExec sub-processes with their own
-          # -Xmx (10g on Otzaria/Lucene tasks). Keep the Gradle daemon
-          # itself lean so the two don't compete for the runner's 16 GB.
-          GRADLE_OPTS: -Xmx2g
 
       - name: Verify v1 schema_meta.db_version
         run: |
@@ -105,11 +100,6 @@ jobs:
       - name: Build seforim.db v2 (seeded — IDs must stay stable wrt v1)
         run: |
           ./gradlew generateSeforimDb -PdbVersion=2 -PtoVersion=2 --no-daemon --stacktrace
-        env:
-          # The heavy work runs in JavaExec sub-processes with their own
-          # -Xmx (10g on Otzaria/Lucene tasks). Keep the Gradle daemon
-          # itself lean so the two don't compete for the runner's 16 GB.
-          GRADLE_OPTS: -Xmx2g
 
       - name: Verify v2 schema_meta.db_version
         run: |
@@ -127,11 +117,6 @@ jobs:
             -PcatalogPb=$PWD/build/catalog.pb \
             -PfromVersion=1 -PtoVersion=2 \
             --no-daemon --stacktrace
-        env:
-          # The heavy work runs in JavaExec sub-processes with their own
-          # -Xmx (10g on Otzaria/Lucene tasks). Keep the Gradle daemon
-          # itself lean so the two don't compete for the runner's 16 GB.
-          GRADLE_OPTS: -Xmx2g
 
       # ─── PATCH SIZE + MANIFEST SUMMARY ──────────────────────────────────────
       - name: Summarise patch
