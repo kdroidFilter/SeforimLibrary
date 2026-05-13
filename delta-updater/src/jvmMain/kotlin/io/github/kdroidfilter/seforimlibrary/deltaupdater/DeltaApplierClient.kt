@@ -40,7 +40,25 @@ class DeltaApplierClient(
         patchDb: Path,
         manifest: DeltaManifest,
     ): Result {
-        // 1. Read current logical content hash and require it matches manifest.from.
+        // 1. Schema-version gate: the manifest declares the seforim.db
+        //    schema this delta was produced against. If the local DB
+        //    carries a different version, applying would produce a
+        //    mixed-schema DB. Refuse and ask the user to take the full
+        //    bundle instead (which the orchestrator's path chooser would
+        //    have selected if the operator had set retentionWindow
+        //    correctly — this guard is the last line of defence).
+        openConn(seforimDb).use { conn ->
+            val localSchemaVersion = readSchemaMetaInt(conn, "db_schema_version")
+            if (localSchemaVersion != null && localSchemaVersion != manifest.fromSchemaVersion) {
+                throw IllegalStateException(
+                    "Local DB schema_meta.db_schema_version=$localSchemaVersion does not match " +
+                        "manifest.fromSchemaVersion=${manifest.fromSchemaVersion}. " +
+                        "Refusing to apply — request a full bundle download instead.",
+                )
+            }
+        }
+
+        // 2. Read current logical content hash and require it matches manifest.from.
         val currentHash = LogicalContentHasher().compute(openConn(seforimDb))
         if (currentHash != manifest.fromContentHash) {
             throw IllegalStateException(
@@ -136,6 +154,20 @@ class DeltaApplierClient(
 
     private fun openConn(path: Path) =
         DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}")
+
+    /**
+     * Reads a single integer-valued key from `seforim.db.schema_meta`.
+     * Returns `null` when the key is absent — older DBs never wrote one,
+     * so absence means "trust the operator" (we don't refuse to apply).
+     */
+    private fun readSchemaMetaInt(conn: java.sql.Connection, key: String): Int? = runCatching {
+        conn.prepareStatement("SELECT value FROM schema_meta WHERE key = ?").use { ps ->
+            ps.setString(1, key)
+            ps.executeQuery().use { rs ->
+                if (rs.next()) rs.getString(1)?.toIntOrNull() else null
+            }
+        }
+    }.getOrNull()
 
     /**
      * Verifies the partition holding [seforimDb] has enough free space to

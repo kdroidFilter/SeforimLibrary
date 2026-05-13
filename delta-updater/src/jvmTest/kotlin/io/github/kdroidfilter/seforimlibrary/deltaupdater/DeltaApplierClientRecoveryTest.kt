@@ -107,6 +107,42 @@ class DeltaApplierClientRecoveryTest {
     }
 
     @Test
+    fun `apply refuses when local schema_meta version differs from manifest fromSchemaVersion`() {
+        val seforim = tmp.newFile("seforim.db").toPath()
+        Files.delete(seforim)
+        JdbcSqliteDriver("jdbc:sqlite:${seforim.toAbsolutePath()}").use { driver ->
+            SeforimDb.Schema.create(driver)
+        }
+        // Stamp the live DB at schema v2; manifest will claim v3.
+        DriverManager.getConnection("jdbc:sqlite:${seforim.toAbsolutePath()}").use { conn ->
+            conn.prepareStatement("INSERT INTO schema_meta(key, value) VALUES (?, ?)").use { ps ->
+                ps.setString(1, "db_schema_version"); ps.setString(2, "2"); ps.executeUpdate()
+            }
+        }
+        val fromHash = DriverManager.getConnection("jdbc:sqlite:${seforim.toAbsolutePath()}").use {
+            LogicalContentHasher().compute(it)
+        }
+        val patch = tmp.newFile("patch.db").toPath()
+        Files.writeString(patch, "irrelevant")
+
+        val manifest = DeltaManifest(
+            fromVersion = 1, toVersion = 2,
+            fromSchemaVersion = 3, toSchemaVersion = 3, // mismatch with local v2
+            fromContentHash = fromHash, toContentHash = "anything",
+            patchFiles = emptyList(),
+        )
+        val ex = assertFailsWith<IllegalStateException> {
+            DeltaApplierClient().apply(seforim, patch, manifest)
+        }
+        val msg = ex.message.orEmpty()
+        assertTrue("db_schema_version=2" in msg, "error must name the local version: $msg")
+        assertTrue("fromSchemaVersion=3" in msg, "error must name the manifest version: $msg")
+        // Backup must NOT have been written — we refused before touching disk.
+        assertFalse(Files.exists(seforim.resolveSibling("seforim.db.backup")))
+        assertFalse(Files.exists(seforim.resolveSibling("seforim.db.applying")))
+    }
+
+    @Test
     fun `apply refuses to run when marker already exists`() {
         // Build a real DB so the from-hash check would pass, then pre-create
         // the marker to simulate a concurrent apply or an un-recovered crash.
