@@ -47,6 +47,13 @@ tasks.register<JavaExec>("producePatchAndVerify") {
     systemProperty("out", out)
     project.findProperty("fromVersion")?.let { systemProperty("fromVersion", it as String) }
     project.findProperty("toVersion")?.let { systemProperty("toVersion", it as String) }
+    // Optional release-meta knobs.
+    listOf(
+        "releaseMeta", "fullBundleUrl", "fullBundleSha", "fullBundleSize",
+        "manifestBaseUrl", "fromSchemaVersion", "toSchemaVersion",
+    ).forEach { key ->
+        project.findProperty(key)?.let { systemProperty(key, it as String) }
+    }
 
     jvmArgs = listOf("-Xmx10g", "-XX:+UseG1GC")
 }

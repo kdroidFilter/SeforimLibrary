@@ -81,4 +81,39 @@ fun main(args: Array<String>) {
         }
     }
     runCatching { Files.deleteIfExists(target) }
+
+    // Emit a per-delta manifest.json next to the patch.db, plus optionally
+    // append/update a release_meta.json the client polls.
+    ReleaseManifestWriter(logger).writeManifest(
+        patchFile = outPath,
+        fromVersion = from,
+        toVersion = to,
+        fromSchemaVersion = (System.getProperty("fromSchemaVersion") ?: "1").toInt(),
+        toSchemaVersion = (System.getProperty("toSchemaVersion") ?: "1").toInt(),
+        fromContentHash = DriverManager.getConnection("jdbc:sqlite:${prevPath.toAbsolutePath()}").use {
+            LogicalContentHasher().compute(it)
+        },
+        toContentHash = newHash,
+    )
+
+    val releaseMeta = System.getProperty("releaseMeta")
+        ?: System.getenv("RELEASE_META_PATH")
+    val fullBundleUrl = System.getProperty("fullBundleUrl") ?: System.getenv("FULL_BUNDLE_URL")
+    val fullBundleSha = System.getProperty("fullBundleSha") ?: System.getenv("FULL_BUNDLE_SHA")
+    val fullBundleSize = (System.getProperty("fullBundleSize") ?: System.getenv("FULL_BUNDLE_SIZE"))?.toLongOrNull()
+    val manifestBaseUrl = System.getProperty("manifestBaseUrl") ?: System.getenv("MANIFEST_BASE_URL")
+    if (releaseMeta != null && fullBundleUrl != null && fullBundleSha != null && fullBundleSize != null && manifestBaseUrl != null) {
+        ReleaseManifestWriter(logger).upsertReleaseMeta(
+            releaseMetaPath = Paths.get(releaseMeta),
+            latestVersion = to,
+            fullBundle = ReleaseManifestWriter.FullBundleSpec(
+                version = to, url = fullBundleUrl, sha256 = fullBundleSha, size = fullBundleSize,
+            ),
+            newEntry = ReleaseManifestWriter.DeltaEntrySpec(
+                fromVersion = from, toVersion = to,
+                manifestUrl = "$manifestBaseUrl/${outPath.fileName}.manifest.json",
+                totalSize = Files.size(outPath),
+            ),
+        )
+    }
 }
