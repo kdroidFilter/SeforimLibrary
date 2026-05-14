@@ -1,14 +1,5 @@
-name: Delta pipeline — real diff test (zram, 12g heap)
+name: Delta pipeline — real diff test (ARM)
 
-# Sibling of delta-real-diff-test.yml that adds an 8 GB zram-backed swap
-# device and bumps the generator fork heap to 12g. With lz4 compression
-# zram typically achieves 2.5-3× ratio → ~3 GB of physical RAM "buys"
-# 8 GB of effective swap, letting the JVM heap exceed physical memory
-# without paging to disk.
-#
-# Use this when the standard 16 GB runner can't fit the working set
-# at -Xmx8g (Sefaria links phase + per-task allocator).
-#
 # Tests the full delta-update pipeline against a REAL content diff:
 #
 #   v1 baseline ← built with the SECOND-TO-LAST GitHub releases of
@@ -37,7 +28,7 @@ permissions:
 jobs:
   real-diff:
     name: Build v1 (N-1 sources) + v2 (N sources) + verify patch
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 300
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -59,38 +50,20 @@ jobs:
           docker-images: false
           swap-storage: false
 
-      - name: Enable 8 GB zram swap (lz4-compressed RAM-backed swap)
+      - name: Bridle daemon heaps + generator forks for the 16 GB runner
         run: |
-          # 8 GB virtual swap, lz4-compressed → ~3 GB physical RAM cost
-          # for ~5 GB of effective extra memory. Lets the JVM heap grow
-          # beyond physical RAM without paging to disk.
-          sudo modprobe zram num_devices=1
-          echo lz4 | sudo tee /sys/block/zram0/comp_algorithm
-          echo 8G  | sudo tee /sys/block/zram0/disksize
-          sudo mkswap /dev/zram0
-          sudo swapon -p 100 /dev/zram0
-          # Encourage the kernel to swap cold pages out aggressively so
-          # hot working set stays in physical RAM.
-          sudo sysctl -w vm.swappiness=80
-          echo "--- mem + swap ---"
-          free -h
-          echo "--- zram ---"
-          zramctl
-
-      - name: Bridle daemon heaps + bump generator forks (12g via zram)
-        run: |
-          # Budget on the 16 GB runner + 8 GB zram:
-          #   Gradle daemon  3g
-          # + Kotlin compile in-process
-          # + generator fork 12g (-Xmx)
-          # Total worst-case reservation: 15g, comfortably within
-          # physical-RAM + zram capacity. Cold heap pages get compressed
-          # into zram instead of OOM-killing the runner.
+          # The runner has 16 GB total. Default config blows past it:
+          #   Gradle daemon (default unbounded) + Kotlin daemon (4g) +
+          #   forked generator JVM (-Xmx10g per task) → OOM-kill.
+          # Bridle each component:
+          #   • Gradle daemon: 3g
+          #   • Kotlin compile in-process (no separate 4g daemon)
+          #   • Generator forks: 5g per task (well under what they actually use)
           mkdir -p ~/.gradle
           cat >> ~/.gradle/gradle.properties <<EOF
           org.gradle.jvmargs=-Xmx3g
           kotlin.compiler.execution.strategy=in-process
-          generatorHeap=12g
+          generatorHeap=8g
           EOF
 
       - name: Disk after cleanup
@@ -98,7 +71,7 @@ jobs:
 
       - name: Install JBR 25
         run: |
-          curl -L -o jbr.tar.gz "https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk-25.0.1-linux-x64-b268.52.tar.gz"
+          curl -L -o jbr.tar.gz "https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk-25.0.1-linux-aarch64-b268.52.tar.gz"
           mkdir -p "$RUNNER_TEMP/jbr"
           tar -xzf jbr.tar.gz -C "$RUNNER_TEMP/jbr"
           JBR_DIR=$(find "$RUNNER_TEMP/jbr" -mindepth 1 -maxdepth 1 -type d -name "jbr*" -o -name "jbrsdk*" | head -n 1)
