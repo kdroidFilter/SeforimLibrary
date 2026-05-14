@@ -65,10 +65,14 @@ class DeltaUpdaterClientEndToEndTest {
             .compute(DriverManager.getConnection("jdbc:sqlite:${targetDb.toAbsolutePath()}"))
         val fromHash = io.github.kdroidfilter.seforimlibrary.common.patch.LogicalContentHasher()
             .compute(DriverManager.getConnection("jdbc:sqlite:${liveDb.toAbsolutePath()}"))
-        val patchSha256 = sha256(patchDb)
-        val patchBytes = Files.size(patchDb)
+        val uncompressedSha = sha256(patchDb)
+        val uncompressedSize = Files.size(patchDb)
+        // The orchestrator only consumes .zst patches now — compress the
+        // freshly-produced patch.db and serve that over the test server.
+        val compressed = io.github.kdroidfilter.seforimlibrary.common.patch.PatchCompressor
+            .compress(patchDb, level = 3, workers = 1)
 
-        // Stand up a localhost HTTP server with release_meta + manifest + patch.db.
+        // Stand up a localhost HTTP server with release_meta + manifest + patch.zst.
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val port = server.address.port
         val base = "http://127.0.0.1:$port"
@@ -83,7 +87,7 @@ class DeltaUpdaterClientEndToEndTest {
                       "fromVersion": 1,
                       "toVersion": 2,
                       "manifestUrl": "$base/1-2.json",
-                      "totalSize": $patchBytes
+                      "totalSize": ${compressed.compressedSize}
                     }
                   ],
                   "retentionWindow": 30
@@ -101,17 +105,19 @@ class DeltaUpdaterClientEndToEndTest {
                   "fromContentHash": "$fromHash",
                   "toContentHash": "$toHash",
                   "patchFiles": [
-                    {"file": "patch_global.db", "sha256": "$patchSha256", "size": $patchBytes}
+                    {"file": "patch_global.db.zst", "compression": "zstd",
+                     "sha256": "${compressed.compressedSha256}", "size": ${compressed.compressedSize},
+                     "uncompressedSha256": "$uncompressedSha", "uncompressedSize": $uncompressedSize}
                   ],
                   "catalogBlobName": "catalog.pb"
                 }
             """.trimIndent()
             ex.respond(200, body)
         }
-        server.createContext("/patch_global.db") { ex ->
+        server.createContext("/patch_global.db.zst") { ex ->
             ex.responseHeaders.set("Content-Type", "application/octet-stream")
-            ex.sendResponseHeaders(200, patchBytes)
-            ex.responseBody.use { Files.copy(patchDb, it) }
+            ex.sendResponseHeaders(200, compressed.compressedSize)
+            ex.responseBody.use { Files.copy(compressed.compressedFile, it) }
         }
         server.start()
 
@@ -296,10 +302,12 @@ class DeltaUpdaterClientEndToEndTest {
             ex.respond(200, """
                 {"fromVersion":1,"toVersion":2,"fromSchemaVersion":1,"toSchemaVersion":1,
                  "fromContentHash":"fake","toContentHash":"fake",
-                 "patchFiles":[{"file":"patch_global.db","sha256":"$fakeSha","size":$patchBytes}]}
+                 "patchFiles":[{"file":"patch_global.db.zst","compression":"zstd",
+                                "sha256":"$fakeSha","size":$patchBytes,
+                                "uncompressedSha256":"$fakeSha","uncompressedSize":$patchBytes}]}
             """.trimIndent())
         }
-        server.createContext("/patch_global.db") { ex ->
+        server.createContext("/patch_global.db.zst") { ex ->
             // Server closes the connection partway, simulating a flaky CDN.
             val partial = ByteArray(256) { it.toByte() }
             ex.sendResponseHeaders(200, patchBytes)
@@ -358,15 +366,17 @@ class DeltaUpdaterClientEndToEndTest {
             .compute(DriverManager.getConnection("jdbc:sqlite:${targetDb.toAbsolutePath()}"))
         val fromHash = io.github.kdroidfilter.seforimlibrary.common.patch.LogicalContentHasher()
             .compute(DriverManager.getConnection("jdbc:sqlite:${liveDb.toAbsolutePath()}"))
-        val patchSha = sha256(patchDb)
-        val patchBytes = Files.size(patchDb)
+        val uncompressedSha = sha256(patchDb)
+        val uncompressedSize = Files.size(patchDb)
+        val compressed = io.github.kdroidfilter.seforimlibrary.common.patch.PatchCompressor
+            .compress(patchDb, level = 3, workers = 1)
 
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val base = "http://127.0.0.1:${server.address.port}"
         server.createContext("/release_meta.json") { ex ->
             ex.respond(200, """
                 {"latestVersion":2,"fullBundle":{"version":2,"url":"$base/full","sha256":"x","size":1000000000},
-                 "deltas":[{"fromVersion":1,"toVersion":2,"manifestUrl":"$base/m.json","totalSize":$patchBytes}],
+                 "deltas":[{"fromVersion":1,"toVersion":2,"manifestUrl":"$base/m.json","totalSize":${compressed.compressedSize}}],
                  "retentionWindow":30}
             """.trimIndent())
         }
@@ -374,13 +384,15 @@ class DeltaUpdaterClientEndToEndTest {
             ex.respond(200, """
                 {"fromVersion":1,"toVersion":2,"fromSchemaVersion":1,"toSchemaVersion":1,
                  "fromContentHash":"$fromHash","toContentHash":"$toHash",
-                 "patchFiles":[{"file":"patch_global.db","sha256":"$patchSha","size":$patchBytes}]}
+                 "patchFiles":[{"file":"patch_global.db.zst","compression":"zstd",
+                                "sha256":"${compressed.compressedSha256}","size":${compressed.compressedSize},
+                                "uncompressedSha256":"$uncompressedSha","uncompressedSize":$uncompressedSize}]}
             """.trimIndent())
         }
-        server.createContext("/patch_global.db") { ex ->
+        server.createContext("/patch_global.db.zst") { ex ->
             ex.responseHeaders.set("Content-Type", "application/octet-stream")
-            ex.sendResponseHeaders(200, patchBytes)
-            ex.responseBody.use { Files.copy(patchDb, it) }
+            ex.sendResponseHeaders(200, compressed.compressedSize)
+            ex.responseBody.use { Files.copy(compressed.compressedFile, it) }
         }
         server.start()
         val sessionClosed = java.util.concurrent.atomic.AtomicBoolean(false)

@@ -37,9 +37,18 @@ data class RenameEntry(
 
 @Serializable
 data class PatchFileEntry(
+    /** Compressed artefact filename to download (e.g. `patch-v1-v2.db.zst`). */
     val file: String,
+    /** Compression scheme. Always `"zstd"` — kept as a string to leave room for future formats. */
+    val compression: String,
+    /** sha256 of the compressed file (what the client downloads). */
     val sha256: String,
+    /** Size in bytes of the compressed file. */
     val size: Long,
+    /** sha256 of the decompressed patch.db, for post-decompress verification. */
+    val uncompressedSha256: String,
+    /** Size of the decompressed patch.db. */
+    val uncompressedSize: Long,
 )
 
 /**

@@ -12,9 +12,10 @@ class ReleaseManifestWriterTest {
     val tmp = TemporaryFolder()
 
     @Test
-    fun `writeManifest emits a parseable manifest with sha256 + size`() {
+    fun `writeManifest emits a parseable manifest with compressed + uncompressed sha256 + size`() {
         val patch = tmp.newFile("patch.db").toPath()
         Files.writeString(patch, "hello world")
+        val compressed = PatchCompressor.compress(patch, level = 3, workers = 1)
         val target = ReleaseManifestWriter().writeManifest(
             patchFile = patch,
             fromVersion = 1,
@@ -23,6 +24,12 @@ class ReleaseManifestWriterTest {
             toSchemaVersion = 3,
             fromContentHash = "aaaa",
             toContentHash = "bbbb",
+            compressed = ReleaseManifestWriter.CompressedPatchSpec(
+                file = compressed.compressedFile,
+                sha256 = compressed.compressedSha256,
+                size = compressed.compressedSize,
+                compression = "zstd",
+            ),
         )
         val body = Files.readString(target)
         assertTrue(body.contains("\"fromVersion\": 1"))
@@ -30,9 +37,12 @@ class ReleaseManifestWriterTest {
         assertTrue(body.contains("\"fromSchemaVersion\": 3"))
         assertTrue(body.contains("\"fromContentHash\": \"aaaa\""))
         assertTrue(body.contains("\"toContentHash\": \"bbbb\""))
-        // sha256 of "hello world"
+        assertTrue(body.contains("\"compression\": \"zstd\""))
+        // sha256 of "hello world" — should appear as uncompressedSha256.
         assertTrue(body.contains("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"), body)
-        assertTrue(body.contains("\"size\": 11"))
+        assertTrue(body.contains("\"uncompressedSize\": 11"))
+        assertTrue(body.contains("\"sha256\": \"${compressed.compressedSha256}\""))
+        assertTrue(body.contains("\"size\": ${compressed.compressedSize}"))
         assertTrue(body.contains("\"catalogBlobName\": \"catalog.pb\""))
     }
 
@@ -90,12 +100,19 @@ class ReleaseManifestWriterTest {
     fun `manifest writes are atomic — no tmp lingers on success`() {
         val patchFile = tmp.newFile("patch.db").toPath()
         Files.writeString(patchFile, "fake patch bytes")
+        val compressed = PatchCompressor.compress(patchFile, level = 3, workers = 1)
         val writer = ReleaseManifestWriter()
         val manifest = writer.writeManifest(
             patchFile = patchFile,
             fromVersion = 1, toVersion = 2,
             fromSchemaVersion = 1, toSchemaVersion = 1,
             fromContentHash = "from", toContentHash = "to",
+            compressed = ReleaseManifestWriter.CompressedPatchSpec(
+                file = compressed.compressedFile,
+                sha256 = compressed.compressedSha256,
+                size = compressed.compressedSize,
+                compression = "zstd",
+            ),
         )
         assertTrue(Files.exists(manifest), "manifest must exist")
         assertTrue(

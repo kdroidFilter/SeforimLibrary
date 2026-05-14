@@ -1,83 +1,188 @@
-name: Manual Generate + Release
+name: Manual Generate + Pre-Release
+
+# End-to-end build pipeline: builds seforim.db from the latest Sefaria +
+# Otzaria sources, packages a split bundle, produces a delta against the
+# previous published release (if any), and publishes the lot as a GitHub
+# pre-release.
+#
+# - Pre-release flag: lets us iterate on the data pipeline without
+#   pushing a "latest" tag to clients that watch /releases/latest.
+# - Heap budget: same as the delta-* workflows so the runner doesn't
+#   OOM (Gradle 3g + Kotlin in-process + generatorHeap=8g).
+# - Delta: skipped on the very first run (no prior buildstate to seed
+#   the IdAllocator from); from the second run onwards the workflow
+#   downloads the previous pre-release's seforim.db.buildstate, seeds
+#   the allocator, then produces a patch-v<prev>-v<this>.db.zst.
 
 on:
   workflow_dispatch:
+    inputs:
+      previous_release_tag:
+        description: |
+          Tag of the previous pre-release to diff against (e.g. 20260513210000).
+          Leave blank to skip delta production (use for the very first release).
+        required: false
+        default: ""
 
 permissions:
   contents: write
 
 jobs:
   build-and-release:
-    name: Run generator tasks and publish release
+    name: Build seforim.db + bundle + delta, publish pre-release
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - name: Checkout
+      - name: Checkout SeforimLibrary
         uses: actions/checkout@v4
         with:
-            submodules: true
+          submodules: recursive
 
-      - name: Set up Java 21
-        uses: actions/setup-java@v4
+      - name: Free disk space on runner
+        uses: jlumbroso/free-disk-space@main
         with:
-          distribution: temurin
-          java-version: '21'
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: false
+
+      - name: Bridle daemon heaps + generator forks for the 16 GB runner
+        run: |
+          mkdir -p ~/.gradle
+          cat >> ~/.gradle/gradle.properties <<EOF
+          org.gradle.jvmargs=-Xmx3g
+          kotlin.compiler.execution.strategy=in-process
+          generatorHeap=8g
+          EOF
+
+      - name: Install JBR 25
+        run: |
+          curl -L -o jbr.tar.gz "https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk-25.0.1-linux-x64-b268.52.tar.gz"
+          mkdir -p "$RUNNER_TEMP/jbr"
+          tar -xzf jbr.tar.gz -C "$RUNNER_TEMP/jbr"
+          JBR_DIR=$(find "$RUNNER_TEMP/jbr" -mindepth 1 -maxdepth 1 -type d -name "jbr*" -o -name "jbrsdk*" | head -n 1)
+          echo "JAVA_HOME=$JBR_DIR" >> "$GITHUB_ENV"
+          echo "$JBR_DIR/bin" >> "$GITHUB_PATH"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Gradle version
-        run: ./gradlew --version
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
 
-      - name: Compute tag name (UTC) for release info
+      - name: Install zstd + sqlite
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zstd sqlite3
+
+      - name: Compute release tag
         id: release_meta
         shell: bash
         run: |
           TAG=$(date -u +"%Y%m%d%H%M%S")
           echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Computed release tag: ${TAG}"
+          echo "Release tag: ${TAG}"
 
-      - name: Generate Seforim Database
-        run: ./gradlew generateSeforimDb -PreleaseName=${{ steps.release_meta.outputs.release_tag }} --no-daemon --stacktrace
-
-      - name: Package Seforim Bundle
-        run: ./gradlew packageSeforimBundle --no-daemon --stacktrace
-
-      - name: List split parts
+      # ─── Seed allocator from previous pre-release if requested ─────────────
+      - name: Seed allocator from previous release's buildstate
+        if: ${{ inputs.previous_release_tag != '' }}
         run: |
           set -euo pipefail
-          echo "Looking for split parts..."
+          PREV="${{ inputs.previous_release_tag }}"
+          echo "Seeding allocator from release '$PREV'"
+          mkdir -p build
+          gh release download "$PREV" \
+            --pattern 'seforim.db.buildstate' \
+            --pattern 'seforim.db.v*' \
+            --dir build/prev-release
+          # Place the previous buildstate where generateSeforimDb expects it
+          # so the IdAllocator picks it up and ids stay stable across builds.
+          cp build/prev-release/seforim.db.buildstate build/seforim.db.buildstate
+          # The producer needs the previous full DB to diff against.
+          PREV_DB=$(ls build/prev-release/seforim.db.v* 2>/dev/null | head -n1 || true)
+          if [ -n "$PREV_DB" ]; then
+            cp "$PREV_DB" build/seforim.db.prev
+            echo "PREV_DB_PATH=$PWD/build/seforim.db.prev" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Previous release has no seforim.db.v* asset — skipping delta."
+          fi
+
+      # ─── Build seforim.db (full pipeline) ──────────────────────────────────
+      - name: Generate Seforim Database
+        run: |
+          ./gradlew generateSeforimDb \
+            -PreleaseName=${{ steps.release_meta.outputs.release_tag }} \
+            -PdbVersion=${{ steps.release_meta.outputs.release_tag }} \
+            --no-daemon --stacktrace
+
+      - name: Package Seforim Bundle (split tar.zst)
+        run: ./gradlew packageSeforimBundle --no-daemon --stacktrace
+
+      - name: List bundle parts
+        run: |
+          set -euo pipefail
           PARTS=(generator/packaging/build/package/seforim_bundle.tar.zst.part*)
           if [ ${#PARTS[@]} -eq 0 ] || [ "${PARTS[0]}" = "generator/packaging/build/package/seforim_bundle.tar.zst.part*" ]; then
-            echo "No split parts found. Did packageArtifacts run and split the bundle?" >&2
+            echo "No bundle parts produced." >&2
             exit 1
           fi
-          if [ ${#PARTS[@]} -ne 2 ]; then
-            echo "Expected 2 split parts, found ${#PARTS[@]}" >&2
-            ls -lh generator/packaging/build/package/ || true
-            exit 1
-          fi
-          echo "Found ${#PARTS[@]} part file(s):"
           ls -lh "${PARTS[@]}"
 
-      - name: Create GitHub Release and upload assets
+      # ─── Produce + verify delta patch (only when seeded) ───────────────────
+      - name: Produce + verify patch (prev → this)
+        if: ${{ env.PREV_DB_PATH != '' }}
+        run: |
+          set -euo pipefail
+          PREV_TAG="${{ inputs.previous_release_tag }}"
+          THIS_TAG="${{ steps.release_meta.outputs.release_tag }}"
+          ./gradlew :generator-common:producePatchAndVerify \
+            -PprevDb=$PREV_DB_PATH \
+            -PnewDb=$PWD/build/seforim.db \
+            -Pout=$PWD/build/patch-${PREV_TAG}-${THIS_TAG}.db \
+            -PcatalogPb=$PWD/build/catalog.pb \
+            -PfromVersion=$PREV_TAG -PtoVersion=$THIS_TAG \
+            --no-daemon --stacktrace
+          echo "Patch artefacts:"
+          ls -lh build/patch-*.db build/patch-*.db.zst build/patch-*.db.zst.manifest.json
+
+      # ─── Stage release assets ──────────────────────────────────────────────
+      - name: Stage release assets
+        id: stage
+        run: |
+          set -euo pipefail
+          STAGE=release-staging
+          mkdir -p "$STAGE"
+          # Bundle parts (always)
+          cp generator/packaging/build/package/seforim_bundle.tar.zst.part* "$STAGE/"
+          # Buildstate (for the next release to seed from)
+          cp build/seforim.db.buildstate "$STAGE/"
+          # Catalog.pb (clients pull this for the book index)
+          cp build/catalog.pb "$STAGE/"
+          # Patch + manifest (only when we built one)
+          if compgen -G "build/patch-*.db.zst" > /dev/null; then
+            cp build/patch-*.db.zst "$STAGE/"
+            cp build/patch-*.db.zst.manifest.json "$STAGE/"
+          fi
+          # Rename the full DB so consumers can fetch it directly by tag.
+          cp build/seforim.db "$STAGE/seforim.db.v${{ steps.release_meta.outputs.release_tag }}"
+          echo "Staged assets:"
+          ls -lh "$STAGE/"
+
+      - name: Create GitHub pre-release and upload assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_meta.outputs.release_tag }}
           name: ${{ steps.release_meta.outputs.release_tag }}
           draft: false
-          prerelease: false
-          files: |
-            generator/packaging/build/package/seforim_bundle.tar.zst.part*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: true
+          files: release-staging/*
 
       - name: Trigger release manifest update
         run: |
-          sleep 10  # Wait for release to be fully published
+          sleep 10
           gh workflow run update-release-manifest.yml
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -28,6 +28,18 @@ class ReleaseManifestWriter(
     private val logger: Logger = Logger.withTag("ReleaseManifestWriter"),
 ) {
 
+    /**
+     * Compressed-variant metadata for the patch file. The manifest always
+     * points to this artefact — the raw .db is only used internally for
+     * producePatchAndVerify's strict invariant.
+     */
+    data class CompressedPatchSpec(
+        val file: Path,
+        val sha256: String,
+        val size: Long,
+        val compression: String, // "zstd"
+    )
+
     fun writeManifest(
         patchFile: Path,
         fromVersion: Int,
@@ -36,12 +48,13 @@ class ReleaseManifestWriter(
         toSchemaVersion: Int,
         fromContentHash: String,
         toContentHash: String,
+        compressed: CompressedPatchSpec,
         catalogBlobName: String? = "catalog.pb",
     ): Path {
         require(Files.isRegularFile(patchFile)) { "patch file not found: $patchFile" }
-        val sha256 = sha256(patchFile)
-        val size = Files.size(patchFile)
-        val target = patchFile.resolveSibling("${patchFile.fileName}.manifest.json")
+        val uncompressedSha256 = sha256(patchFile)
+        val uncompressedSize = Files.size(patchFile)
+        val target = compressed.file.resolveSibling("${compressed.file.fileName}.manifest.json")
         val body = buildString {
             append("{\n")
             append("  \"fromVersion\": ").append(fromVersion).append(",\n")
@@ -52,9 +65,12 @@ class ReleaseManifestWriter(
             append("  \"toContentHash\": ").appendString(toContentHash).append(",\n")
             append("  \"patchFiles\": [\n")
             append("    {\n")
-            append("      \"file\": ").appendString(patchFile.fileName.toString()).append(",\n")
-            append("      \"sha256\": ").appendString(sha256).append(",\n")
-            append("      \"size\": ").append(size).append("\n")
+            append("      \"file\": ").appendString(compressed.file.fileName.toString()).append(",\n")
+            append("      \"compression\": ").appendString(compressed.compression).append(",\n")
+            append("      \"sha256\": ").appendString(compressed.sha256).append(",\n")
+            append("      \"size\": ").append(compressed.size).append(",\n")
+            append("      \"uncompressedSha256\": ").appendString(uncompressedSha256).append(",\n")
+            append("      \"uncompressedSize\": ").append(uncompressedSize).append("\n")
             append("    }\n")
             append("  ]")
             if (catalogBlobName != null) {

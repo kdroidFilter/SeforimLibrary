@@ -1,9 +1,12 @@
 package io.github.kdroidfilter.seforimlibrary.deltaupdater
 
 import co.touchlab.kermit.Logger
+import com.github.luben.zstd.ZstdInputStream
 import kotlinx.serialization.json.Json
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
 
 /**
  * Top-level coordinator that turns a [UpdatePath.Chain] into a fully-applied
@@ -77,12 +80,17 @@ class UpdateOrchestrator(
             try {
                 progress(step, chain.size, "downloading patch files")
                 val patchFiles = manifest.patchFiles.map { f ->
-                    downloader.download(
+                    val downloaded = downloader.download(
                         url = baseUrlForEntry(entry, f.file),
                         dest = deltaDir.resolve(f.file),
                         expectedSha256 = f.sha256,
                         expectedSize = f.size,
                     )
+                    check(f.compression == "zstd") {
+                        "unsupported patch compression '${f.compression}' for ${f.file}"
+                    }
+                    progress(step, chain.size, "decompressing ${f.file}")
+                    decompressZstd(downloaded, f.uncompressedSha256, f.uncompressedSize)
                 }
                 val mainPatch = patchFiles.firstOrNull { it.fileName.toString().contains("global") }
                     ?: patchFiles.first()
@@ -135,6 +143,50 @@ class UpdateOrchestrator(
             }
         }
         progress(chain.size, chain.size, "done")
+    }
+
+    /**
+     * Decompresses a zstd-compressed patch file in-place. Output goes to
+     * the same directory with the `.zst` suffix stripped (or `.patch.db`
+     * appended if the input had no `.zst`). Verifies sha256/size of the
+     * decompressed output against [expectedSha256] / [expectedSize].
+     */
+    private fun decompressZstd(compressed: Path, expectedSha256: String, expectedSize: Long): Path {
+        val name = compressed.fileName.toString()
+        val outName = if (name.endsWith(".zst")) name.removeSuffix(".zst") else "$name.decompressed"
+        val out = compressed.resolveSibling(outName)
+        val md = MessageDigest.getInstance("SHA-256")
+        var written = 0L
+        Files.newInputStream(compressed).use { rawIn ->
+            ZstdInputStream(rawIn).use { zstdIn ->
+                Files.newOutputStream(
+                    out,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE,
+                ).use { fileOut ->
+                    val buf = ByteArray(1 shl 20)
+                    while (true) {
+                        val n = zstdIn.read(buf)
+                        if (n <= 0) break
+                        md.update(buf, 0, n)
+                        fileOut.write(buf, 0, n)
+                        written += n
+                    }
+                }
+            }
+        }
+        check(written == expectedSize) {
+            "decompressed ${compressed.fileName} size mismatch: got $written, expected $expectedSize"
+        }
+        val actualSha = md.digest().joinToString("") { b -> "%02x".format(b) }
+        check(actualSha == expectedSha256) {
+            "decompressed ${compressed.fileName} sha256 mismatch: got $actualSha, expected $expectedSha256"
+        }
+        // Free space — the compressed copy is no longer needed once the
+        // decompressed file passes verification.
+        runCatching { Files.deleteIfExists(compressed) }
+        return out
     }
 
     companion object {

@@ -103,8 +103,17 @@ fun main(args: Array<String>) {
         logger.w { "No catalog.pb at $catalogPath — patch ships without a catalog blob" }
     }
 
-    // Emit a per-delta manifest.json next to the patch.db, plus optionally
-    // append/update a release_meta.json the client polls.
+    // Compress the patch with zstd. The .db file remains around so
+    // producePatchAndVerify's strict invariant can re-hash it locally if
+    // needed; releases ship only the .zst (~6× smaller).
+    val zstdLevel = (System.getProperty("zstdLevel") ?: System.getenv("ZSTD_LEVEL") ?: "19").toInt()
+    val compressed = PatchCompressor.compress(outPath, level = zstdLevel)
+    logger.i {
+        "Compressed patch.db (zstd L$zstdLevel): ${Files.size(outPath)} → ${compressed.compressedSize} bytes " +
+            "(${"%.1f".format(compressed.compressedSize * 100.0 / Files.size(outPath))}%)"
+    }
+
+    // Emit a per-delta manifest.json next to the .zst.
     ReleaseManifestWriter(logger).writeManifest(
         patchFile = outPath,
         fromVersion = from,
@@ -115,6 +124,12 @@ fun main(args: Array<String>) {
             LogicalContentHasher().compute(it)
         },
         toContentHash = newHash,
+        compressed = ReleaseManifestWriter.CompressedPatchSpec(
+            file = compressed.compressedFile,
+            sha256 = compressed.compressedSha256,
+            size = compressed.compressedSize,
+            compression = "zstd",
+        ),
     )
 
     val releaseMeta = System.getProperty("releaseMeta")

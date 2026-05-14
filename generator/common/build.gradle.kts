@@ -28,6 +28,7 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(project(":dao"))
             implementation(libs.jsoup)
+            implementation(libs.zstd)
         }
 
         jvmTest.dependencies {
