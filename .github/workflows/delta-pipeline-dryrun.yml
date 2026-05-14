@@ -60,7 +60,7 @@ jobs:
           cat >> ~/.gradle/gradle.properties <<EOF
           org.gradle.jvmargs=-Xmx3g
           kotlin.compiler.execution.strategy=in-process
-          generatorHeap=5g
+          generatorHeap=8g
           EOF
 
       - name: Disk after cleanup
