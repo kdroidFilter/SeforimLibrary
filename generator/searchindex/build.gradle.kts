@@ -2,6 +2,13 @@ plugins {
     alias(libs.plugins.multiplatform)
 }
 
+// Generator forked-JVM heap. Honors -PgeneratorHeap=… (CI lowers it on 16 GB runners).
+// Default 10g matches local workstation use; CI sets 5g via the workflow.
+val generatorHeap: String = (project.findProperty("generatorHeap") as String?)
+    ?: System.getenv("SEFORIM_GENERATOR_HEAP")
+    ?: "10g"
+
+
 kotlin {
     jvmToolchain(libs.versions.jvmToolchain.get().toInt())
 
@@ -58,7 +65,7 @@ tasks.register<JavaExec>("buildLuceneIndexDefault") {
     }
 
     jvmArgs = listOf(
-        "-Xmx10g",
+        "-Xmx$generatorHeap",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200",
         "--enable-native-access=ALL-UNNAMED",

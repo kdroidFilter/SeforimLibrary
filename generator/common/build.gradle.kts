@@ -2,6 +2,13 @@ plugins {
     alias(libs.plugins.multiplatform)
 }
 
+// Generator forked-JVM heap. Honors -PgeneratorHeap=… (CI lowers it on 16 GB runners).
+// Default 10g matches local workstation use; CI sets 5g via the workflow.
+val generatorHeap: String = (project.findProperty("generatorHeap") as String?)
+    ?: System.getenv("SEFORIM_GENERATOR_HEAP")
+    ?: "10g"
+
+
 kotlin {
     jvmToolchain(libs.versions.jvmToolchain.get().toInt())
 
@@ -77,7 +84,7 @@ tasks.register<JavaExec>("producePatchAndVerify") {
         project.findProperty(key)?.let { systemProperty(key, it as String) }
     }
 
-    jvmArgs = listOf("-Xmx10g", "-XX:+UseG1GC")
+    jvmArgs = listOf("-Xmx$generatorHeap", "-XX:+UseG1GC")
 }
 
 tasks.register<JavaExec>("compareLogicalContent") {
@@ -90,7 +97,7 @@ tasks.register<JavaExec>("compareLogicalContent") {
     val right = project.findProperty("rightDb") as String? ?: error("-PrightDb= missing")
     systemProperty("leftDb", left)
     systemProperty("rightDb", right)
-    jvmArgs = listOf("-Xmx10g", "-XX:+UseG1GC")
+    jvmArgs = listOf("-Xmx$generatorHeap", "-XX:+UseG1GC")
 }
 
 tasks.register<JavaExec>("stampSchemaVersion") {
@@ -126,5 +133,5 @@ tasks.register<JavaExec>("diagnoseHashMismatch") {
     systemProperty("prevDb", prev)
     systemProperty("newDb", new)
     systemProperty("patch", patch)
-    jvmArgs = listOf("-Xmx10g", "-XX:+UseG1GC")
+    jvmArgs = listOf("-Xmx$generatorHeap", "-XX:+UseG1GC")
 }

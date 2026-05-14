@@ -50,12 +50,20 @@ jobs:
           docker-images: false
           swap-storage: false
 
-      - name: Bridle daemon heaps for the 16 GB runner
+      - name: Bridle daemon heaps + generator forks for the 16 GB runner
         run: |
+          # The runner has 16 GB total. Default config blows past it:
+          #   Gradle daemon (default unbounded) + Kotlin daemon (4g) +
+          #   forked generator JVM (-Xmx10g per task) → OOM-kill.
+          # Bridle each component:
+          #   • Gradle daemon: 3g
+          #   • Kotlin compile in-process (no separate 4g daemon)
+          #   • Generator forks: 5g per task (well under what they actually use)
           mkdir -p ~/.gradle
           cat >> ~/.gradle/gradle.properties <<EOF
-          org.gradle.jvmargs=-Xmx4g
-          kotlin.daemon.jvmargs=-Xmx4g
+          org.gradle.jvmargs=-Xmx3g
+          kotlin.compiler.execution.strategy=in-process
+          generatorHeap=5g
           EOF
 
       - name: Disk after cleanup
