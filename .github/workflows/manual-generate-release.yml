@@ -1,40 +1,36 @@
 name: Manual Generate + Pre-Release
 
 # End-to-end build pipeline: builds seforim.db from the latest Sefaria +
-# Otzaria sources, packages a split bundle, produces a delta against the
-# previous published release (if any), and publishes the lot as a GitHub
-# pre-release.
+# Otzaria sources, packages a split bundle, and publishes the lot as a
+# GitHub pre-release.
 #
-# - Pre-release flag: lets us iterate on the data pipeline without
-#   pushing a "latest" tag to clients that watch /releases/latest.
-# - Heap budget: same as the delta-* workflows so the runner doesn't
-#   OOM (Gradle 3g + Kotlin in-process + generatorHeap=8g).
-# - Delta: skipped on the very first run (no prior buildstate to seed
-#   the IdAllocator from); from the second run onwards the workflow
-#   downloads the previous pre-release's seforim.db.buildstate, seeds
-#   the allocator, then produces a patch-v<prev>-v<this>.db.zst.
+# From the second release onwards, the workflow produces a logarithmic
+# fan of delta patches against previous pre-releases at fixed offsets
+# {1, 2, 4, 8, 16}. A client on any version k within those offsets can
+# fetch a *direct* patch; clients further back chain through the
+# available anchors. The full bundle remains the fallback.
+#
+# Anchors auto-discovered from prior pre-release assets — no manual
+# operator input needed. db_version is derived as max(prior versions)+1.
 
 on:
   workflow_dispatch:
-    inputs:
-      previous_release_tag:
-        description: |
-          Tag of the previous pre-release to diff against (e.g. 20260513210000).
-          Leave blank to skip delta production (use for the very first release).
-        required: false
-        default: ""
 
 permissions:
   contents: write
 
 jobs:
   build-and-release:
-    name: Build seforim.db + bundle + delta, publish pre-release
+    name: Build seforim.db + bundle + delta fan, publish pre-release
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 360
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Logarithmic anchor offsets — covers ~16 versions back with 5 patches.
+      # Older clients chain through the anchors; the full bundle is the
+      # ultimate fallback.
+      PATCH_OFFSETS: "1 2 4 8 16"
 
     steps:
       - name: Checkout SeforimLibrary
@@ -77,65 +73,76 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Install zstd + sqlite
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zstd sqlite3
+      - name: Install zstd + sqlite + jq
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zstd sqlite3 jq
 
       - name: Compute release tag
         id: release_meta
-        shell: bash
         run: |
           TAG=$(date -u +"%Y%m%d%H%M%S")
           echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Release tag: ${TAG}"
 
-      # ─── Seed allocator + determine db_version from prev release ───────────
-      # db_version is a monotonic Int stored in schema_meta — distinct from
-      # the timestamp release tag. When seeding from a prior release we
-      # read its db_version + 1; otherwise we start at 1.
-      - name: Resolve db_version + seed allocator
-        id: dbver
+      # ─── Discover prior pre-releases + decide db_version + seed ────────────
+      # We treat the existence of a `seforim.db.v<N>` asset on a pre-release as
+      # the authoritative signal for that release's db_version. Tags are just
+      # human-readable timestamps.
+      - name: Auto-discover prior pre-releases
+        id: discover
         run: |
           set -euo pipefail
-          PREV="${{ inputs.previous_release_tag }}"
-          if [ -z "$PREV" ]; then
-            echo "First release — db_version=1, no seed/diff."
+          # List every release (pre and final), filter to pre-releases that
+          # carry a seforim.db.v<N> asset, output a NDJSON map.
+          gh release list --limit 100 --json tagName,isPrerelease,createdAt,name \
+            > all-releases.json
+          : > prior-versions.tsv  # cols: db_version<TAB>release_tag
+          while IFS= read -r tag; do
+            ASSETS=$(gh release view "$tag" --json assets --jq '.assets[].name')
+            VER=$(echo "$ASSETS" | grep -oE '^seforim\.db\.v[0-9]+$' | head -n1 \
+                  | sed -E 's/^seforim\.db\.v//' || true)
+            if [ -n "$VER" ]; then
+              echo -e "${VER}\t${tag}" >> prior-versions.tsv
+            fi
+          done < <(jq -r '.[] | select(.isPrerelease == true) | .tagName' all-releases.json)
+          # Sort by version DESC so head -n1 is the most recent.
+          sort -k1,1nr -o prior-versions.tsv prior-versions.tsv
+          echo "Prior pre-releases (db_version → tag):"
+          cat prior-versions.tsv || true
+
+          if [ ! -s prior-versions.tsv ]; then
+            echo "No prior pre-release found — this is the first release."
             echo "db_version=1" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "has_prev=false" >> "$GITHUB_OUTPUT"
+          else
+            LAST_VER=$(head -n1 prior-versions.tsv | cut -f1)
+            NEXT_VER=$((LAST_VER + 1))
+            LAST_TAG=$(head -n1 prior-versions.tsv | cut -f2)
+            echo "Most recent: db_version=$LAST_VER tag=$LAST_TAG → this build: db_version=$NEXT_VER"
+            echo "db_version=$NEXT_VER" >> "$GITHUB_OUTPUT"
+            echo "has_prev=true" >> "$GITHUB_OUTPUT"
+            echo "seed_version=$LAST_VER" >> "$GITHUB_OUTPUT"
+            echo "seed_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
           fi
-          echo "Resolving db_version from previous release '$PREV'"
-          mkdir -p build/prev-release
-          gh release download "$PREV" \
+
+      - name: Seed allocator from offset-1 release
+        if: steps.discover.outputs.has_prev == 'true'
+        run: |
+          set -euo pipefail
+          SEED_TAG="${{ steps.discover.outputs.seed_tag }}"
+          echo "Seeding allocator from release '$SEED_TAG'"
+          mkdir -p build prev-dbs
+          gh release download "$SEED_TAG" \
             --pattern 'seforim.db.buildstate' \
-            --pattern 'seforim.db.v*' \
-            --dir build/prev-release
-          PREV_DB=$(ls build/prev-release/seforim.db.v* 2>/dev/null | head -n1 || true)
-          if [ -z "$PREV_DB" ]; then
-            echo "::error::Previous release '$PREV' has no seforim.db.v* asset"
-            exit 1
-          fi
-          PREV_VER=$(sqlite3 "$PREV_DB" "SELECT value FROM schema_meta WHERE key='db_version'")
-          if ! [[ "$PREV_VER" =~ ^[0-9]+$ ]]; then
-            echo "::error::Previous db_version='$PREV_VER' is not an integer"
-            exit 1
-          fi
-          NEXT_VER=$((PREV_VER + 1))
-          echo "Previous db_version=$PREV_VER → this build's db_version=$NEXT_VER"
-          echo "db_version=$NEXT_VER" >> "$GITHUB_OUTPUT"
-          # Seed buildstate so the IdAllocator stays stable across builds.
-          mkdir -p build
-          cp build/prev-release/seforim.db.buildstate build/seforim.db.buildstate
-          cp "$PREV_DB" build/seforim.db.prev
-          {
-            echo "PREV_DB_PATH=$PWD/build/seforim.db.prev"
-            echo "PREV_DB_VERSION=$PREV_VER"
-          } >> "$GITHUB_ENV"
+            --dir build
+          # Buildstate goes where generateSeforimDb expects it.
+          ls -lh build/seforim.db.buildstate
 
       # ─── Build seforim.db (full pipeline) ──────────────────────────────────
       - name: Generate Seforim Database
         run: |
           ./gradlew generateSeforimDb \
             -PreleaseName=${{ steps.release_meta.outputs.release_tag }} \
-            -PdbVersion=${{ steps.dbver.outputs.db_version }} \
+            -PdbVersion=${{ steps.discover.outputs.db_version }} \
             --no-daemon --stacktrace
 
       - name: Package Seforim Bundle (split tar.zst)
@@ -151,46 +158,70 @@ jobs:
           fi
           ls -lh "${PARTS[@]}"
 
-      # ─── Produce + verify delta patch (only when seeded) ───────────────────
-      - name: Produce + verify patch (prev → this)
-        if: ${{ env.PREV_DB_PATH != '' }}
+      # ─── Produce log-fan of patches: offsets {1, 2, 4, 8, 16} ──────────────
+      # For each offset O where a release exists at (this_version - O), download
+      # that release's seforim.db.v<X>, produce + verify patch. Free the prev
+      # DB right after to bound disk peak.
+      - name: Produce + verify patch fan
+        if: steps.discover.outputs.has_prev == 'true'
         run: |
           set -euo pipefail
-          PREV_VER=$PREV_DB_VERSION
-          THIS_VER=${{ steps.dbver.outputs.db_version }}
-          ./gradlew :generator-common:producePatchAndVerify \
-            -PprevDb=$PREV_DB_PATH \
-            -PnewDb=$PWD/build/seforim.db \
-            -Pout=$PWD/build/patch-v${PREV_VER}-v${THIS_VER}.db \
-            -PcatalogPb=$PWD/build/catalog.pb \
-            -PfromVersion=$PREV_VER -PtoVersion=$THIS_VER \
-            --no-daemon --stacktrace
-          echo "Patch artefacts:"
-          ls -lh build/patch-*.db build/patch-*.db.zst build/patch-*.db.zst.manifest.json
+          THIS_VER=${{ steps.discover.outputs.db_version }}
+          mkdir -p patches prev-dbs
+          for OFFSET in $PATCH_OFFSETS; do
+            TARGET_VER=$((THIS_VER - OFFSET))
+            if [ "$TARGET_VER" -lt 1 ]; then
+              echo "offset $OFFSET would target version $TARGET_VER (<1) — skip"
+              continue
+            fi
+            # Find the tag for this version, if any.
+            TAG=$(awk -F'\t' -v v="$TARGET_VER" '$1==v{print $2; exit}' prior-versions.tsv || true)
+            if [ -z "$TAG" ]; then
+              echo "No prior release at db_version=$TARGET_VER (offset $OFFSET) — skip"
+              continue
+            fi
+            echo "=== Producing patch v${TARGET_VER} → v${THIS_VER} (offset $OFFSET, tag=$TAG) ==="
+            rm -f prev-dbs/seforim.db.v*
+            gh release download "$TAG" \
+              --pattern "seforim.db.v${TARGET_VER}" \
+              --dir prev-dbs
+            PREV_DB="prev-dbs/seforim.db.v${TARGET_VER}"
+            test -s "$PREV_DB" || { echo "::error::Missing $PREV_DB"; exit 1; }
+
+            ./gradlew :generator-common:producePatchAndVerify \
+              -PprevDb=$PWD/$PREV_DB \
+              -PnewDb=$PWD/build/seforim.db \
+              -Pout=$PWD/patches/patch-v${TARGET_VER}-v${THIS_VER}.db \
+              -PcatalogPb=$PWD/build/catalog.pb \
+              -PfromVersion=$TARGET_VER -PtoVersion=$THIS_VER \
+              --no-daemon --stacktrace
+
+            # Free disk for the next iteration — only the .zst + manifest
+            # need to ship; the .db was the verify ground-truth.
+            rm -f "$PREV_DB" \
+                  "patches/patch-v${TARGET_VER}-v${THIS_VER}.db" \
+                  "patches/verify-patch-v${TARGET_VER}-v${THIS_VER}.db"
+            df -h /
+          done
+          echo "=== Final patch artefacts ==="
+          ls -lh patches/ || true
 
       # ─── Stage release assets ──────────────────────────────────────────────
       - name: Stage release assets
-        id: stage
         run: |
           set -euo pipefail
           STAGE=release-staging
           mkdir -p "$STAGE"
-          # Bundle parts (always)
           cp generator/packaging/build/package/seforim_bundle.tar.zst.part* "$STAGE/"
-          # Buildstate (for the next release to seed from)
           cp build/seforim.db.buildstate "$STAGE/"
-          # Catalog.pb (clients pull this for the book index)
           cp build/catalog.pb "$STAGE/"
-          # Patch + manifest (only when we built one)
-          if compgen -G "build/patch-*.db.zst" > /dev/null; then
-            cp build/patch-*.db.zst "$STAGE/"
-            cp build/patch-*.db.zst.manifest.json "$STAGE/"
+          # Full DB under its version (next release's seed source).
+          cp build/seforim.db "$STAGE/seforim.db.v${{ steps.discover.outputs.db_version }}"
+          # Patch fan (zero or more files; only present from release #2 on).
+          if compgen -G "patches/patch-*.db.zst" > /dev/null; then
+            cp patches/patch-*.db.zst "$STAGE/"
+            cp patches/patch-*.db.zst.manifest.json "$STAGE/"
           fi
-          # Rename the full DB so consumers can fetch it directly by version.
-          # Suffix is the monotonic db_version (matches what's stored inside
-          # the DB's schema_meta), not the release tag — the next release's
-          # CI uses this to find the right asset to seed from.
-          cp build/seforim.db "$STAGE/seforim.db.v${{ steps.dbver.outputs.db_version }}"
           echo "Staged assets:"
           ls -lh "$STAGE/"
 
