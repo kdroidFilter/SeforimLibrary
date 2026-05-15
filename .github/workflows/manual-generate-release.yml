@@ -88,36 +88,54 @@ jobs:
           echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Release tag: ${TAG}"
 
-      # ─── Seed allocator from previous pre-release if requested ─────────────
-      - name: Seed allocator from previous release's buildstate
-        if: ${{ inputs.previous_release_tag != '' }}
+      # ─── Seed allocator + determine db_version from prev release ───────────
+      # db_version is a monotonic Int stored in schema_meta — distinct from
+      # the timestamp release tag. When seeding from a prior release we
+      # read its db_version + 1; otherwise we start at 1.
+      - name: Resolve db_version + seed allocator
+        id: dbver
         run: |
           set -euo pipefail
           PREV="${{ inputs.previous_release_tag }}"
-          echo "Seeding allocator from release '$PREV'"
-          mkdir -p build
+          if [ -z "$PREV" ]; then
+            echo "First release — db_version=1, no seed/diff."
+            echo "db_version=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Resolving db_version from previous release '$PREV'"
+          mkdir -p build/prev-release
           gh release download "$PREV" \
             --pattern 'seforim.db.buildstate' \
             --pattern 'seforim.db.v*' \
             --dir build/prev-release
-          # Place the previous buildstate where generateSeforimDb expects it
-          # so the IdAllocator picks it up and ids stay stable across builds.
-          cp build/prev-release/seforim.db.buildstate build/seforim.db.buildstate
-          # The producer needs the previous full DB to diff against.
           PREV_DB=$(ls build/prev-release/seforim.db.v* 2>/dev/null | head -n1 || true)
-          if [ -n "$PREV_DB" ]; then
-            cp "$PREV_DB" build/seforim.db.prev
-            echo "PREV_DB_PATH=$PWD/build/seforim.db.prev" >> "$GITHUB_ENV"
-          else
-            echo "::warning::Previous release has no seforim.db.v* asset — skipping delta."
+          if [ -z "$PREV_DB" ]; then
+            echo "::error::Previous release '$PREV' has no seforim.db.v* asset"
+            exit 1
           fi
+          PREV_VER=$(sqlite3 "$PREV_DB" "SELECT value FROM schema_meta WHERE key='db_version'")
+          if ! [[ "$PREV_VER" =~ ^[0-9]+$ ]]; then
+            echo "::error::Previous db_version='$PREV_VER' is not an integer"
+            exit 1
+          fi
+          NEXT_VER=$((PREV_VER + 1))
+          echo "Previous db_version=$PREV_VER → this build's db_version=$NEXT_VER"
+          echo "db_version=$NEXT_VER" >> "$GITHUB_OUTPUT"
+          # Seed buildstate so the IdAllocator stays stable across builds.
+          mkdir -p build
+          cp build/prev-release/seforim.db.buildstate build/seforim.db.buildstate
+          cp "$PREV_DB" build/seforim.db.prev
+          {
+            echo "PREV_DB_PATH=$PWD/build/seforim.db.prev"
+            echo "PREV_DB_VERSION=$PREV_VER"
+          } >> "$GITHUB_ENV"
 
       # ─── Build seforim.db (full pipeline) ──────────────────────────────────
       - name: Generate Seforim Database
         run: |
           ./gradlew generateSeforimDb \
             -PreleaseName=${{ steps.release_meta.outputs.release_tag }} \
-            -PdbVersion=${{ steps.release_meta.outputs.release_tag }} \
+            -PdbVersion=${{ steps.dbver.outputs.db_version }} \
             --no-daemon --stacktrace
 
       - name: Package Seforim Bundle (split tar.zst)
@@ -138,14 +156,14 @@ jobs:
         if: ${{ env.PREV_DB_PATH != '' }}
         run: |
           set -euo pipefail
-          PREV_TAG="${{ inputs.previous_release_tag }}"
-          THIS_TAG="${{ steps.release_meta.outputs.release_tag }}"
+          PREV_VER=$PREV_DB_VERSION
+          THIS_VER=${{ steps.dbver.outputs.db_version }}
           ./gradlew :generator-common:producePatchAndVerify \
             -PprevDb=$PREV_DB_PATH \
             -PnewDb=$PWD/build/seforim.db \
-            -Pout=$PWD/build/patch-${PREV_TAG}-${THIS_TAG}.db \
+            -Pout=$PWD/build/patch-v${PREV_VER}-v${THIS_VER}.db \
             -PcatalogPb=$PWD/build/catalog.pb \
-            -PfromVersion=$PREV_TAG -PtoVersion=$THIS_TAG \
+            -PfromVersion=$PREV_VER -PtoVersion=$THIS_VER \
             --no-daemon --stacktrace
           echo "Patch artefacts:"
           ls -lh build/patch-*.db build/patch-*.db.zst build/patch-*.db.zst.manifest.json
@@ -168,8 +186,11 @@ jobs:
             cp build/patch-*.db.zst "$STAGE/"
             cp build/patch-*.db.zst.manifest.json "$STAGE/"
           fi
-          # Rename the full DB so consumers can fetch it directly by tag.
-          cp build/seforim.db "$STAGE/seforim.db.v${{ steps.release_meta.outputs.release_tag }}"
+          # Rename the full DB so consumers can fetch it directly by version.
+          # Suffix is the monotonic db_version (matches what's stored inside
+          # the DB's schema_meta), not the release tag — the next release's
+          # CI uses this to find the right asset to seed from.
+          cp build/seforim.db "$STAGE/seforim.db.v${{ steps.dbver.outputs.db_version }}"
           echo "Staged assets:"
           ls -lh "$STAGE/"
 
