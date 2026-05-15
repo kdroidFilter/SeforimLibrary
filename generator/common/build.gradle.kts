@@ -94,10 +94,16 @@ tasks.register<JavaExec>("compareLogicalContent") {
     dependsOn("jvmJar")
     mainClass.set("io.github.kdroidfilter.seforimlibrary.common.patch.CompareLogicalContentCliKt")
     classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
-    val left = project.findProperty("leftDb") as String? ?: error("-PleftDb= missing")
-    val right = project.findProperty("rightDb") as String? ?: error("-PrightDb= missing")
-    systemProperty("leftDb", left)
-    systemProperty("rightDb", right)
+    // Defer validation to execution — IntelliJ's Gradle sync materialises
+    // every registered task, so any error() at config-time breaks sync.
+    val left = project.findProperty("leftDb") as String?
+    val right = project.findProperty("rightDb") as String?
+    if (left != null) systemProperty("leftDb", left)
+    if (right != null) systemProperty("rightDb", right)
+    doFirst {
+        checkNotNull(left) { "-PleftDb= missing" }
+        checkNotNull(right) { "-PrightDb= missing" }
+    }
     jvmArgs = listOf("-Xmx$generatorHeap", "-XX:+UseG1GC")
 }
 
@@ -128,11 +134,18 @@ tasks.register<JavaExec>("diagnoseHashMismatch") {
     dependsOn("jvmJar")
     mainClass.set("io.github.kdroidfilter.seforimlibrary.common.patch.DiagnoseHashMismatchCliKt")
     classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
-    val prev = project.findProperty("prevDb") as String? ?: error("-PprevDb= missing")
-    val new = project.findProperty("newDb") as String? ?: error("-PnewDb= missing")
-    val patch = project.findProperty("patch") as String? ?: error("-Ppatch= missing")
-    systemProperty("prevDb", prev)
-    systemProperty("newDb", new)
-    systemProperty("patch", patch)
+    // Defer validation to execution — IntelliJ's Gradle sync materialises
+    // every registered task, so any error() at config-time breaks sync.
+    val prev = project.findProperty("prevDb") as String?
+    val new = project.findProperty("newDb") as String?
+    val patch = project.findProperty("patch") as String?
+    if (prev != null) systemProperty("prevDb", prev)
+    if (new != null) systemProperty("newDb", new)
+    if (patch != null) systemProperty("patch", patch)
+    doFirst {
+        checkNotNull(prev) { "-PprevDb= missing" }
+        checkNotNull(new) { "-PnewDb= missing" }
+        checkNotNull(patch) { "-Ppatch= missing" }
+    }
     jvmArgs = listOf("-Xmx$generatorHeap", "-XX:+UseG1GC")
 }
