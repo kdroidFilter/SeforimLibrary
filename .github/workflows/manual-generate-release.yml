@@ -86,43 +86,28 @@ jobs:
       - name: Install zstd + sqlite + jq
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zstd sqlite3 jq
 
-      - name: Compute release tag
-        id: release_meta
-        run: |
-          TAG=$(date -u +"%Y%m%d%H%M%S")
-          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Release tag: ${TAG}"
-
-      # ─── Discover prior pre-releases + decide db_version + seed ────────────
-      # We treat the existence of a `seforim.db.v<N>` asset on a pre-release as
-      # the authoritative signal for that release's db_version. Tags are just
-      # human-readable timestamps.
-      - name: Auto-discover prior pre-releases
+      # ─── Discover prior releases + decide db_version ───────────────────────
+      # Tags are `v<dbVersion>-<utcTimestamp>` so version discovery is just
+      # a regex on the tag list — no per-release asset fetch needed.
+      # The version chain ignores pre vs final: a final release can seed/diff
+      # against a pre-release predecessor and vice-versa.
+      - name: Auto-discover prior releases
         id: discover
         run: |
           set -euo pipefail
-          # List every release (pre and final) and keep those carrying a
-          # seforim.db.v<N> asset — the version chain is independent of
-          # pre-release status, so a final release can seed/diff against
-          # a pre-release predecessor and vice-versa.
           gh release list --limit 100 --json tagName,isPrerelease,createdAt,name \
             > all-releases.json
           : > prior-versions.tsv  # cols: db_version<TAB>release_tag
           while IFS= read -r tag; do
-            ASSETS=$(gh release view "$tag" --json assets --jq '.assets[].name')
-            VER=$(echo "$ASSETS" | grep -oE '^seforim\.db\.v[0-9]+$' | head -n1 \
-                  | sed -E 's/^seforim\.db\.v//' || true)
-            if [ -n "$VER" ]; then
-              echo -e "${VER}\t${tag}" >> prior-versions.tsv
-            fi
+            VER=$(echo "$tag" | grep -oE '^v[0-9]+-' | tr -d 'v-' || true)
+            [ -n "$VER" ] && echo -e "${VER}\t${tag}" >> prior-versions.tsv
           done < <(jq -r '.[].tagName' all-releases.json)
-          # Sort by version DESC so head -n1 is the most recent.
           sort -k1,1nr -o prior-versions.tsv prior-versions.tsv
-          echo "Prior pre-releases (db_version → tag):"
+          echo "Prior releases (db_version → tag):"
           cat prior-versions.tsv || true
 
           if [ ! -s prior-versions.tsv ]; then
-            echo "No prior pre-release found — this is the first release."
+            echo "No prior release found — this is the first release."
             echo "db_version=1" >> "$GITHUB_OUTPUT"
             echo "has_prev=false" >> "$GITHUB_OUTPUT"
           else
@@ -132,9 +117,16 @@ jobs:
             echo "Most recent: db_version=$LAST_VER tag=$LAST_TAG → this build: db_version=$NEXT_VER"
             echo "db_version=$NEXT_VER" >> "$GITHUB_OUTPUT"
             echo "has_prev=true" >> "$GITHUB_OUTPUT"
-            echo "seed_version=$LAST_VER" >> "$GITHUB_OUTPUT"
             echo "seed_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Compute release tag (v<dbVersion>-<timestamp>)
+        id: release_meta
+        run: |
+          STAMP=$(date -u +"%Y%m%d%H%M%S")
+          TAG="v${{ steps.discover.outputs.db_version }}-${STAMP}"
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${TAG}"
 
       - name: Seed allocator from offset-1 release
         if: steps.discover.outputs.has_prev == 'true'
@@ -171,9 +163,10 @@ jobs:
           ls -lh "${PARTS[@]}"
 
       # ─── Produce log-fan of patches: offsets {1, 2, 4, 8, 16} ──────────────
-      # For each offset O where a release exists at (this_version - O), download
-      # that release's seforim.db.v<X>, produce + verify patch. Free the prev
-      # DB right after to bound disk peak.
+      # The prev DB is reconstituted from the bundle's split parts (GitHub
+      # caps single assets at 2 GiB, so we never ship the unsplit 7 GB DB
+      # directly). Each iteration cats + extracts, runs the producer, then
+      # frees everything so disk peak stays bounded.
       - name: Produce + verify patch fan
         if: steps.discover.outputs.has_prev == 'true'
         run: |
@@ -186,19 +179,23 @@ jobs:
               echo "offset $OFFSET would target version $TARGET_VER (<1) — skip"
               continue
             fi
-            # Find the tag for this version, if any.
             TAG=$(awk -F'\t' -v v="$TARGET_VER" '$1==v{print $2; exit}' prior-versions.tsv || true)
             if [ -z "$TAG" ]; then
               echo "No prior release at db_version=$TARGET_VER (offset $OFFSET) — skip"
               continue
             fi
             echo "=== Producing patch v${TARGET_VER} → v${THIS_VER} (offset $OFFSET, tag=$TAG) ==="
-            rm -f prev-dbs/seforim.db.v*
+            rm -rf prev-dbs/*
+            mkdir -p prev-dbs/extract
             gh release download "$TAG" \
-              --pattern "seforim.db.v${TARGET_VER}" \
+              --pattern 'seforim_bundle.tar.zst.part*' \
               --dir prev-dbs
-            PREV_DB="prev-dbs/seforim.db.v${TARGET_VER}"
-            test -s "$PREV_DB" || { echo "::error::Missing $PREV_DB"; exit 1; }
+            cat prev-dbs/seforim_bundle.tar.zst.part* > prev-dbs/seforim_bundle.tar.zst
+            rm -f prev-dbs/seforim_bundle.tar.zst.part*
+            tar --use-compress-program=unzstd -xf prev-dbs/seforim_bundle.tar.zst -C prev-dbs/extract
+            rm -f prev-dbs/seforim_bundle.tar.zst
+            PREV_DB=$(find prev-dbs/extract -name seforim.db -type f | head -n1)
+            test -s "$PREV_DB" || { echo "::error::seforim.db not found in bundle of $TAG"; exit 1; }
 
             ./gradlew :generator-common:producePatchAndVerify \
               -PprevDb=$PWD/$PREV_DB \
@@ -210,8 +207,8 @@ jobs:
 
             # Free disk for the next iteration — only the .zst + manifest
             # need to ship; the .db was the verify ground-truth.
-            rm -f "$PREV_DB" \
-                  "patches/patch-v${TARGET_VER}-v${THIS_VER}.db" \
+            rm -rf prev-dbs
+            rm -f "patches/patch-v${TARGET_VER}-v${THIS_VER}.db" \
                   "patches/verify-patch-v${TARGET_VER}-v${THIS_VER}.db"
             df -h /
           done
@@ -224,11 +221,11 @@ jobs:
           set -euo pipefail
           STAGE=release-staging
           mkdir -p "$STAGE"
+          # Bundle parts (each under 2 GiB) — canonical source of the DB.
+          # Future releases recompose the prev DB from these parts.
           cp generator/packaging/build/package/seforim_bundle.tar.zst.part* "$STAGE/"
           cp build/seforim.db.buildstate "$STAGE/"
           cp build/catalog.pb "$STAGE/"
-          # Full DB under its version (next release's seed source).
-          cp build/seforim.db "$STAGE/seforim.db.v${{ steps.discover.outputs.db_version }}"
           # Patch fan (zero or more files; only present from release #2 on).
           if compgen -G "patches/patch-*.db.zst" > /dev/null; then
             cp patches/patch-*.db.zst "$STAGE/"
@@ -236,6 +233,14 @@ jobs:
           fi
           echo "Staged assets:"
           ls -lh "$STAGE/"
+          # Sanity: every asset must fit GitHub's 2 GiB per-asset cap.
+          MAX=2147483647
+          OVER=$(find "$STAGE" -maxdepth 1 -type f -size +${MAX}c)
+          if [ -n "$OVER" ]; then
+            echo "::error::Asset(s) exceed GitHub's 2 GiB single-file limit:"
+            ls -lh $OVER
+            exit 1
+          fi
 
       - name: Create GitHub pre-release and upload assets
         uses: softprops/action-gh-release@v2
