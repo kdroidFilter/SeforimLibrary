@@ -15,6 +15,16 @@ name: Manual Generate + Pre-Release
 
 on:
   workflow_dispatch:
+    inputs:
+      prerelease:
+        description: |
+          Publish as a GitHub pre-release (true, default) or a final
+          release (false). Pre-releases stay out of clients that watch
+          /releases/latest; flip to false when the pipeline is stable
+          enough for end users.
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: write
@@ -91,8 +101,10 @@ jobs:
         id: discover
         run: |
           set -euo pipefail
-          # List every release (pre and final), filter to pre-releases that
-          # carry a seforim.db.v<N> asset, output a NDJSON map.
+          # List every release (pre and final) and keep those carrying a
+          # seforim.db.v<N> asset — the version chain is independent of
+          # pre-release status, so a final release can seed/diff against
+          # a pre-release predecessor and vice-versa.
           gh release list --limit 100 --json tagName,isPrerelease,createdAt,name \
             > all-releases.json
           : > prior-versions.tsv  # cols: db_version<TAB>release_tag
@@ -103,7 +115,7 @@ jobs:
             if [ -n "$VER" ]; then
               echo -e "${VER}\t${tag}" >> prior-versions.tsv
             fi
-          done < <(jq -r '.[] | select(.isPrerelease == true) | .tagName' all-releases.json)
+          done < <(jq -r '.[].tagName' all-releases.json)
           # Sort by version DESC so head -n1 is the most recent.
           sort -k1,1nr -o prior-versions.tsv prior-versions.tsv
           echo "Prior pre-releases (db_version → tag):"
@@ -231,7 +243,7 @@ jobs:
           tag_name: ${{ steps.release_meta.outputs.release_tag }}
           name: ${{ steps.release_meta.outputs.release_tag }}
           draft: false
-          prerelease: true
+          prerelease: ${{ inputs.prerelease }}
           files: release-staging/*
 
       - name: Trigger release manifest update
