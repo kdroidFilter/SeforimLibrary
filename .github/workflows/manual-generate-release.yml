@@ -251,7 +251,44 @@ jobs:
           prerelease: ${{ inputs.prerelease }}
           files: release-staging/*
 
-      - name: Trigger release manifest update
+      # Regenerate release-manifest.json inline. We can't dispatch the
+      # separate update-release-manifest workflow from here (GITHUB_TOKEN
+      # is blocked from triggering other workflows to prevent recursion),
+      # but we *can* push a commit on master — and update-release-manifest
+      # already fires on `push: branches: [master]` as a fallback. Doing
+      # it inline gives us atomicity (manifest reflects the release we
+      # just published before this run finishes).
+      - name: Refresh release-manifest.json on master
         run: |
-          sleep 10
-          gh workflow run update-release-manifest.yml
+          set -euo pipefail
+          # `gh release view` (no args) → the "Latest" tagged release. With
+          # only pre-releases the call fails; in that case the manifest's
+          # `latest` field stays null.
+          if LATEST_JSON=$(gh release view --json tagName,name,publishedAt,assets 2>/dev/null); then
+            LATEST_ARG=(--argjson latest "$LATEST_JSON")
+          else
+            LATEST_ARG=(--argjson latest null)
+          fi
+          ALL_RELEASES=$(gh release list --json tagName,name,publishedAt --limit 100)
+          GENERATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          jq -n \
+            --arg generatedAt "$GENERATED_AT" \
+            "${LATEST_ARG[@]}" \
+            --argjson releases "$ALL_RELEASES" \
+            '{generatedAt: $generatedAt, latest: $latest, releases: $releases}' \
+            > release-manifest.json
+          echo "release-manifest.json:"
+          cat release-manifest.json
+
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add release-manifest.json
+          if git diff --staged --quiet; then
+            echo "Manifest unchanged — nothing to commit."
+          else
+            git commit -m "Update release manifest [skip ci]"
+            # Rebase onto remote master in case any concurrent push landed
+            # between the start of this job and now.
+            git pull --rebase origin master
+            git push origin HEAD:master
+          fi
