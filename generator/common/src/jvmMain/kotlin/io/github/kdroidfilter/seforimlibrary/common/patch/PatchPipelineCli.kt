@@ -106,7 +106,10 @@ fun main(args: Array<String>) {
     // Compress the patch with zstd. The .db file remains around so
     // producePatchAndVerify's strict invariant can re-hash it locally if
     // needed; releases ship only the .zst (~6× smaller).
-    val zstdLevel = (System.getProperty("zstdLevel") ?: System.getenv("ZSTD_LEVEL") ?: "19").toInt()
+    // Default matches PackageArtifacts (full bundle): level 22 (ultra).
+    // Slower than 19 but consistent end-to-end and squeezes a few extra %
+    // off each patch. Override via -PzstdLevel for ad-hoc faster CI runs.
+    val zstdLevel = (System.getProperty("zstdLevel") ?: System.getenv("ZSTD_LEVEL") ?: "22").toInt()
     val compressed = PatchCompressor.compress(outPath, level = zstdLevel)
     logger.i {
         "Compressed patch.db (zstd L$zstdLevel): ${Files.size(outPath)} → ${compressed.compressedSize} bytes " +

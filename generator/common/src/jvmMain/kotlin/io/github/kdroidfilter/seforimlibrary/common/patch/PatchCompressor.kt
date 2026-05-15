@@ -31,12 +31,13 @@ object PatchCompressor {
     /**
      * Compresses [patchDb] to `<patchDb>.zst` at level [level].
      *
-     * Level 19 hits the sweet spot in our measurements: ~6× ratio on the
-     * Sefaria/Otzaria corpus (535 MB → 88 MB), ~21 s with -T0 on a 16-core
-     * machine. Adjust downward (≤15) if CI wall-time matters more than
-     * bandwidth.
+     * Default level 22 (ultra) matches the full bundle's compression
+     * setting in `PackageArtifacts.kt` for end-to-end consistency.
+     * Trade-off vs L19 in our measurements: a few percent smaller output
+     * for ~5-10× CPU cost. Use a lower level (e.g. 19, 15) when CI
+     * wall-time matters more than the marginal size win.
      */
-    fun compress(patchDb: Path, level: Int = 19, workers: Int = Runtime.getRuntime().availableProcessors()): Result {
+    fun compress(patchDb: Path, level: Int = 22, workers: Int = Runtime.getRuntime().availableProcessors()): Result {
         require(Files.isRegularFile(patchDb)) { "patch.db not found: $patchDb" }
         val target = patchDb.resolveSibling("${patchDb.fileName}.zst")
         val uncompressedSha = MessageDigest.getInstance("SHA-256")
