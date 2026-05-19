@@ -80,7 +80,7 @@ tasks.register<JavaExec>("generateSefariaSqlite") {
 //   ./gradlew :sefariasqlite:renameCategories -PseforimDb=/path/to/seforim.db
 tasks.register<JavaExec>("renameCategories") {
     group = "application"
-    description = "Rename 'פירושים מודרניים' categories to 'מחברי זמננו' after generation."
+    description = "Apply category renames, book renames, and book moves from otzaria-library/ForDB/."
 
     dependsOn("jvmJar")
     mainClass.set("io.github.kdroidfilter.seforimlibrary.sefariasqlite.RenameCategoriesPostProcessKt")
