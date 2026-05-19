@@ -2,7 +2,9 @@ package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
 internal fun sanitizeFolder(name: String?): String {
     if (name.isNullOrBlank()) return ""
-    return name.replace("\"", "״").trim()
+    return name
+        .replace("״", "\"")
+        .trim()
 }
 
 // Legacy Otzar HaChochma style/format markers that Sefaria did not strip when

@@ -138,7 +138,7 @@ internal class SefariaBookPayloadReader(
             BookPayload(
                 heTitle = hebrewTitle,
                 enTitle = englishTitle,
-                categoriesHe = categories.map { sanitizeFolder(it) },
+                categoriesHe = flattenTalmudCategories(categories.map { sanitizeFolder(it) }),
                 lines = lines,
                 refEntries = refs,
                 headings = headings,

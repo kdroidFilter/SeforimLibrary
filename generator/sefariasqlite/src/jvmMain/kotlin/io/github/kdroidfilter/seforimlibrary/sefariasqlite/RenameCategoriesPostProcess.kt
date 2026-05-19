@@ -284,10 +284,20 @@ private fun findSourceCategories(conn: Connection, pattern: String): List<Pair<L
     return query("SELECT id, parentId FROM category WHERE title LIKE ? ESCAPE '\\'", likePattern)
 }
 
+// Upstream rename CSV uses bare-acronym keys (e.g. רדק) while Sefaria stores
+// the punctuated form (רד״ק / רד"ק). Compare with quotes/geresh stripped on
+// both sides; the new title is still written exactly as the CSV provides it.
+private fun stripTitlePunct(s: String): String =
+    s.replace("\"", "").replace("״", "").replace("'", "").replace("׳", "")
+
+private const val STRIP_TITLE_PUNCT_SQL =
+    "REPLACE(REPLACE(REPLACE(REPLACE(title, '\"', ''), '״', ''), '''', ''), '׳', '')"
+
 private fun renameBookTitle(conn: Connection, oldTitle: String, newTitle: String, logger: Logger): Int {
-    val n = conn.prepareStatement("UPDATE book SET title = ? WHERE title = ?").use { stmt ->
+    val sql = "UPDATE book SET title = ? WHERE $STRIP_TITLE_PUNCT_SQL = ?"
+    val n = conn.prepareStatement(sql).use { stmt ->
         stmt.setString(1, newTitle)
-        stmt.setString(2, oldTitle)
+        stmt.setString(2, stripTitlePunct(oldTitle))
         stmt.executeUpdate()
     }
     if (n > 0) logger.i { "Renamed book '$oldTitle' -> '$newTitle' ($n rows)" }
