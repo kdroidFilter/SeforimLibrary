@@ -192,6 +192,10 @@ class SefariaDirectImporter(
         val bookMetaById = ConcurrentHashMap<Long, BookMeta>()
         val normalizedTitleToBookId = ConcurrentHashMap<String, Long>()
         val headingLineIds = ConcurrentHashMap.newKeySet<Long>()
+        // Deferred base_text_titles → bookId resolution. We can't resolve at
+        // book-insert time because a commentary's base text may not have been
+        // inserted yet. Resolved in a second pass after the main loop.
+        val pendingBaseTextKeysByBookId = ConcurrentHashMap<Long, List<String>>()
 
         // Batch insertions
         val lineBatch = mutableListOf<Line>()
@@ -251,12 +255,19 @@ class SefariaDirectImporter(
             )
             repository.insertBook(book)
 
-            // Track normalized titles (Hebrew/English) for later default-commentator mapping
+            // Track normalized titles (Hebrew/English) for later default-commentator mapping.
+            // Indexes the primary titles plus all Sefaria-known aliases (titleVariants /
+            // heTitleVariants) so title-pattern base parsing ("X on Avot" → Pirkei Avot)
+            // can resolve abbreviated names. `putIfAbsent` keeps priority-ordered primaries
+            // canonical when an alias also matches another book.
             listOf(payload.heTitle, payload.enTitle).forEach { title ->
                 val normalized = normalizeTitleKey(title)
                 if (normalized != null) {
                     normalizedTitleToBookId.putIfAbsent(normalized, bookId)
                 }
+            }
+            payload.titleAliasKeys.forEach { alias ->
+                normalizedTitleToBookId.putIfAbsent(alias, bookId)
             }
 
             val catLevel = categoryLevelsById[catId] ?: payload.categoriesHe.lastIndex.coerceAtLeast(0)
@@ -264,8 +275,15 @@ class SefariaDirectImporter(
             bookMetaById[bookId] = BookMeta(
                 isBaseBook = book.isBaseBook,
                 categoryLevel = catLevel,
-                priorityRank = priorityRank
+                priorityRank = priorityRank,
+                dependence = payload.dependence,
+                // Resolved in a second pass; left empty for now.
+                baseTextBookIds = emptySet(),
+                collectiveTitleEn = payload.collectiveTitleEn,
             )
+            if (payload.baseTextTitleKeys.isNotEmpty()) {
+                pendingBaseTextKeysByBookId[bookId] = payload.baseTextTitleKeys
+            }
 
             val refsForBook = payload.refEntries.map { it.copy(path = bookPath) }
             synchronized(allRefsWithPath) {
@@ -367,6 +385,57 @@ class SefariaDirectImporter(
             val existing = refsByBase[base]
             if (existing == null || entry.lineIndex < existing.lineIndex) {
                 refsByBase[base] = entry
+            }
+        }
+
+        // Resolve deferred base_text_titles → bookIds now that every book has been
+        // inserted and normalizedTitleToBookId is fully populated. This gives the
+        // link orientation resolver explicit base→dependant edges instead of the
+        // priorityRank heuristic.
+        if (pendingBaseTextKeysByBookId.isNotEmpty()) {
+            var resolved = 0
+            var unresolved = 0
+            pendingBaseTextKeysByBookId.forEach { (bookId, keys) ->
+                val ids = keys.mapNotNullTo(HashSet()) { normalizedTitleToBookId[it] }
+                resolved += ids.size
+                unresolved += keys.size - ids.size
+                if (ids.isNotEmpty()) {
+                    val meta = bookMetaById[bookId] ?: return@forEach
+                    // Set BOTH baseTextBookIds (for resolver) and the strict
+                    // Sefaria-declared subset (for SOURCE view boost). Subsequent
+                    // inference/density passes will only mutate `baseTextBookIds`.
+                    bookMetaById[bookId] = meta.copy(
+                        baseTextBookIds = ids,
+                        sefariaDeclaredBaseTextBookIds = ids,
+                    )
+                }
+            }
+            logger.i {
+                "Resolved base_text_titles for ${pendingBaseTextKeysByBookId.size} books " +
+                    "($resolved title→bookId hits, $unresolved misses)"
+            }
+        }
+
+        // Augment baseTextBookIds via link-density chaining. Sefaria's schemas
+        // chain Talmud-side super-commentaries (Rif/Ran/HaMaor/...) but flatten
+        // most Tanakh super-commentaries (Mizrachi, Gur Aryeh, Levush HaOrah)
+        // to point directly at the Torah instead of at Rashi. The aggregated
+        // `links/links_by_book.csv` exposes this implicitly via link density;
+        // see SefariaLinkDensityChaining.kt for the bimodal-distribution rationale.
+        run {
+            val linksByBookCsv = dbRoot.resolve("links").resolve("links_by_book.csv")
+            if (linksByBookCsv.exists()) {
+                val countsByBookPair = parseLinksByBookCsv(linksByBookCsv, normalizedTitleToBookId)
+                if (countsByBookPair.isNotEmpty()) {
+                    // Step 1: seed primary bases for dependants whose schema ships
+                    // empty base_text_titles (Bartenura on Torah, Ralbag on Torah,
+                    // …). These books would otherwise be invisible to the sibling
+                    // chaining since it requires at least one declared base.
+                    inferPrimaryBasesForEmptyDeclaredBookmeta(bookMetaById, countsByBookPair, logger)
+                    // Step 2: walk the asymmetric density rule from declared bases
+                    // to chain intermediate dependants (super-commentaries).
+                    applyLinkDensitySiblingChaining(bookMetaById, countsByBookPair, logger)
+                }
             }
         }
 

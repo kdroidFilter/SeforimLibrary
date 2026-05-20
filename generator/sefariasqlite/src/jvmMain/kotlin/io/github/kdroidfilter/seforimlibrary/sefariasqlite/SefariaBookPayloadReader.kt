@@ -119,6 +119,21 @@ internal class SefariaBookPayloadReader(
             val description = extractDescription(schemaJson, schemaObj)
             val pubDates = extractPubDates(schemaJson, schemaObj)
             val altStructures = parseAltStructures(schemaJson)
+            val dependence = extractDependence(schemaJson, schemaObj)
+            val rawBaseTextKeys = extractBaseTextTitleKeys(schemaJson, schemaObj)
+            // When Sefaria didn't ship `base_text_titles` (≈ 74 books, e.g.
+            // Nachalat Avot on Avot, Bartenura on Torah, Ralbag on Torah),
+            // try to recover the declared base from the title's "X on Y" /
+            // "X על Y" pattern. The extracted Y will be resolved against
+            // titleAliasKeys at first-pass to produce a canonical bookId.
+            val baseTextTitleKeys = if (rawBaseTextKeys.isEmpty() && dependence != null) {
+                rawBaseTextKeys + extractBaseKeysFromTitle(englishTitle, hebrewTitle)
+            } else {
+                rawBaseTextKeys
+            }
+            val collectiveTitleEn = (schemaJson["collective_title"] as? JsonObject)
+                ?.get("en")?.stringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+            val titleAliasKeys = extractTitleAliasKeys(schemaJson, schemaObj)
 
             BookPayload(
                 heTitle = hebrewTitle,
@@ -130,7 +145,11 @@ internal class SefariaBookPayloadReader(
                 authors = authors,
                 description = description,
                 pubDates = pubDates,
-                altStructures = altStructures
+                altStructures = altStructures,
+                dependence = dependence,
+                baseTextTitleKeys = baseTextTitleKeys,
+                collectiveTitleEn = collectiveTitleEn,
+                titleAliasKeys = titleAliasKeys,
             )
         }.onFailure { e ->
             logger.w(e) { "Failed to prepare book from $textPath" }
@@ -155,6 +174,89 @@ internal class SefariaBookPayloadReader(
             if (path.exists()) return path
         }
         return null
+    }
+
+    /**
+     * When a book has `dependence != null` but no `base_text_titles`, try to
+     * recover the declared base from the title's "X on Y" or "X על Y" pattern.
+     * Returns the normalized title key(s) for "Y", which the importer's first
+     * pass will resolve against `normalizedTitleToBookId` (including aliases).
+     *
+     * Drops empty or whitespace-only results — unresolvable keys are silently
+     * skipped at resolution time, so we don't filter further here.
+     */
+    private fun extractBaseKeysFromTitle(enTitle: String?, heTitle: String?): List<String> {
+        val out = mutableListOf<String>()
+        enTitle?.let {
+            val idx = it.lastIndexOf(" on ")
+            if (idx > 0) {
+                normalizeTitleKey(it.substring(idx + 4).trim())?.let(out::add)
+            }
+        }
+        heTitle?.let {
+            val idx = it.lastIndexOf(" על ")
+            if (idx > 0) {
+                normalizeTitleKey(it.substring(idx + 4).trim())?.let(out::add)
+                // Also try without the leading definite article "ה" (e.g. "התורה" → "תורה").
+                val raw = it.substring(idx + 4).trim()
+                if (raw.startsWith("ה") && raw.length > 1) {
+                    normalizeTitleKey(raw.substring(1))?.let(out::add)
+                }
+            }
+        }
+        return out.distinct()
+    }
+
+    /**
+     * Extracts all Sefaria-recognised title aliases for the book. Used by the
+     * importer to populate `normalizedTitleToBookId` so that title-pattern
+     * base parsing (e.g. "X on Avot" → Pirkei Avot) can resolve abbreviated
+     * names that aren't the primary `title`/`heTitle`.
+     *
+     * Filters out HTML-marked variants (`<i>Pirkei Avot</i>`) to avoid noise.
+     */
+    private fun extractTitleAliasKeys(schemaJson: JsonObject, schemaObj: JsonObject): List<String> {
+        val out = mutableListOf<String>()
+        fun ingest(key: String) {
+            (schemaJson[key]?.jsonArray ?: schemaObj[key]?.jsonArray)?.forEach { el ->
+                val s = el.jsonPrimitive.contentOrNull?.takeIf { it.isNotBlank() } ?: return@forEach
+                if (s.contains('<') || s.contains('>')) return@forEach
+                normalizeTitleKey(s)?.let(out::add)
+            }
+        }
+        ingest("titleVariants")
+        ingest("heTitleVariants")
+        return out.distinct()
+    }
+
+    private fun extractDependence(schemaJson: JsonObject, schemaObj: JsonObject): Dependence? {
+        val raw = (schemaJson["dependence"]?.stringOrNull() ?: schemaObj["dependence"]?.stringOrNull())
+            ?.trim()?.lowercase() ?: return null
+        return when (raw) {
+            "commentary", "sub-commentary", "supercommentary", "super-commentary",
+            "super_commentary" -> Dependence.COMMENTARY
+            "targum" -> Dependence.TARGUM
+            "midrash" -> Dependence.MIDRASH
+            else -> Dependence.OTHER_DEPENDANT
+        }
+    }
+
+    private fun extractBaseTextTitleKeys(schemaJson: JsonObject, schemaObj: JsonObject): List<String> {
+        val arr = schemaJson["base_text_titles"]?.jsonArray
+            ?: schemaObj["base_text_titles"]?.jsonArray
+            ?: return emptyList()
+        val keys = mutableListOf<String>()
+        arr.forEach { el ->
+            when (el) {
+                is JsonObject -> {
+                    el["en"]?.stringOrNull()?.let { normalizeTitleKey(it)?.let(keys::add) }
+                    el["he"]?.stringOrNull()?.let { normalizeTitleKey(it)?.let(keys::add) }
+                }
+                is JsonPrimitive -> el.contentOrNull?.let { normalizeTitleKey(it)?.let(keys::add) }
+                else -> {}
+            }
+        }
+        return keys.distinct()
     }
 
     private fun extractDescription(schemaJson: JsonObject, schemaObj: JsonObject): String? {

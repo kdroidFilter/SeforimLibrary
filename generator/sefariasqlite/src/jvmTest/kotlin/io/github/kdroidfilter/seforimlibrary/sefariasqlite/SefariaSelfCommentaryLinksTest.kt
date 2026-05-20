@@ -183,10 +183,11 @@ class SefariaSelfCommentaryLinksTest {
         )
 
         assertEquals(0L, selfCommentary, "self-COMMENTARY links should be dropped")
-        assertEquals(2L, selfOther, "self-OTHER links are legitimate cross-refs within a book; both directions must be kept")
-        // Rashi ↔ Genesis produces one COMMENTARY direction and one SOURCE direction
-        assertTrue(crossCommentary >= 1L, "cross-book Rashi→Genesis COMMENTARY link must survive")
-        assertTrue(crossSource >= 1L, "reverse Genesis→Rashi SOURCE link must survive")
+        assertEquals(1L, selfOther, "self-OTHER link is a legitimate cross-ref; one stored row per CSV line")
+        // Rashi → Genesis: one canonical COMMENTARY row (base→dependant). SOURCE is
+        // now a virtual view derived at read time, so no stored SOURCE row.
+        assertEquals(1L, crossCommentary, "cross-book Genesis→Rashi COMMENTARY row must survive")
+        assertEquals(0L, crossSource, "SOURCE is no longer persisted — it is synthesized at read time")
 
         repo.close()
     }

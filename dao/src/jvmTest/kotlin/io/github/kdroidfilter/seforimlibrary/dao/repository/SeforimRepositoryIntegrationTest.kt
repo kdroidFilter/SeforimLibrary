@@ -526,6 +526,76 @@ class SeforimRepositoryIntegrationTest {
         )
     }
 
+    // ==================== Virtual SOURCE view tests ====================
+
+    // Validates the single-direction storage + virtual SOURCE view contract:
+    // a stored COMMENTARY link base→dep MUST be visible both as a COMMENTARY
+    // outgoing from the base line and as a SOURCE incoming to the dep line.
+    @Test
+    fun `SOURCE view returns swapped commentary link from the dependant side`() = runBlocking {
+        val sourceId = repository.insertSource("Test")
+        val catId = repository.insertCategory(Category(parentId = null, title = "C", level = 0, order = 1))
+        val baseBookId = repository.insertBook(
+            Book(categoryId = catId, sourceId = sourceId, title = "Genesis", order = 1f, isBaseBook = true)
+        )
+        val depBookId = repository.insertBook(
+            Book(categoryId = catId, sourceId = sourceId, title = "Rashi", order = 2f, isBaseBook = false)
+        )
+        val baseLineId = repository.insertLine(Line(bookId = baseBookId, lineIndex = 0, content = "Genesis 1:1"))
+        val depLineId = repository.insertLine(Line(bookId = depBookId, lineIndex = 0, content = "Rashi on 1:1"))
+
+        repository.insertLink(
+            Link(
+                sourceBookId = baseBookId,
+                targetBookId = depBookId,
+                sourceLineId = baseLineId,
+                targetLineId = depLineId,
+                targetLineIndex = 0,
+                connectionType = ConnectionType.COMMENTARY,
+            )
+        )
+
+        // Forward: from base line, the dep is a COMMENTARY.
+        val commentaries = repository.getCommentariesForLineRange(
+            lineIds = listOf(baseLineId),
+            connectionTypes = setOf(ConnectionType.COMMENTARY),
+            offset = 0,
+            limit = 10,
+        )
+        assertEquals(1, commentaries.size)
+        assertEquals(depBookId, commentaries.first().link.targetBookId)
+        assertEquals(ConnectionType.COMMENTARY, commentaries.first().link.connectionType)
+
+        // Reverse virtual: from dep line, the base appears as a SOURCE with
+        // src/tgt swapped so the consumer sees the base book in `targetBookId`.
+        val sources = repository.getCommentariesForLineRange(
+            lineIds = listOf(depLineId),
+            connectionTypes = setOf(ConnectionType.SOURCE),
+            offset = 0,
+            limit = 10,
+        )
+        assertEquals(1, sources.size)
+        assertEquals(ConnectionType.SOURCE, sources.first().link.connectionType)
+        assertEquals(depBookId, sources.first().link.sourceBookId)
+        assertEquals(baseBookId, sources.first().link.targetBookId)
+        assertEquals("Genesis 1:1", sources.first().targetText)
+    }
+
+    @Test
+    fun `mixing SOURCE with other types in a single query is rejected`() = runBlocking {
+        try {
+            repository.getCommentariesForLineRange(
+                lineIds = listOf(1L),
+                connectionTypes = setOf(ConnectionType.SOURCE, ConnectionType.COMMENTARY),
+                offset = 0,
+                limit = 10,
+            )
+            error("Expected IllegalArgumentException")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("SOURCE"))
+        }
+    }
+
     // ==================== Max ID Tests (continued) ====================
 
     @Test

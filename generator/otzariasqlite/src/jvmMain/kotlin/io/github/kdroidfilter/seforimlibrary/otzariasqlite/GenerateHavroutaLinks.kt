@@ -174,7 +174,6 @@ private suspend fun generateHavroutaLinks(
     logger: Logger
 ): Int {
     val ctCommentary = bindings.upsertConnectionType(ConnectionType.COMMENTARY.name)
-    val ctSource = bindings.upsertConnectionType(ConnectionType.SOURCE.name)
     // Find all Havrouta books
     val havroutaBooks = repository.getAllBooks().filter { it.title.startsWith("חברותא על ") }
     logger.i { "Found ${havroutaBooks.size} Havrouta books" }
@@ -213,7 +212,6 @@ private suspend fun generateHavroutaLinks(
             repository = repository,
             bindings = bindings,
             ctCommentary = ctCommentary,
-            ctSource = ctSource,
             havroutaBookId = havroutaBook.id,
             talmudBookId = talmudBook.id,
             havroutaTotalLines = havroutaBook.totalLines,
@@ -238,7 +236,6 @@ private suspend fun processBookPair(
     repository: SeforimRepository,
     bindings: IdAllocatorBindings,
     ctCommentary: Long,
-    ctSource: Long,
     havroutaBookId: Long,
     talmudBookId: Long,
     havroutaTotalLines: Int,
@@ -304,7 +301,8 @@ private suspend fun processBookPair(
 
         val talmudLineId = talmudLineIdByIndex[matchingLineIndex] ?: continue
 
-        // Create link: Talmud -> Havrouta (Talmud has Havrouta as commentary)
+        // Single canonical direction Talmud → Havrouta (base → commentary).
+        // The reverse SOURCE view is synthesized at read time by the repository.
         linkBatch.add(Link(
             id = bindings.allocator.linkId(talmudLineId, havroutaLine.id, ctCommentary),
             sourceBookId = talmudBookId,
@@ -315,18 +313,7 @@ private suspend fun processBookPair(
             connectionType = ConnectionType.COMMENTARY
         ))
 
-        // Create reverse link: Havrouta -> Talmud (Havrouta's source is Talmud)
-        linkBatch.add(Link(
-            id = bindings.allocator.linkId(havroutaLine.id, talmudLineId, ctSource),
-            sourceBookId = havroutaBookId,
-            targetBookId = talmudBookId,
-            sourceLineId = havroutaLine.id,
-            targetLineId = talmudLineId,
-            targetLineIndex = matchingLineIndex,
-            connectionType = ConnectionType.SOURCE
-        ))
-
-        linksCreated += 2
+        linksCreated += 1
 
         // Batch insert
         if (linkBatch.size >= 1000) {
@@ -518,7 +505,6 @@ private suspend fun generateHavroutaHearotLinks(
     sourceDir: String
 ): Int {
     val ctCommentary = bindings.upsertConnectionType(ConnectionType.COMMENTARY.name)
-    val ctSource = bindings.upsertConnectionType(ConnectionType.SOURCE.name)
     val linksDir = File(sourceDir, "links")
     if (!linksDir.exists()) {
         logger.w { "Links directory not found: ${linksDir.absolutePath}" }
@@ -609,7 +595,8 @@ private suspend fun generateHavroutaHearotLinks(
                 continue
             }
 
-            // Create link: Havrouta -> Hearot (COMMENTARY)
+            // Single canonical direction Havrouta → Hearot (base → commentary).
+            // SOURCE is synthesized at read time.
             allLinks.add(Link(
                 id = bindings.allocator.linkId(sourceLineId, targetLineId, ctCommentary),
                 sourceBookId = havroutaBook.id,
@@ -618,17 +605,6 @@ private suspend fun generateHavroutaHearotLinks(
                 targetLineId = targetLineId,
                 targetLineIndex = targetLineIndex,
                 connectionType = ConnectionType.COMMENTARY
-            ))
-
-            // Create reverse link: Hearot -> Havrouta (SOURCE)
-            allLinks.add(Link(
-                id = bindings.allocator.linkId(targetLineId, sourceLineId, ctSource),
-                sourceBookId = targetBook.id,
-                targetBookId = havroutaBook.id,
-                sourceLineId = targetLineId,
-                targetLineId = sourceLineId,
-                targetLineIndex = sourceLineIndex,
-                connectionType = ConnectionType.SOURCE
             ))
         }
     }

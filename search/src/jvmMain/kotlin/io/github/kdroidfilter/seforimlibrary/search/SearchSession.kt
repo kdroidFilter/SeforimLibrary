@@ -8,7 +8,7 @@ import java.io.Closeable
  * Sessions maintain internal cursor state for efficient pagination using
  * Lucene's searchAfter mechanism. Must be closed when no longer needed
  * to release underlying index reader resources.
- *
+ *oui
  * ## Usage
  * ```kotlin
  * engine.openSession("שלום")?.use { session ->

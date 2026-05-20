@@ -128,12 +128,12 @@ GROUP BY l.targetBookId, b.title, a.name
 ORDER BY b.orderIndex, b.title;
 
 insert:
-INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, connectionTypeId)
-VALUES (?, ?, ?, ?, ?, ?);
+INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, connectionTypeId, isDeclaredBase)
+VALUES (?, ?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT OR IGNORE INTO link (id, sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, connectionTypeId)
-VALUES (?, ?, ?, ?, ?, ?, ?);
+INSERT OR IGNORE INTO link (id, sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, connectionTypeId, isDeclaredBase)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 delete:
 DELETE FROM link WHERE id = ?;
@@ -165,3 +165,175 @@ SELECT COUNT(*)
 FROM link l
 JOIN connection_type ct ON l.connectionTypeId = ct.id
 WHERE l.targetBookId = ? AND ct.name = ?;
+
+-- ===========================================================================
+-- Mirror queries for the virtual SOURCE view.
+--
+-- Links are stored in a single canonical direction `source → target`
+-- (base book → dependant book). When a caller asks "what are the SOURCES of
+-- these lines?" (i.e. "what does this commentary line comment on?"), we run
+-- the mirror queries below: they match on `targetLineId IN ?` and swap
+-- src↔tgt columns at the SELECT level so the consuming Kotlin mapper sees
+-- exactly the same shape as the forward queries.
+--
+-- Ordering uses `b.orderIndex, sl.lineIndex` (JOIN line sl ON sl.id = sourceLineId).
+-- ===========================================================================
+
+selectInverseLinksByTargetLineIds:
+SELECT
+    l.id AS id,
+    l.targetBookId AS sourceBookId,
+    l.sourceBookId AS targetBookId,
+    l.targetLineId AS sourceLineId,
+    l.sourceLineId AS targetLineId,
+    sl.lineIndex AS targetLineIndex,
+    ct.name AS connectionType,
+    b.title AS targetBookTitle,
+    sl.content AS targetText
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.id, sl.lineIndex;
+
+selectInverseLinkSummariesByTargetLineIds:
+SELECT
+    l.id AS id,
+    l.targetBookId AS sourceBookId,
+    l.sourceBookId AS targetBookId,
+    l.targetLineId AS sourceLineId,
+    l.sourceLineId AS targetLineId,
+    sl.lineIndex AS targetLineIndex,
+    ct.name AS connectionType,
+    b.title AS targetBookTitle
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.id, sl.lineIndex;
+
+selectInverseLinksByTargetLineIdsPaged:
+SELECT
+    l.id AS id,
+    l.targetBookId AS sourceBookId,
+    l.sourceBookId AS targetBookId,
+    l.targetLineId AS sourceLineId,
+    l.sourceLineId AS targetLineId,
+    sl.lineIndex AS targetLineIndex,
+    ct.name AS connectionType,
+    b.title AS targetBookTitle,
+    sl.content AS targetText
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.id, sl.lineIndex
+LIMIT ? OFFSET ?;
+
+selectInverseLinksByTargetLineIdsAndSourcesPaged:
+SELECT
+    l.id AS id,
+    l.targetBookId AS sourceBookId,
+    l.sourceBookId AS targetBookId,
+    l.targetLineId AS sourceLineId,
+    l.sourceLineId AS targetLineId,
+    sl.lineIndex AS targetLineIndex,
+    ct.name AS connectionType,
+    b.title AS targetBookTitle,
+    sl.content AS targetText
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ? AND l.sourceBookId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.id, sl.lineIndex
+LIMIT ? OFFSET ?;
+
+selectInverseLinksByTargetLineIdsAndSourcesPagedDistinct:
+SELECT MIN(l.id) AS id,
+       l.targetBookId AS sourceBookId,
+       MIN(l.sourceBookId) AS targetBookId,
+       MIN(l.targetLineId) AS sourceLineId,
+       l.sourceLineId AS targetLineId,
+       MIN(sl.lineIndex) AS targetLineIndex,
+       MIN(l.connectionTypeId) AS connectionTypeId,
+       ct.name AS connectionType,
+       b.title AS targetBookTitle,
+       sl.content AS targetText
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ? AND l.sourceBookId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+GROUP BY l.sourceLineId
+ORDER BY MAX(l.isDeclaredBase) DESC, b.isBaseBook DESC, b.id, MIN(sl.lineIndex)
+LIMIT ? OFFSET ?;
+
+selectInverseLinksByTargetLineIdsPagedDistinct:
+SELECT MIN(l.id) AS id,
+       l.targetBookId AS sourceBookId,
+       MIN(l.sourceBookId) AS targetBookId,
+       MIN(l.targetLineId) AS sourceLineId,
+       l.sourceLineId AS targetLineId,
+       MIN(sl.lineIndex) AS targetLineIndex,
+       MIN(l.connectionTypeId) AS connectionTypeId,
+       ct.name AS connectionType,
+       b.title AS targetBookTitle,
+       sl.content AS targetText
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+GROUP BY l.sourceLineId
+ORDER BY MAX(l.isDeclaredBase) DESC, b.isBaseBook DESC, b.id, MIN(sl.lineIndex)
+LIMIT ? OFFSET ?;
+
+selectInverseLinkCharCountsByTargetLineIds:
+SELECT sl.charCount FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.id, sl.lineIndex;
+
+selectInverseLinkCharCountsByTargetLineIdsAndSources:
+SELECT sl.charCount FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ? AND l.sourceBookId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.id, sl.lineIndex;
+
+-- "Source-side commentators" — books that appear as base/source for this book's lines.
+selectSourcesByBook:
+SELECT DISTINCT l.sourceBookId AS targetBookId, b.title AS targetBookTitle, a.name AS author, COUNT(*) AS linkCount
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN book b ON l.sourceBookId = b.id
+LEFT JOIN book_author ba ON b.id = ba.bookId
+LEFT JOIN author a ON ba.authorId = a.id
+WHERE l.targetBookId = ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+GROUP BY l.sourceBookId, b.title, a.name
+ORDER BY MAX(l.isDeclaredBase) DESC, b.isBaseBook DESC, b.id, b.title;
