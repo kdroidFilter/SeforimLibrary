@@ -460,6 +460,16 @@ class SefariaDirectImporter(
         repository.executeRawQuery("PRAGMA journal_mode = DELETE")
 
         repository.rebuildCategoryClosure()
+
+        // Demote dependant-typed links (COMMENTARY/TARGUM/MIDRASH/…) whose
+        // source and target books are anchored on incompatible top-level
+        // corpora per Sefaria's own categorisation — e.g. Berakhot (תלמוד)
+        // ↔ Tora Temima (תנ״ך), Bereshit (תנ״ך) ↔ Iggerot Tzafon
+        // (מחשבת ישראל). Otzaria-sourced links (Chevruta etc.) and
+        // cross-cutting corpora (חסידות, קבלה) are exempt.
+        // See [SefariaLinksImporter.demoteCrossCorpusDependantLinks].
+        logger.i { "Demoting cross-corpus dependant links per Sefaria categorisation..." }
+        linksImporter.demoteCrossCorpusDependantLinks()
         linksImporter.updateBookHasLinks()
 
         // Persist current source hashes for next build's touched-book detection.

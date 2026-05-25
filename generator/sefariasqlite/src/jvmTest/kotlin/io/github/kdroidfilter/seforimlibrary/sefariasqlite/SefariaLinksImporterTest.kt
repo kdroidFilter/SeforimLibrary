@@ -91,7 +91,7 @@ class SefariaLinksImporterTest {
 
     @Test
     fun isBaseBookFallbackWhenSchemaSilent() {
-        // No dependence on either side, no base_text_titles — old curated flag still works.
+        // No dependence on either side, no base_text_titles — curated isBaseBook flag still orients.
         val baseMeta = BookMeta(isBaseBook = true, categoryLevel = 0, priorityRank = null)
         val depMeta = BookMeta(isBaseBook = false, categoryLevel = 2, priorityRank = null)
 
