@@ -197,7 +197,7 @@ JOIN book b ON l.sourceBookId = b.id
 WHERE l.targetLineId IN ?
   AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
   AND l.sourceBookId != l.targetBookId
-ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.id, sl.lineIndex;
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.orderIndex, sl.lineIndex;
 
 selectInverseLinkSummariesByTargetLineIds:
 SELECT
@@ -216,7 +216,7 @@ JOIN book b ON l.sourceBookId = b.id
 WHERE l.targetLineId IN ?
   AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
   AND l.sourceBookId != l.targetBookId
-ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.id, sl.lineIndex;
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.orderIndex, sl.lineIndex;
 
 selectInverseLinksByTargetLineIdsPaged:
 SELECT
@@ -236,7 +236,7 @@ JOIN book b ON l.sourceBookId = b.id
 WHERE l.targetLineId IN ?
   AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
   AND l.sourceBookId != l.targetBookId
-ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.id, sl.lineIndex
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.orderIndex, sl.lineIndex
 LIMIT ? OFFSET ?;
 
 selectInverseLinksByTargetLineIdsAndSourcesPaged:
@@ -257,7 +257,7 @@ JOIN book b ON l.sourceBookId = b.id
 WHERE l.targetLineId IN ? AND l.sourceBookId IN ?
   AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
   AND l.sourceBookId != l.targetBookId
-ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.id, sl.lineIndex
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.orderIndex, sl.lineIndex
 LIMIT ? OFFSET ?;
 
 selectInverseLinksByTargetLineIdsAndSourcesPagedDistinct:
@@ -279,7 +279,7 @@ WHERE l.targetLineId IN ? AND l.sourceBookId IN ?
   AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
   AND l.sourceBookId != l.targetBookId
 GROUP BY l.sourceLineId
-ORDER BY MAX(l.isDeclaredBase) DESC, b.isBaseBook DESC, b.id, MIN(sl.lineIndex)
+ORDER BY MAX(l.isDeclaredBase) DESC, b.isBaseBook DESC, b.orderIndex, MIN(sl.lineIndex)
 LIMIT ? OFFSET ?;
 
 selectInverseLinksByTargetLineIdsPagedDistinct:
@@ -301,7 +301,7 @@ WHERE l.targetLineId IN ?
   AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
   AND l.sourceBookId != l.targetBookId
 GROUP BY l.sourceLineId
-ORDER BY MAX(l.isDeclaredBase) DESC, b.isBaseBook DESC, b.id, MIN(sl.lineIndex)
+ORDER BY MAX(l.isDeclaredBase) DESC, b.isBaseBook DESC, b.orderIndex, MIN(sl.lineIndex)
 LIMIT ? OFFSET ?;
 
 selectInverseLinkCharCountsByTargetLineIds:
@@ -312,7 +312,7 @@ JOIN book b ON l.sourceBookId = b.id
 WHERE l.targetLineId IN ?
   AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
   AND l.sourceBookId != l.targetBookId
-ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.id, sl.lineIndex;
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.orderIndex, sl.lineIndex;
 
 selectInverseLinkCharCountsByTargetLineIdsAndSources:
 SELECT sl.charCount FROM link l
@@ -322,7 +322,7 @@ JOIN book b ON l.sourceBookId = b.id
 WHERE l.targetLineId IN ? AND l.sourceBookId IN ?
   AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
   AND l.sourceBookId != l.targetBookId
-ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.id, sl.lineIndex;
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.orderIndex, sl.lineIndex;
 
 -- "Source-side commentators" — books that appear as base/source for this book's lines.
 selectSourcesByBook:
@@ -336,4 +336,4 @@ WHERE l.targetBookId = ?
   AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
   AND l.sourceBookId != l.targetBookId
 GROUP BY l.sourceBookId, b.title, a.name
-ORDER BY MAX(l.isDeclaredBase) DESC, b.isBaseBook DESC, b.id, b.title;
+ORDER BY MAX(l.isDeclaredBase) DESC, b.isBaseBook DESC, b.orderIndex, b.title;

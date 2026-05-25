@@ -254,6 +254,105 @@ internal class SefariaLinksImporter(
         )
     }
 
+    /**
+     * Demote dependant-typed links whose source and target books live in
+     * incompatible corpora.
+     *
+     * Sefaria categorises every book under a top-level corpus
+     * (`תנ״ך` / `תלמוד` / `משנה` / `הלכה` / `חסידות` / `קבלה` / `מוסר` /
+     * `מחשבת ישראל` / …). That categorisation IS Sefaria's authoritative
+     * statement of what a book is "anchored on". A link tagged COMMENTARY
+     * between two books whose anchored corpora don't overlap is structurally
+     * inconsistent — the CSV row is treating a cross-corpus citation as a
+     * dependant relationship.
+     *
+     * Concrete examples this catches:
+     *  - תורה תמימה (anchored on תנ״ך) ↔ ברכות (anchored on תלמוד):
+     *    425 CSV COMMENTARY rows because Tora Temima's footnotes cite the
+     *    Berakhot sugya. Tora Temima is a Torah commentary, not a Talmud
+     *    commentary, so on the Berakhot reader page it's editorial noise.
+     *  - אגרות צפון (anchored on מחשבת ישראל) ↔ בראשית (תנ״ך):
+     *    1 stray COMMENTARY row out of 13 — Sefaria CSV typo. Igrot Tzafon
+     *    is an independent treatise on Jewish thought, not a Tanakh
+     *    commentary.
+     *  - בית יוסף (הלכה) ↔ ברכות (תלמוד): Beit Yosef commentates on Tur, not
+     *    on Talmud directly.
+     *
+     * Cross-corpus dependant signals that ARE legitimate:
+     *  - חסידות / קבלה / מילונים: cross-cutting corpora that legitimately
+     *    commentate across Tanakh / Talmud / Halakha. Mishna ↔ Talmud is
+     *    also a single editorial cluster.
+     *
+     * Otzaria-sourced books (sourceId != 1) bypass this rule entirely —
+     * they're imported through a separate pipeline whose links are curated
+     * per-book (e.g. Chevruta-Talmud via [generateHavroutaLinks]).
+     *
+     * Demoted links land in RELATED so the connection panel still shows
+     * them as cross-references but the commentator panel
+     * (`ct.name IN COMMENTARY/SUPER_COMMENTARY/…`) excludes them.
+     */
+    suspend fun demoteCrossCorpusDependantLinks() {
+        val dependantTypes = listOf(
+            "COMMENTARY", "SUPER_COMMENTARY", "TARGUM", "MIDRASH", "PARSHANUT",
+        ).joinToString(",") { "'$it'" }
+        // Build a temp table (bookId, corpusKey) for every book — corpusKey
+        // is the top-level Sefaria-category title the book transitively
+        // descends from (NULL for books whose chain doesn't reach a known
+        // corpus root).
+        repository.executeRawQuery("DROP TABLE IF EXISTS _book_corpus")
+        repository.executeRawQuery(
+            "CREATE TEMP TABLE _book_corpus (bookId INTEGER PRIMARY KEY NOT NULL, corpus TEXT) WITHOUT ROWID"
+        )
+        // category_closure(ancestorId, descendantId) lets us tag each book
+        // by checking whether any of its category ancestors matches a known
+        // corpus root. CASE picks the most-specific matching corpus name.
+        repository.executeRawQuery(
+            """
+            INSERT INTO _book_corpus (bookId, corpus)
+            SELECT b.id, MIN(c.title) AS corpus
+            FROM book b
+            JOIN category_closure cc ON cc.descendantId = b.categoryId
+            JOIN category c ON c.id = cc.ancestorId
+            WHERE c.title IN ('תנ״ך','תלמוד','משנה','משניות','הלכה','חסידות','קבלה','מדרש','מוסר','ספרי מוסר','מחשבת ישראל')
+            GROUP BY b.id
+            """.trimIndent()
+        )
+        // Cross-cutting target corpora — commentators in these corpora
+        // legitimately span Tanakh/Talmud/Halakha and must NOT be demoted.
+        // 'מדרש' is anchored on Tanakh; everything else strict is on its
+        // own corpus.
+        val crossCutting = listOf("חסידות", "קבלה").joinToString(",") { "'$it'" }
+        // Allowed pairs of (source corpus, target corpus) when corpora differ:
+        //   - same corpus (handled by NOT IN)
+        //   - target in cross-cutting set
+        //   - {משנה ↔ תלמוד} cluster
+        //   - {משניות ↔ תלמוד} cluster
+        //   - {מדרש → תנ״ך}: a Midrash commentates on a Tanakh book, so
+        //     Tanakh-source → Midrash-target is the canonical direction.
+        repository.executeRawQuery(
+            """
+            UPDATE link SET connectionTypeId = (SELECT id FROM connection_type WHERE name='RELATED' LIMIT 1)
+            WHERE isDeclaredBase = 0
+              AND connectionTypeId IN (SELECT id FROM connection_type WHERE name IN ($dependantTypes))
+              AND EXISTS (
+                SELECT 1
+                FROM book sb JOIN book tb
+                  ON sb.id = link.sourceBookId AND tb.id = link.targetBookId
+                JOIN _book_corpus sc ON sc.bookId = sb.id
+                JOIN _book_corpus tc ON tc.bookId = tb.id
+                WHERE sb.sourceId = 1 AND tb.sourceId = 1
+                  AND sc.corpus IS NOT NULL AND tc.corpus IS NOT NULL
+                  AND sc.corpus != tc.corpus
+                  AND tc.corpus NOT IN ($crossCutting)
+                  AND NOT (sc.corpus IN ('תלמוד') AND tc.corpus IN ('משנה','משניות'))
+                  AND NOT (sc.corpus IN ('משנה','משניות') AND tc.corpus IN ('תלמוד'))
+                  AND NOT (sc.corpus = 'תנ״ך' AND tc.corpus = 'מדרש')
+              )
+            """.trimIndent()
+        )
+        repository.executeRawQuery("DROP TABLE IF EXISTS _book_corpus")
+    }
+
     suspend fun updateBookHasLinks() {
         repository.executeRawQuery(
             "INSERT OR IGNORE INTO book_has_links(bookId, hasSourceLinks, hasTargetLinks) " +
