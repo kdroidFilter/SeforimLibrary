@@ -53,12 +53,14 @@ fun main(args: Array<String>) {
             conn.autoCommit = false
 
             val result = try {
-                applyGenerations(conn, rows, logger)
+                val res = applyGenerations(conn, rows, logger)
+                conn.commit()
+                res
             } catch (e: Exception) {
+                runCatching { conn.rollback() }.onFailure { logger.w(it) { "Rollback failed" } }
                 logger.w(e) { "Generation seeding failed; skipping section" }
                 GenerationApplyResult(0, 0, rows.size)
             }
-            conn.commit()
 
             logger.i {
                 "Generations done: seeded=${result.generationsCreated} " +
