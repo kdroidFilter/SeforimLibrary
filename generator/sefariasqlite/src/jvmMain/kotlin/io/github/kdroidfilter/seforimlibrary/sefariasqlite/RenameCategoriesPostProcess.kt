@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Paths
 import java.sql.Connection
 import java.sql.DriverManager
+import java.sql.PreparedStatement
 import kotlin.io.path.exists
 import kotlin.system.exitProcess
 
@@ -19,6 +20,7 @@ import kotlin.system.exitProcess
  *  - תיקיות.csv      `old,new` — category renames (exact match, prefix fallback)
  *  - ספרים.csv       `old,new` — book title renames (exact match)
  *  - Moving files.csv `name,sourcePath,destPath` (simple CSV; embedded newlines in quoted fields are not supported)
+ *  - סדר הדורות.csv  `שם ספר,קבוצת דור` (with header) — seeds generation table and links books
  *
  * The release zip does not include ForDB/, so the CSVs are fetched directly
  * from raw.githubusercontent.com at task start. Download failures are
@@ -49,6 +51,7 @@ private const val FOR_DB_BASE = "https://raw.githubusercontent.com/Otzaria/otzar
 private const val CATEGORY_RENAMES_URL = "$FOR_DB_BASE/%D7%AA%D7%99%D7%A7%D7%99%D7%95%D7%AA.csv"
 private const val BOOK_RENAMES_URL = "$FOR_DB_BASE/%D7%A1%D7%A4%D7%A8%D7%99%D7%9D.csv"
 private const val BOOK_MOVES_URL = "$FOR_DB_BASE/Moving%20files.csv"
+private const val GENERATIONS_URL = "$FOR_DB_BASE/%D7%A1%D7%93%D7%A8%20%D7%94%D7%93%D7%95%D7%A8%D7%95%D7%AA.csv"
 
 fun main(args: Array<String>) {
     Logger.setMinSeverity(Severity.Info)
@@ -72,6 +75,7 @@ fun main(args: Array<String>) {
     val categoryRenames: List<Pair<String, String>> = parsePairs(downloadCsv(CATEGORY_RENAMES_URL, logger))
     val bookRenames: List<Pair<String, String>> = parsePairs(downloadCsv(BOOK_RENAMES_URL, logger))
     val bookMoves: List<BookMove> = parseBookMoves(downloadCsv(BOOK_MOVES_URL, logger), logger)
+    val generations: List<Pair<String, String>> = parseGenerations(downloadCsv(GENERATIONS_URL, logger), logger)
 
     try {
         DriverManager.getConnection("jdbc:sqlite:$dbPath").use { conn ->
@@ -118,11 +122,24 @@ fun main(args: Array<String>) {
             }
             logger.i { "Book moves complete. Moved: $totalMoved books, Failures: $moveFailures" }
 
+            val genResult = try {
+                applyGenerations(conn, generations, logger)
+            } catch (e: Exception) {
+                logger.w(e) { "Generation seeding failed; skipping section" }
+                GenerationApplyResult(0, 0, generations.size)
+            }
+            logger.i {
+                "Generations complete. Seeded: ${genResult.generationsCreated}, " +
+                    "book links: ${genResult.linksCreated}, unmatched titles: ${genResult.unmatched}"
+            }
+
             conn.commit()
             logger.i {
                 "Post-process done: categories renamed=$totalRenamed merged=$totalMerged " +
                     "(failures=$categoryFailures); books renamed=$totalBookRenamed " +
-                    "(failures=$bookRenameFailures); books moved=$totalMoved (failures=$moveFailures)"
+                    "(failures=$bookRenameFailures); books moved=$totalMoved (failures=$moveFailures); " +
+                    "generations seeded=${genResult.generationsCreated} " +
+                    "(book links=${genResult.linksCreated}, unmatched=${genResult.unmatched})"
             }
         }
     } catch (e: Exception) {
@@ -157,6 +174,128 @@ private fun parseBookMoves(lines: List<String>, logger: Logger): List<BookMove> 
         val f = parseCsvLine(line).map { it.trim() }
         if (f.size >= 3 && f[0].isNotEmpty() && f[2].isNotEmpty()) BookMove(f[0], f[1], f[2]) else null
     }
+}
+
+/**
+ * `שם ספר,קבוצת דור` rows. Drops the header row if its first field contains
+ * "שם ספר"; otherwise treats every row as data (with a warning) so a
+ * header-less upload doesn't silently lose row 0.
+ */
+private fun parseGenerations(lines: List<String>, logger: Logger): List<Pair<String, String>> {
+    if (lines.isEmpty()) return emptyList()
+    val isHeader = "שם ספר" in lines.first()
+    val body = if (isHeader) lines.drop(1) else {
+        logger.w { "סדר הדורות.csv: no header detected; treating first row as data" }
+        lines
+    }
+    return parsePairs(body)
+}
+
+private data class GenerationApplyResult(
+    val generationsCreated: Int,
+    val linksCreated: Int,
+    val unmatched: Int,
+)
+
+/**
+ * Seeds the `generation` table with distinct names and links each book to its
+ * generation via `book_generation`. Book titles are unique in this DB, so we
+ * take the single match; punctuation-strip fallback mirrors `renameBookTitle`
+ * for CSVs that use the bare form. INSERT OR IGNORE keeps re-runs idempotent.
+ *
+ * Caveat: only books present in the DB at this point are linked. The
+ * appendOtzaria stage runs AFTER this one — books it adds stay unlinked.
+ */
+private fun applyGenerations(
+    conn: Connection,
+    rows: List<Pair<String, String>>,
+    logger: Logger,
+): GenerationApplyResult {
+    if (rows.isEmpty()) return GenerationApplyResult(0, 0, 0)
+
+    var generationsCreated = 0
+    conn.prepareStatement("INSERT OR IGNORE INTO generation(name) VALUES (?)").use { stmt ->
+        for (name in rows.map { it.second }.distinct()) {
+            stmt.setString(1, name)
+            generationsCreated += stmt.executeUpdate()
+        }
+    }
+
+    val nameToId = HashMap<String, Long>()
+    conn.createStatement().use { st ->
+        st.executeQuery("SELECT id, name FROM generation").use { rs ->
+            while (rs.next()) nameToId[rs.getString(2)] = rs.getLong(1)
+        }
+    }
+
+    var linksCreated = 0
+    var unmatched = 0
+    conn.prepareStatement("SELECT id FROM book WHERE title = ?").use { findExact ->
+        conn.prepareStatement("SELECT id FROM book WHERE $STRIP_TITLE_PUNCT_SQL = ?").use { findStripped ->
+            conn.prepareStatement("SELECT id FROM book WHERE TRIM(title) = ?").use { findTrimmed ->
+                conn.prepareStatement("INSERT OR IGNORE INTO book_generation(bookId, generationId) VALUES (?, ?)").use { linkStmt ->
+                    for ((bookTitle, genName) in rows) {
+                        val genId = nameToId[genName] ?: continue
+                        val bookId = findBookIdForGeneration(findExact, findStripped, findTrimmed, bookTitle, logger)
+                        if (bookId == null) {
+                            unmatched++
+                            logger.d { "Generation link: book '$bookTitle' not found; skipping" }
+                            continue
+                        }
+                        linkStmt.setLong(1, bookId)
+                        linkStmt.setLong(2, genId)
+                        linksCreated += linkStmt.executeUpdate()
+                    }
+                }
+            }
+        }
+    }
+    return GenerationApplyResult(generationsCreated, linksCreated, unmatched)
+}
+
+// Titles are unique. Three-tier fallback: exact, then punctuation-strip (for
+// CSVs that use the bare form like רדק vs רד״ק), then TRIM (for DB titles
+// imported with stray leading/trailing whitespace from upstream sources).
+// >1 result from a fallback means colliding normalized forms — log and skip
+// rather than silently over-link.
+private fun findBookIdForGeneration(
+    findExact: PreparedStatement,
+    findStripped: PreparedStatement,
+    findTrimmed: PreparedStatement,
+    title: String,
+    logger: Logger,
+): Long? {
+    findExact.setString(1, title)
+    findExact.executeQuery().use { rs ->
+        if (rs.next()) return rs.getLong(1)
+    }
+    findStripped.setString(1, stripTitlePunct(title))
+    val stripMatches = collectIds(findStripped)
+    when (stripMatches.size) {
+        1 -> return stripMatches.single()
+        in 2..Int.MAX_VALUE -> {
+            logger.w { "Generation link: '$title' has multiple punct-strip matches; skipping" }
+            return null
+        }
+    }
+    findTrimmed.setString(1, title.trim())
+    val trimMatches = collectIds(findTrimmed)
+    return when (trimMatches.size) {
+        0 -> null
+        1 -> trimMatches.single()
+        else -> {
+            logger.w { "Generation link: '$title' has multiple TRIM matches; skipping" }
+            null
+        }
+    }
+}
+
+private fun collectIds(stmt: PreparedStatement): List<Long> {
+    val out = ArrayList<Long>(2)
+    stmt.executeQuery().use { rs ->
+        while (rs.next() && out.size < 2) out += rs.getLong(1)
+    }
+    return out
 }
 
 private sealed class RenameResult {

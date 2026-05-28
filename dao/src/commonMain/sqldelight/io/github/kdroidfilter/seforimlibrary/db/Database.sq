@@ -28,6 +28,8 @@
 --     book_topic.topicId              -> topic(id)               ON DELETE CASCADE
 --     book_author.bookId              -> book(id)                ON DELETE CASCADE
 --     book_author.authorId            -> author(id)              ON DELETE CASCADE
+--     book_generation.bookId          -> book(id)                ON DELETE CASCADE
+--     book_generation.generationId    -> generation(id)          ON DELETE CASCADE
 --     line.bookId                     -> book(id)                ON DELETE CASCADE
 --     line.tocEntryId                 -> tocEntry(id)            ON DELETE SET NULL
 --     tocEntry.bookId                 -> book(id)                ON DELETE CASCADE
@@ -206,6 +208,32 @@ CREATE TABLE IF NOT EXISTS book_author (
 
 CREATE INDEX IF NOT EXISTS idx_book_author_book ON book_author(bookId);
 CREATE INDEX IF NOT EXISTS idx_book_author_author ON book_author(authorId);
+
+-- Generation (era / period). Seeded from otzaria-library/ForDB/סדר הדורות.csv
+-- during the renameCategories post-process. Intentionally NOT registered in
+-- PatchTables / LogicalContentHasher: existing client DBs predate it, and the
+-- delta-update applier does not run Schema.create, so listing it there would
+-- break INSERTs into a missing table on old clients. Schema.create populates
+-- the empty table on app init for older DBs; data is filled only on a full
+-- rebuild. IDs are SQLite rowids (not IdAllocator-stable) — only `name` is
+-- meaningful as an external key.
+CREATE TABLE IF NOT EXISTS generation (
+    id INTEGER PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_generation_name ON generation(name);
+
+CREATE TABLE IF NOT EXISTS book_generation (
+    bookId INTEGER NOT NULL,
+    generationId INTEGER NOT NULL,
+    PRIMARY KEY (bookId, generationId),
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
+    FOREIGN KEY (generationId) REFERENCES generation(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_book_generation_book ON book_generation(bookId);
+CREATE INDEX IF NOT EXISTS idx_book_generation_generation ON book_generation(generationId);
 
 -- Lines table
 CREATE TABLE IF NOT EXISTS line (
