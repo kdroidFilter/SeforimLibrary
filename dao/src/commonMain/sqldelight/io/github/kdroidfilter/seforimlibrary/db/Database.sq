@@ -222,8 +222,6 @@ CREATE TABLE IF NOT EXISTS generation (
     name TEXT NOT NULL UNIQUE
 );
 
-CREATE INDEX IF NOT EXISTS idx_generation_name ON generation(name);
-
 CREATE TABLE IF NOT EXISTS book_generation (
     bookId INTEGER NOT NULL,
     generationId INTEGER NOT NULL,
@@ -232,7 +230,8 @@ CREATE TABLE IF NOT EXISTS book_generation (
     FOREIGN KEY (generationId) REFERENCES generation(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_book_generation_book ON book_generation(bookId);
+-- Composite PK already indexes (bookId, generationId), which covers bookId
+-- leftmost-prefix lookups. Only generationId needs an explicit index.
 CREATE INDEX IF NOT EXISTS idx_book_generation_generation ON book_generation(generationId);
 
 -- Lines table

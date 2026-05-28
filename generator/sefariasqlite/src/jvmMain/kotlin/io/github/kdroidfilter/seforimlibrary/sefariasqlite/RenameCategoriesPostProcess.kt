@@ -7,7 +7,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Paths
 import java.sql.Connection
 import java.sql.DriverManager
-import java.sql.PreparedStatement
 import kotlin.io.path.exists
 import kotlin.system.exitProcess
 
@@ -199,9 +198,10 @@ private data class GenerationApplyResult(
 
 /**
  * Seeds the `generation` table with distinct names and links each book to its
- * generation via `book_generation`. Book titles are unique in this DB, so we
- * take the single match; punctuation-strip fallback mirrors `renameBookTitle`
- * for CSVs that use the bare form. INSERT OR IGNORE keeps re-runs idempotent.
+ * generation via `book_generation`. Loads books once into in-memory maps so
+ * the three-tier matching (exact / punct-strip / trim) is O(1) per CSV row
+ * instead of full table scans on REPLACE/TRIM expressions. INSERT OR IGNORE
+ * keeps re-runs idempotent.
  *
  * Caveat: only books present in the DB at this point are linked. The
  * appendOtzaria stage runs AFTER this one — books it adds stay unlinked.
@@ -228,75 +228,59 @@ private fun applyGenerations(
         }
     }
 
+    val books = ArrayList<Pair<Long, String>>()
+    conn.createStatement().use { st ->
+        st.executeQuery("SELECT id, title FROM book").use { rs ->
+            while (rs.next()) books += rs.getLong(1) to rs.getString(2)
+        }
+    }
+    val exactMap = books.groupBy({ it.second }, { it.first })
+    val strippedMap = books.groupBy({ stripTitlePunct(it.second) }, { it.first })
+    val trimmedMap = books.groupBy({ it.second.trim() }, { it.first })
+
     var linksCreated = 0
     var unmatched = 0
-    conn.prepareStatement("SELECT id FROM book WHERE title = ?").use { findExact ->
-        conn.prepareStatement("SELECT id FROM book WHERE $STRIP_TITLE_PUNCT_SQL = ?").use { findStripped ->
-            conn.prepareStatement("SELECT id FROM book WHERE TRIM(title) = ?").use { findTrimmed ->
-                conn.prepareStatement("INSERT OR IGNORE INTO book_generation(bookId, generationId) VALUES (?, ?)").use { linkStmt ->
-                    for ((bookTitle, genName) in rows) {
-                        val genId = nameToId[genName] ?: continue
-                        val bookId = findBookIdForGeneration(findExact, findStripped, findTrimmed, bookTitle, logger)
-                        if (bookId == null) {
-                            unmatched++
-                            logger.d { "Generation link: book '$bookTitle' not found; skipping" }
-                            continue
-                        }
-                        linkStmt.setLong(1, bookId)
-                        linkStmt.setLong(2, genId)
-                        linksCreated += linkStmt.executeUpdate()
-                    }
-                }
+    conn.prepareStatement("INSERT OR IGNORE INTO book_generation(bookId, generationId) VALUES (?, ?)").use { linkStmt ->
+        for ((bookTitle, genName) in rows) {
+            val genId = nameToId[genName] ?: continue
+            val bookId = findBookIdForGeneration(exactMap, strippedMap, trimmedMap, bookTitle, logger)
+            if (bookId == null) {
+                unmatched++
+                logger.d { "Generation link: book '$bookTitle' not found; skipping" }
+                continue
             }
+            linkStmt.setLong(1, bookId)
+            linkStmt.setLong(2, genId)
+            linksCreated += linkStmt.executeUpdate()
         }
     }
     return GenerationApplyResult(generationsCreated, linksCreated, unmatched)
 }
 
-// Titles are unique. Three-tier fallback: exact, then punctuation-strip (for
-// CSVs that use the bare form like רדק vs רד״ק), then TRIM (for DB titles
-// imported with stray leading/trailing whitespace from upstream sources).
-// >1 result from a fallback means colliding normalized forms — log and skip
-// rather than silently over-link.
+// Three-tier fallback: exact, then punctuation-strip (for CSVs that use the
+// bare form like רדק vs רד״ק), then TRIM (for DB titles imported with stray
+// leading/trailing whitespace from upstream sources). `book.title` is not
+// UNIQUE in the schema, so any tier can return >1 — log and skip rather than
+// arbitrarily picking one.
 private fun findBookIdForGeneration(
-    findExact: PreparedStatement,
-    findStripped: PreparedStatement,
-    findTrimmed: PreparedStatement,
+    exactMap: Map<String, List<Long>>,
+    strippedMap: Map<String, List<Long>>,
+    trimmedMap: Map<String, List<Long>>,
     title: String,
     logger: Logger,
 ): Long? {
-    findExact.setString(1, title)
-    findExact.executeQuery().use { rs ->
-        if (rs.next()) return rs.getLong(1)
-    }
-    findStripped.setString(1, stripTitlePunct(title))
-    val stripMatches = collectIds(findStripped)
-    when (stripMatches.size) {
-        1 -> return stripMatches.single()
-        in 2..Int.MAX_VALUE -> {
-            logger.w { "Generation link: '$title' has multiple punct-strip matches; skipping" }
-            return null
-        }
-    }
-    findTrimmed.setString(1, title.trim())
-    val trimMatches = collectIds(findTrimmed)
-    return when (trimMatches.size) {
-        0 -> null
-        1 -> trimMatches.single()
-        else -> {
-            logger.w { "Generation link: '$title' has multiple TRIM matches; skipping" }
-            null
-        }
-    }
+    exactMap[title]?.let { return pickOne(it, title, "exact", logger) }
+    strippedMap[stripTitlePunct(title)]?.let { return pickOne(it, title, "punct-strip", logger) }
+    trimmedMap[title.trim()]?.let { return pickOne(it, title, "TRIM", logger) }
+    return null
 }
 
-private fun collectIds(stmt: PreparedStatement): List<Long> {
-    val out = ArrayList<Long>(2)
-    stmt.executeQuery().use { rs ->
-        while (rs.next() && out.size < 2) out += rs.getLong(1)
+private fun pickOne(matches: List<Long>, title: String, tier: String, logger: Logger): Long? =
+    if (matches.size == 1) matches.single()
+    else {
+        logger.w { "Generation link: '$title' has multiple $tier matches; skipping" }
+        null
     }
-    return out
-}
 
 private sealed class RenameResult {
     data class Renamed(val count: Int) : RenameResult()
