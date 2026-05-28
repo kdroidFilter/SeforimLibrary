@@ -74,6 +74,30 @@ tasks.register<JavaExec>("generateSefariaSqlite") {
     )
 }
 
+// Generation seeding — runs after appendOtzaria so Otzaria books are linked too.
+// Usage:
+//   ./gradlew :sefariasqlite:seedGenerations
+//   ./gradlew :sefariasqlite:seedGenerations -PseforimDb=/path/to/seforim.db
+tasks.register<JavaExec>("seedGenerations") {
+    group = "application"
+    description = "Seed generation table and book_generation links from otzaria-library/ForDB/סדר הדורות.csv."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.sefariasqlite.SeedGenerationsPostProcessKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    if (project.hasProperty("seforimDb")) {
+        systemProperty("seforimDb", project.property("seforimDb") as String)
+    } else if (System.getenv("SEFORIM_DB") != null) {
+        systemProperty("seforimDb", System.getenv("SEFORIM_DB"))
+    } else {
+        val defaultDbPath = rootProject.layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+        systemProperty("seforimDb", defaultDbPath)
+    }
+
+    jvmArgs = listOf("-Xmx512m")
+}
+
 // Post-processing step to rename categories after all generation is complete
 // Usage:
 //   ./gradlew :sefariasqlite:renameCategories

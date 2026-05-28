@@ -15,6 +15,7 @@ tasks.register("generateSeforimDb") {
     dependsOn(":otzariasqlite:appendOtzaria")
     dependsOn(":otzariasqlite:generateHavroutaLinks")
     dependsOn(":sefariasqlite:renameCategories")
+    dependsOn(":sefariasqlite:seedGenerations")
     dependsOn(":catalog:buildCatalog")
     dependsOn(":searchindex:buildLuceneIndexDefault")
     dependsOn(":packaging:writeReleaseInfo")
@@ -32,6 +33,7 @@ project(":generator-common").tasks.matching { it.name == "stampSchemaVersion" }.
     mustRunAfter(":packaging:writeReleaseInfo")
     mustRunAfter(":catalog:buildCatalog")
     mustRunAfter(":searchindex:buildLuceneIndexDefault")
+    mustRunAfter(":sefariasqlite:seedGenerations")
 }
 
 // Ensure ordering inside the pipeline task graph
@@ -53,8 +55,16 @@ project(":sefariasqlite").tasks.matching { it.name == "renameCategories" }.confi
 project(":otzariasqlite").tasks.matching { it.name == "generateHavroutaLinks" }.configureEach {
     mustRunAfter(":otzariasqlite:appendOtzaria")
 }
+// seedGenerations runs after all book-writing stages so it can link both
+// Sefaria- and Otzaria-sourced books in a single pass.
+project(":sefariasqlite").tasks.matching { it.name == "seedGenerations" }.configureEach {
+    mustRunAfter(":otzariasqlite:appendOtzaria")
+    mustRunAfter(":otzariasqlite:generateHavroutaLinks")
+    mustRunAfter(":sefariasqlite:renameCategories")
+}
 project(":catalog").tasks.matching { it.name == "buildCatalog" }.configureEach {
     mustRunAfter(":otzariasqlite:generateHavroutaLinks")
+    mustRunAfter(":sefariasqlite:seedGenerations")
 }
 project(":searchindex").tasks.matching { it.name == "buildLuceneIndexDefault" }.configureEach {
     mustRunAfter(":catalog:buildCatalog")
