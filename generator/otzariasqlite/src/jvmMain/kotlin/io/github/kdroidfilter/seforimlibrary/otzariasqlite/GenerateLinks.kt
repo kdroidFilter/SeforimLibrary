@@ -5,6 +5,7 @@ import app.cash.sqldelight.db.SqlCursor
 import app.cash.sqldelight.db.QueryResult
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
+import io.github.kdroidfilter.seforimlibrary.common.db.SEFORIM_DB_PAGE_SIZE_PRAGMA
 import io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import kotlinx.coroutines.runBlocking
@@ -37,6 +38,10 @@ fun main(args: Array<String>) = runBlocking {
 
     val jdbcUrl = if (useMemoryDb) "jdbc:sqlite::memory:" else "jdbc:sqlite:$dbPath"
     val driver = JdbcSqliteDriver(url = jdbcUrl)
+    // This phase does the final VACUUM INTO of the Otzaria chain, so the in-memory DB
+    // must use 16 KiB pages before its schema is created (in SeforimRepository.init),
+    // otherwise the persisted file would revert to SQLite's 4 KiB default.
+    driver.execute(null, SEFORIM_DB_PAGE_SIZE_PRAGMA, 0)
     val repository = SeforimRepository(dbPath, driver)
 
     try {
