@@ -48,6 +48,16 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
     // `ConcurrentHashMap` is safe to use directly from commonMain.
     private val categoryCache = java.util.concurrent.ConcurrentHashMap<Long, Category>()
 
+    // book.orderIndex is denormalized onto each link row at insert time (targetBookOrderIndex)
+    // so the commentaries path can sort without JOINing book. Books are immutable once inserted
+    // and exist before any link references them, so a read-through cache is safe during import.
+    private val bookOrderIndexCache = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+
+    private fun resolveBookOrderIndex(bookId: Long): Long =
+        bookOrderIndexCache.getOrPut(bookId) {
+            database.bookQueriesQueries.selectOrderIndexById(bookId).executeAsOneOrNull() ?: 0L
+        }
+
     init {
         val repositoryLoggingEnv = getEnvironmentVariable("SEFORIMAPP_REPOSITORY_LOGGING")?.lowercase()
         if (repositoryLoggingEnv == "true" || repositoryLoggingEnv == "1" || repositoryLoggingEnv == "yes") {
@@ -84,7 +94,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         } catch (_: Exception) { }
     }
 
-    
+
 
     // --- Line ⇄ TOC mapping ---
 
@@ -547,7 +557,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         rows.map { bookData -> bookData.toModel(json) }
     }
 
-    
+
 
 
 
@@ -1101,7 +1111,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Gets the previous line for a given book and line index.
-     * 
+     *
      * @param bookId The ID of the book
      * @param currentLineIndex The index of the current line
      * @return The previous line, or null if there is no previous line
@@ -1394,7 +1404,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         logger.d { "Getting all tocText values (using generated query)" }
         database.tocTextQueriesQueries.selectAll().executeAsList().map { it.text }
     }
-    
+
     // Get or create a tocText entry and return its ID
     private suspend fun getOrCreateTocText(text: String): Long = withContext(Dispatchers.IO) {
         // Truncate text for logging if it's too long
@@ -1518,7 +1528,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         database.tocQueriesQueries.updateLineId(lineId, tocEntryId)
         logger.d{"Repository updated TOC entry $tocEntryId with lineId: $lineId"}
     }
-    
+
     suspend fun updateTocEntryIsLastChild(tocEntryId: Long, isLastChild: Boolean) = withContext(Dispatchers.IO) {
         logger.d{"Repository updating TOC entry $tocEntryId with isLastChild: $isLastChild"}
         database.tocQueriesQueries.updateIsLastChild(if (isLastChild) 1 else 0, tocEntryId)
@@ -1592,7 +1602,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
      * @return A list of all connection types
      */
     suspend fun getAllConnectionTypes(): List<ConnectionType> = withContext(Dispatchers.IO) {
-        database.connectionTypeQueriesQueries.selectAll().executeAsList().map { 
+        database.connectionTypeQueriesQueries.selectAll().executeAsList().map {
             ConnectionType.fromString(it.name)
         }
     }
@@ -2067,6 +2077,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                 sourceLineId = link.sourceLineId,
                 targetLineId = link.targetLineId,
                 targetLineIndex = link.targetLineIndex.toLong(),
+                targetBookOrderIndex = resolveBookOrderIndex(link.targetBookId),
                 connectionTypeId = connectionTypeId,
                 isDeclaredBase = if (link.isDeclaredBase) 1L else 0L,
             )
@@ -2078,10 +2089,10 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
                 // Try to find a matching link
                 val existingLinks = database.linkQueriesQueries.selectLinksBySourceBook(link.sourceBookId).executeAsList()
-                val matchingLink = existingLinks.find { 
-                    it.targetBookId == link.targetBookId && 
-                    it.sourceLineId == link.sourceLineId && 
-                    it.targetLineId == link.targetLineId 
+                val matchingLink = existingLinks.find {
+                    it.targetBookId == link.targetBookId &&
+                    it.sourceLineId == link.sourceLineId &&
+                    it.targetLineId == link.targetLineId
                 }
 
                 if (matchingLink != null) {
@@ -2116,10 +2127,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
             }
         }
 
+        // Pre-resolve target book orderIndex per distinct targetBookId (read-through cache).
+        links.asSequence().map { it.targetBookId }.distinct().forEach { resolveBookOrderIndex(it) }
+
         database.transaction {
             links.forEach { link ->
                 val connectionTypeId = typeIdCache[link.connectionType.name]
                     ?: error("Missing connection type id for ${link.connectionType.name}")
+                val targetBookOrderIndex = resolveBookOrderIndex(link.targetBookId)
 
                 val declaredFlag: Long = if (link.isDeclaredBase) 1L else 0L
                 if (link.id > 0) {
@@ -2130,6 +2145,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                         sourceLineId = link.sourceLineId,
                         targetLineId = link.targetLineId,
                         targetLineIndex = link.targetLineIndex.toLong(),
+                        targetBookOrderIndex = targetBookOrderIndex,
                         connectionTypeId = connectionTypeId,
                         isDeclaredBase = declaredFlag,
                     )
@@ -2140,6 +2156,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                         sourceLineId = link.sourceLineId,
                         targetLineId = link.targetLineId,
                         targetLineIndex = link.targetLineIndex.toLong(),
+                        targetBookOrderIndex = targetBookOrderIndex,
                         connectionTypeId = connectionTypeId,
                         isDeclaredBase = declaredFlag,
                     )
@@ -2207,7 +2224,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Updates the book_has_links table to indicate whether a book has source links, target links, or both.
-     * 
+     *
      * @param bookId The ID of the book to update
      * @param hasSourceLinks Whether the book has source links (true) or not (false)
      * @param hasTargetLinks Whether the book has target links (true) or not (false)
@@ -2225,7 +2242,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Updates only the source links status for a book.
-     * 
+     *
      * @param bookId The ID of the book to update
      * @param hasSourceLinks Whether the book has source links (true) or not (false)
      */
@@ -2241,7 +2258,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Updates only the target links status for a book.
-     * 
+     *
      * @param bookId The ID of the book to update
      * @param hasTargetLinks Whether the book has target links (true) or not (false)
      */
@@ -2283,7 +2300,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Checks if a book has any links (source or target).
-     * 
+     *
      * @param bookId The ID of the book to check
      * @return True if the book has any links, false otherwise
      */
@@ -2301,7 +2318,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Checks if a book has source links.
-     * 
+     *
      * @param bookId The ID of the book to check
      * @return True if the book has source links, false otherwise
      */
@@ -2315,7 +2332,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Checks if a book has target links.
-     * 
+     *
      * @param bookId The ID of the book to check
      * @return True if the book has target links, false otherwise
      */
@@ -2373,7 +2390,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Gets all books that have any links (source or target).
-     * 
+     *
      * @return A list of books that have any links
      */
     suspend fun getBooksWithAnyLinks(): List<Book> = withContext(Dispatchers.IO) {
@@ -2393,7 +2410,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Gets all books that have source links.
-     * 
+     *
      * @return A list of books that have source links
      */
     suspend fun getBooksWithSourceLinks(): List<Book> = withContext(Dispatchers.IO) {
@@ -2413,7 +2430,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Gets all books that have target links.
-     * 
+     *
      * @return A list of books that have target links
      */
     suspend fun getBooksWithTargetLinks(): List<Book> = withContext(Dispatchers.IO) {
@@ -2433,7 +2450,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Counts the number of books that have any links (source or target).
-     * 
+     *
      * @return The number of books that have any links
      */
     suspend fun countBooksWithAnyLinks(): Long = withContext(Dispatchers.IO) {
@@ -2445,7 +2462,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Counts the number of books that have source links.
-     * 
+     *
      * @return The number of books that have source links
      */
     suspend fun countBooksWithSourceLinks(): Long = withContext(Dispatchers.IO) {
@@ -2457,7 +2474,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Counts the number of books that have target links.
-     * 
+     *
      * @return The number of books that have target links
      */
     suspend fun countBooksWithTargetLinks(): Long = withContext(Dispatchers.IO) {
@@ -2470,7 +2487,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Gets all books from the database.
-     * 
+     *
      * @return A list of all books
      */
     suspend fun getAllBooks(): List<Book> = withContext(Dispatchers.IO) {
@@ -2497,7 +2514,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Counts the number of links where the given book is the source.
-     * 
+     *
      * @param bookId The ID of the book to count links for
      * @return The number of links where the book is the source
      */
@@ -2510,7 +2527,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
 
     /**
      * Counts the number of links where the given book is the target.
-     * 
+     *
      * @param bookId The ID of the book to count links for
      * @return The number of links where the book is the target
      */
@@ -2744,6 +2761,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
             sourceLineId = sourceLineId,
             targetLineId = targetLineId,
             targetLineIndex = targetLineIndex,
+            targetBookOrderIndex = resolveBookOrderIndex(targetBookId),
             connectionTypeId = connectionTypeId,
             isDeclaredBase = if (isDeclaredBase) 1L else 0L,
         )

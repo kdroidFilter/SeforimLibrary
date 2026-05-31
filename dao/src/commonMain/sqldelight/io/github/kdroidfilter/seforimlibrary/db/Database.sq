@@ -267,8 +267,10 @@ CREATE TABLE IF NOT EXISTS connection_type (
 CREATE INDEX IF NOT EXISTS idx_connection_type_name ON connection_type(name);
 
 -- Links table
--- targetLineIndex mirrors line(targetLineId).lineIndex so we can sort commentaries
--- by their natural position in the target book without an extra JOIN on `line`.
+-- targetLineIndex mirrors line(targetLineId).lineIndex and targetBookOrderIndex mirrors
+-- book(targetBookId).orderIndex, so commentaries can be ordered by their natural position
+-- (book order, then line order) without JOINing `line`/`book` just for the sort. This lets
+-- a covering index satisfy WHERE + ORDER BY + LIMIT and skip SQLite's filesort entirely.
 CREATE TABLE IF NOT EXISTS link (
     id INTEGER PRIMARY KEY NOT NULL,
     sourceBookId INTEGER NOT NULL,
@@ -276,6 +278,7 @@ CREATE TABLE IF NOT EXISTS link (
     sourceLineId INTEGER NOT NULL,
     targetLineId INTEGER NOT NULL,
     targetLineIndex INTEGER NOT NULL,
+    targetBookOrderIndex INTEGER NOT NULL,
     connectionTypeId INTEGER NOT NULL,
     -- 1 when this link's orientation was decided by an explicit Sefaria
     -- `base_text_titles` match (target.baseTextBookIds contains source).
@@ -296,7 +299,11 @@ CREATE INDEX IF NOT EXISTS idx_link_target_book ON link(targetBookId);
 CREATE INDEX IF NOT EXISTS idx_link_target_line ON link(targetLineId);
 CREATE INDEX IF NOT EXISTS idx_link_type ON link(connectionTypeId);
 CREATE INDEX IF NOT EXISTS idx_link_type_source_line ON link(connectionTypeId, sourceLineId);
-CREATE INDEX IF NOT EXISTS idx_link_type_source_order ON link(connectionTypeId, sourceLineId, targetLineIndex);
+-- Covering index for the forward commentaries path: filter by sourceLineId, then return rows
+-- already ordered by (targetBookOrderIndex, targetLineIndex) so the paged queries' ORDER BY +
+-- LIMIT are index-only — no filesort, no full materialization. Supersedes the old
+-- (connectionTypeId, sourceLineId, targetLineIndex) index since no forward query sorts by it anymore.
+CREATE INDEX IF NOT EXISTS idx_link_source_targetorder ON link(sourceLineId, targetBookOrderIndex, targetLineIndex);
 -- Mirror direction index: speeds up the virtual SOURCE view's WHERE clause
 -- (`l.targetLineId IN ? AND ct.name IN (...)`) by covering both the targetLineId
 -- filter and the connectionType filter.

@@ -696,16 +696,18 @@ private suspend fun generateTalmudHearotTransitiveLinks(
     logger.i { "Creating transitive Talmud->Hearot links via SQL..." }
 
     val insertSql = """
-        INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, connectionTypeId)
+        INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, targetBookOrderIndex, connectionTypeId)
         SELECT DISTINCT
             l1.sourceBookId,
             l2.targetBookId,
             l1.sourceLineId,
             l2.targetLineId,
             l2.targetLineIndex,
+            bt.orderIndex,
             ct.id
         FROM link l1
         JOIN link l2 ON l1.targetLineId = l2.sourceLineId
+        JOIN book bt ON bt.id = l2.targetBookId
         JOIN connection_type ct ON ct.name = 'COMMENTARY'
         JOIN connection_type ct1 ON l1.connectionTypeId = ct1.id AND ct1.name = 'COMMENTARY'
         JOIN connection_type ct2 ON l2.connectionTypeId = ct2.id AND ct2.name = 'COMMENTARY'
