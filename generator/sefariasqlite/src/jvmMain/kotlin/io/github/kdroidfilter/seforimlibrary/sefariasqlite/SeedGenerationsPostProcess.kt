@@ -152,11 +152,13 @@ private fun applyGenerations(
     return GenerationApplyResult(generationsCreated, linksCreated, unmatched)
 }
 
-// Three-tier fallback: exact, then punctuation-strip (for CSVs that use the
-// bare form like רדק vs רד״ק), then TRIM (for DB titles imported with stray
-// leading/trailing whitespace from upstream sources). `book.title` is not
-// UNIQUE in the schema, so any tier can return >1 — log and skip rather than
-// arbitrarily picking one.
+// Three-tier fallback: exact, then TRIM (for DB titles imported with stray
+// leading/trailing whitespace from upstream sources), then punctuation-strip
+// (for CSVs that use the bare form like רדק vs רד״ק). TRIM before punct-strip
+// so a title like "רדק " resolves to the unique "רדק" entry rather than
+// hitting the broader punct-strip tier which matches both "רדק" and "רד״ק".
+// `book.title` is not UNIQUE in the schema, so any tier can return >1 — log
+// and skip rather than arbitrarily picking one.
 private fun findBookIdForGeneration(
     exactMap: Map<String, List<Long>>,
     strippedMap: Map<String, List<Long>>,
@@ -165,8 +167,8 @@ private fun findBookIdForGeneration(
     logger: Logger,
 ): Long? {
     exactMap[title]?.let { return pickOne(it, title, "exact", logger) }
-    strippedMap[stripTitlePunct(title)]?.let { return pickOne(it, title, "punct-strip", logger) }
     trimmedMap[title.trim()]?.let { return pickOne(it, title, "TRIM", logger) }
+    strippedMap[stripTitlePunct(title)]?.let { return pickOne(it, title, "punct-strip", logger) }
     return null
 }
 
