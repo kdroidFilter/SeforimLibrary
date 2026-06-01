@@ -299,9 +299,16 @@ internal class SefariaLinksImporter(
         // is the top-level Sefaria-category title the book transitively
         // descends from (NULL for books whose chain doesn't reach a known
         // corpus root).
+        // NB: a regular table, not TEMP. executeRawQuery runs each statement
+        // through the SQLDelight JdbcSqliteDriver, which on a file-backed DB may
+        // serve a different pooled connection per call. TEMP tables are
+        // connection-scoped, so the CREATE and the later UPDATE…JOIN _book_corpus
+        // could land on different connections — yielding "no such table:
+        // _book_corpus". A plain table is visible across connections; the
+        // DROP IF EXISTS guards on both ends keep it out of the shipped DB.
         repository.executeRawQuery("DROP TABLE IF EXISTS _book_corpus")
         repository.executeRawQuery(
-            "CREATE TEMP TABLE _book_corpus (bookId INTEGER PRIMARY KEY NOT NULL, corpus TEXT) WITHOUT ROWID"
+            "CREATE TABLE _book_corpus (bookId INTEGER PRIMARY KEY NOT NULL, corpus TEXT) WITHOUT ROWID"
         )
         // category_closure(ancestorId, descendantId) lets us tag each book
         // by checking whether any of its category ancestors matches a known
