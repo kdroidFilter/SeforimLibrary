@@ -142,11 +142,18 @@ jobs:
           ls -lh build/seforim.db.buildstate
 
       # ─── Build seforim.db (full pipeline) ──────────────────────────────────
+      # -PinMemoryDb=false: the Lucene index step otherwise copies the entire
+      # ~7 GB seforim.db into a SQLite mode=memory database to speed up reads.
+      # On the 16 GB runner that native footprint plus the 8 GB generator heap
+      # blows past physical RAM and the kernel OOM-kills the job (surfacing as
+      # "The operation was canceled"). Reading the DB from disk keeps the peak
+      # bounded; the indexing stays well within budget.
       - name: Generate Seforim Database
         run: |
           ./gradlew generateSeforimDb \
             -PreleaseName=${{ steps.release_meta.outputs.release_tag }} \
             -PdbVersion=${{ steps.discover.outputs.db_version }} \
+            -PinMemoryDb=false \
             --no-daemon --stacktrace
 
       - name: Package Seforim Bundle (split tar.zst)
