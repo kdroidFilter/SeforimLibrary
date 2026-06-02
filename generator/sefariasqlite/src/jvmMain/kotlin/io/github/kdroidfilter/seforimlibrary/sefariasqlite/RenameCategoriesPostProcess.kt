@@ -3,6 +3,7 @@ package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
 import java.net.URI
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Paths
 import java.sql.Connection
@@ -43,9 +44,18 @@ import kotlin.system.exitProcess
  *   SEFORIM_DB
  */
 internal const val FOR_DB_BASE = "https://raw.githubusercontent.com/Otzaria/otzaria-library/main/ForDB"
-private const val CATEGORY_RENAMES_URL = "$FOR_DB_BASE/%D7%AA%D7%99%D7%A7%D7%99%D7%95%D7%AA.csv"
-private const val BOOK_RENAMES_URL = "$FOR_DB_BASE/%D7%A1%D7%A4%D7%A8%D7%99%D7%9D.csv"
-private const val BOOK_MOVES_URL = "$FOR_DB_BASE/Moving%20files.csv"
+internal val FOR_DB_CSV_FILES = mapOf(
+    "categoryRenames" to "תיקיות.csv",
+    "bookRenames" to "ספרים.csv",
+    "bookMoves" to "Moving files.csv",
+    "generations" to "סדר הדורות.csv",
+)
+private val CATEGORY_RENAMES_URL = forDbUrl(FOR_DB_CSV_FILES.getValue("categoryRenames"))
+private val BOOK_RENAMES_URL = forDbUrl(FOR_DB_CSV_FILES.getValue("bookRenames"))
+private val BOOK_MOVES_URL = forDbUrl(FOR_DB_CSV_FILES.getValue("bookMoves"))
+
+internal fun forDbUrl(fileName: String): String =
+    "$FOR_DB_BASE/" + URLEncoder.encode(fileName, StandardCharsets.UTF_8.name()).replace("+", "%20")
 
 fun main(args: Array<String>) {
     Logger.setMinSeverity(Severity.Info)

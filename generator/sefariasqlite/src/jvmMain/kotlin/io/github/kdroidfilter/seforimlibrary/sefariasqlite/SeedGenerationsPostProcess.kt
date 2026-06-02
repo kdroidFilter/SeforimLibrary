@@ -27,7 +27,7 @@ import kotlin.system.exitProcess
  * Env alternatives:
  *   SEFORIM_DB
  */
-private const val GENERATIONS_URL = "$FOR_DB_BASE/%D7%A1%D7%93%D7%A8%20%D7%94%D7%93%D7%95%D7%A8%D7%95%D7%AA.csv"
+private val GENERATIONS_URL = forDbUrl(FOR_DB_CSV_FILES.getValue("generations"))
 
 fun main(args: Array<String>) {
     Logger.setMinSeverity(Severity.Info)
