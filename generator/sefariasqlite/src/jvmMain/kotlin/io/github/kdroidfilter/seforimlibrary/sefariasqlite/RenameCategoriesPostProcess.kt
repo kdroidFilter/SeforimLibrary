@@ -86,50 +86,30 @@ fun main(args: Array<String>) {
 
             var totalRenamed = 0
             var totalMerged = 0
-            var categoryFailures = 0
-            for ((oldName, newName) in categoryRenames) {
-                try {
-                    when (val result = renameOrMergeCategory(conn, oldName, newName, logger)) {
-                        is RenameResult.Renamed -> totalRenamed += result.count
-                        is RenameResult.Merged -> totalMerged += result.booksMoved
-                        is RenameResult.NotFound -> logger.w { "Category rename: '$oldName' not found; skipping" }
-                    }
-                } catch (e: Exception) {
-                    categoryFailures++
-                    logger.w(e) { "Category rename '$oldName' -> '$newName' failed; skipping" }
+            val categoryResult = runSection("Category renames", categoryRenames, logger) { (oldName, newName) ->
+                val result = renameOrMergeCategory(conn, oldName, newName, logger)
+                when (result) {
+                    is RenameResult.Renamed -> totalRenamed += result.count
+                    is RenameResult.Merged -> totalMerged += result.booksMoved
+                    is RenameResult.NotFound -> logger.w { "Category rename: '$oldName' not found; skipping" }
                 }
+                result.rows()
             }
-            logger.i { "Category processing complete. Renamed: $totalRenamed, Merged: $totalMerged books, Failures: $categoryFailures" }
 
-            var totalBookRenamed = 0
-            var bookRenameFailures = 0
-            for ((oldTitle, newTitle) in bookRenames) {
-                try {
-                    totalBookRenamed += renameBookTitle(conn, oldTitle, newTitle, logger)
-                } catch (e: Exception) {
-                    bookRenameFailures++
-                    logger.w(e) { "Book rename '$oldTitle' -> '$newTitle' failed; skipping" }
-                }
+            val bookRenameResult = runSection("Book renames", bookRenames, logger) { (oldTitle, newTitle) ->
+                renameBookTitle(conn, oldTitle, newTitle, logger)
             }
-            logger.i { "Book renames complete. Renamed: $totalBookRenamed books, Failures: $bookRenameFailures" }
 
-            var totalMoved = 0
-            var moveFailures = 0
-            for (move in bookMoves) {
-                try {
-                    if (applyBookMove(conn, move, logger)) totalMoved++
-                } catch (e: Exception) {
-                    moveFailures++
-                    logger.w(e) { "Book move '${move.name}' -> '${move.destPath}' failed; skipping" }
-                }
+            val moveResult = runSection("Book moves", bookMoves, logger) { move ->
+                if (applyBookMove(conn, move, logger)) 1 else 0
             }
-            logger.i { "Book moves complete. Moved: $totalMoved books, Failures: $moveFailures" }
 
             conn.commit()
             logger.i {
                 "Post-process done: categories renamed=$totalRenamed merged=$totalMerged " +
-                    "(failures=$categoryFailures); books renamed=$totalBookRenamed " +
-                    "(failures=$bookRenameFailures); books moved=$totalMoved (failures=$moveFailures)"
+                    "(failures=${categoryResult.failures}); books renamed=${bookRenameResult.applied} " +
+                    "(failures=${bookRenameResult.failures}); books moved=${moveResult.applied} " +
+                    "(failures=${moveResult.failures})"
             }
         }
     } catch (e: Exception) {
@@ -166,10 +146,33 @@ private fun parseBookMoves(lines: List<String>, logger: Logger): List<BookMove> 
     }
 }
 
+private data class SectionResult(val applied: Int, val failures: Int)
+
+private fun <T> runSection(name: String, items: List<T>, logger: Logger, apply: (T) -> Int): SectionResult {
+    var applied = 0
+    var failures = 0
+    for (item in items) {
+        try {
+            applied += apply(item)
+        } catch (e: Exception) {
+            failures++
+            logger.w(e) { "$name failed for '$item'; skipping" }
+        }
+    }
+    logger.i { "$name: applied=$applied failures=$failures" }
+    return SectionResult(applied, failures)
+}
+
 private sealed class RenameResult {
     data class Renamed(val count: Int) : RenameResult()
     data class Merged(val booksMoved: Int) : RenameResult()
     data object NotFound : RenameResult()
+
+    fun rows(): Int = when (this) {
+        is Renamed -> count
+        is Merged -> booksMoved
+        is NotFound -> 0
+    }
 }
 
 /**
