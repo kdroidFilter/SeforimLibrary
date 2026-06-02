@@ -210,13 +210,17 @@ CREATE INDEX IF NOT EXISTS idx_book_author_book ON book_author(bookId);
 CREATE INDEX IF NOT EXISTS idx_book_author_author ON book_author(authorId);
 
 -- Generation (era / period). Seeded from otzaria-library/ForDB/סדר הדורות.csv
--- during the renameCategories post-process. Intentionally NOT registered in
--- PatchTables / LogicalContentHasher: existing client DBs predate it, and the
--- delta-update applier does not run Schema.create, so listing it there would
--- break INSERTs into a missing table on old clients. Schema.create populates
--- the empty table on app init for older DBs; data is filled only on a full
--- rebuild. IDs are SQLite rowids (not IdAllocator-stable) — only `name` is
--- meaningful as an external key.
+-- by the dedicated :sefariasqlite:seedGenerations task (runs after appendOtzaria
+-- so both Sefaria- and Otzaria-stage books are linkable). Registered in
+-- PatchTables / LogicalContentHasher so generation/book_generation changes ride
+-- the delta pipeline like any other table. Safe on client DBs that predate this
+-- table even though the delta applier does not run Schema.create: the app calls
+-- SeforimDb.Schema.create() at every repository init, and CREATE TABLE IF NOT
+-- EXISTS materialises the (empty) tables before any patch is applied, so the
+-- patch's INSERTs find a table to write into. IDs are SQLite rowids (not
+-- IdAllocator-stable) — only `name` is meaningful as an external key, but ids
+-- are deterministic across builds as long as the CSV and seeding code are
+-- unchanged, keeping the delta minimal.
 CREATE TABLE IF NOT EXISTS generation (
     id INTEGER PRIMARY KEY NOT NULL,
     name TEXT NOT NULL UNIQUE
