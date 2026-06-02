@@ -18,8 +18,8 @@ import kotlin.system.exitProcess
  * empty-author bucket where books legitimately span eras, אברבנאל's
  * ראשונים/אחרונים split).
  *
- * Download failures are non-fatal: a GitHub outage logs a warning and the
- * pipeline continues with no seeding (preferable to a red build).
+ * Download failures are fatal because silently skipping generation seeding can
+ * produce an invalid DB delta.
  *
  * Usage:
  *   ./gradlew :sefariasqlite:seedGenerations -PseforimDb=/path/to/seforim.db
@@ -46,7 +46,7 @@ fun main(args: Array<String>) {
 
     logger.i { "Seeding generations in $dbPath" }
 
-    val rows = parseGenerations(downloadCsv(GENERATIONS_URL, logger), logger)
+    val rows = parseGenerations(downloadRequiredCsv(GENERATIONS_URL, logger), logger)
 
     try {
         DriverManager.getConnection("jdbc:sqlite:$dbPath").use { conn ->
