@@ -22,10 +22,7 @@ import kotlin.system.exitProcess
  *
  * The release zip does not include ForDB/, so the CSVs are fetched directly
  * from raw.githubusercontent.com at task start. Download failures are
- * non-fatal: the corresponding section becomes a no-op (logged as a warning)
- * and the rest of the run proceeds. This is intentional — a GitHub outage
- * should not break the CI build; an un-post-processed DB is preferable to a
- * red pipeline. The warning lines are the signal to investigate.
+ * fatal because silently skipping these rules can produce an invalid DB delta.
  *
  * Category renames handle two cases:
  * 1. Simple rename: When no target category exists under the same parent
@@ -69,9 +66,9 @@ fun main(args: Array<String>) {
 
     // Rules downloaded from otzaria-library/ForDB/ at startup.
     // תיקיות.csv and ספרים.csv have no header; Moving files.csv has one.
-    val categoryRenames: List<Pair<String, String>> = parsePairs(downloadCsv(CATEGORY_RENAMES_URL, logger))
-    val bookRenames: List<Pair<String, String>> = parsePairs(downloadCsv(BOOK_RENAMES_URL, logger))
-    val bookMoves: List<BookMove> = parseBookMoves(downloadCsv(BOOK_MOVES_URL, logger), logger)
+    val categoryRenames: List<Pair<String, String>> = parsePairs(downloadRequiredCsv(CATEGORY_RENAMES_URL, logger))
+    val bookRenames: List<Pair<String, String>> = parsePairs(downloadRequiredCsv(BOOK_RENAMES_URL, logger))
+    val bookMoves: List<BookMove> = parseBookMoves(downloadRequiredCsv(BOOK_MOVES_URL, logger), logger)
 
     try {
         DriverManager.getConnection("jdbc:sqlite:$dbPath").use { conn ->
@@ -369,14 +366,24 @@ private fun resolveCategoryPath(conn: Connection, path: String): Long? {
  * then becomes a no-op and the rest of the run proceeds.
  */
 internal fun downloadCsv(url: String, logger: Logger): List<String> = try {
-    val conn = URI(url).toURL().openConnection().apply {
-        connectTimeout = 10_000
-        readTimeout = 30_000
-    }
-    val lines = conn.getInputStream().use { it.reader(StandardCharsets.UTF_8).readLines() }
-    if (lines.isEmpty()) lines else listOf(lines.first().removePrefix("\uFEFF")) + lines.drop(1)
+    readCsvLines(url)
 } catch (e: Exception) {
     logger.w(e) { "Failed to download $url; skipping section" }
     emptyList()
 }
 
+internal fun downloadRequiredCsv(url: String, logger: Logger): List<String> = try {
+    readCsvLines(url)
+} catch (e: Exception) {
+    logger.e(e) { "Failed to download required CSV $url; aborting" }
+    throw IllegalStateException("Failed to download required CSV: $url", e)
+}
+
+private fun readCsvLines(url: String): List<String> {
+    val conn = URI(url).toURL().openConnection().apply {
+        connectTimeout = 10_000
+        readTimeout = 30_000
+    }
+    val lines = conn.getInputStream().use { it.reader(StandardCharsets.UTF_8).readLines() }
+    return if (lines.isEmpty()) lines else listOf(lines.first().removePrefix("\uFEFF")) + lines.drop(1)
+}
