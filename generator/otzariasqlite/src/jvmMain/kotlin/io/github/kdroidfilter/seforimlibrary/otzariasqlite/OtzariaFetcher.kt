@@ -1,12 +1,9 @@
 package io.github.kdroidfilter.seforimlibrary.otzariasqlite
 
 import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.common.OptimizedHttpClient
 import java.io.BufferedInputStream
 import java.io.FileOutputStream
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -16,6 +13,7 @@ import java.util.zip.ZipInputStream
 
 object OtzariaFetcher {
     private const val LATEST_API = "https://api.github.com/repos/otzaria/otzaria-library/releases/latest"
+    private const val USER_AGENT = "SeforimLibrary-OtzariaFetcher/1.0"
 
     /** Ensure otzaria source is available locally under build/otzaria/source (relative to CWD). */
     fun ensureLocalSource(logger: Logger): Path {
@@ -27,9 +25,13 @@ object OtzariaFetcher {
             return root
         }
         Files.createDirectories(destRoot)
-        val zipPath = destRoot.parent.resolve("otzaria.zip")
-        downloadLatestZip(zipPath, logger)
-        extractZip(zipPath, destRoot, logger)
+
+        // Download and extract all zip files from the release
+        val zipFiles = downloadAllZips(destRoot.parent, logger)
+        for (zipFile in zipFiles) {
+            extractZip(zipFile, destRoot, logger)
+        }
+
         val root = findSourceRoot(destRoot)
         removeUnwantedFolder(root, logger)
         return root
@@ -54,94 +56,44 @@ object OtzariaFetcher {
         return extractRoot
     }
 
-    private fun downloadLatestZip(outZip: Path, logger: Logger) {
-        val client = HttpClient.newBuilder()
-            .version(HttpClient.Version.HTTP_2)
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build()
-        val token = System.getenv("GITHUB_TOKEN") ?: System.getenv("GH_TOKEN")
-        val req = HttpRequest.newBuilder(URI(LATEST_API))
-            .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "SeforimLibrary-OtzariaFetcher/1.0")
-            .apply {
-                if (!token.isNullOrBlank()) header("Authorization", "Bearer $token")
-            }
-            .build()
-        val res = client.send(req, HttpResponse.BodyHandlers.ofString())
-        if (res.statusCode() !in 200..299) {
-            throw IllegalStateException("GitHub API error: HTTP ${res.statusCode()}\n${res.body()}")
-        }
-        val body = res.body()
+    /**
+     * Download all zip files from the latest release.
+     * Returns list of downloaded zip file paths.
+     */
+    private fun downloadAllZips(downloadDir: Path, logger: Logger): List<Path> {
+        // Fetch release info from GitHub API
+        val body = OptimizedHttpClient.fetchJson(LATEST_API, USER_AGENT, logger)
+
+        // Find all .zip asset URLs
         val regex = Regex(""""browser_download_url"\s*:\s*"([^"]+\.zip)"""")
-        val zipUrl = regex.findAll(body).map { it.groupValues[1] }.firstOrNull()
-            ?: throw IllegalStateException("No .zip asset found in latest otzaria-library release")
-        logger.i { "Downloading otzaria from $zipUrl" }
+        val zipUrls = regex.findAll(body).map { it.groupValues[1] }.toList()
 
-        val zipReq = HttpRequest.newBuilder(URI(zipUrl))
-            .header("Accept", "application/octet-stream")
-            .header("User-Agent", "SeforimLibrary-OtzariaFetcher/1.0")
-            .apply {
-                if (!token.isNullOrBlank()) header("Authorization", "Bearer $token")
-            }
-            .build()
-        val zipRes = client.send(zipReq, HttpResponse.BodyHandlers.ofInputStream())
-        if (zipRes.statusCode() !in 200..299) {
-            throw IllegalStateException("Failed to download otzaria zip: HTTP ${zipRes.statusCode()}")
-        }
-        Files.createDirectories(outZip.parent)
-        // Progress-aware copy with percentage and speed
-        val contentLength = zipRes.headers().firstValue("Content-Length").orElse(null)?.toLongOrNull() ?: -1L
-        if (contentLength > 0) {
-            val totalMb = contentLength.toDouble() / (1024 * 1024)
-            logger.i { "Download size: ${"%.1f".format(totalMb)} MB" }
+        if (zipUrls.isEmpty()) {
+            throw IllegalStateException("No .zip asset found in latest otzaria-library release")
         }
 
-        zipRes.body().use { input ->
-            Files.newOutputStream(outZip).use { output ->
-                val buffer = ByteArray(1 shl 20) // 1 MiB
-                var downloaded = 0L
-                var lastLoggedBytes = 0L
-                var lastLogTime = System.nanoTime()
-                var nextPctLog = 0
-                val startTime = lastLogTime
+        logger.i { "Found ${zipUrls.size} zip file(s) to download" }
 
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    output.write(buffer, 0, read)
-                    downloaded += read
+        val downloadedFiles = mutableListOf<Path>()
+        for ((index, zipUrl) in zipUrls.withIndex()) {
+            // Extract filename from URL
+            val fileName = zipUrl.substringAfterLast('/')
+            val outZip = downloadDir.resolve(fileName)
 
-                    val now = System.nanoTime()
-                    val elapsedSince = (now - lastLogTime) / 1_000_000_000.0
-                    val overallSec = (now - startTime) / 1_000_000_000.0
+            logger.i { "Downloading [${index + 1}/${zipUrls.size}]: $fileName" }
 
-                    val pct = if (contentLength > 0) ((downloaded * 100.0) / contentLength).toInt().coerceIn(0, 100) else -1
-                    val shouldLogPct = contentLength > 0 && pct >= nextPctLog
-                    val shouldLogTime = elapsedSince >= 1.0
-                    if (shouldLogPct || shouldLogTime) {
-                        val deltaBytes = downloaded - lastLoggedBytes
-                        val speed = if (elapsedSince > 0) deltaBytes / elapsedSince else 0.0 // bytes/sec
-                        val speedMb = speed / (1024 * 1024)
-                        val downloadedMb = downloaded.toDouble() / (1024 * 1024)
-                        val totalMb = if (contentLength > 0) contentLength.toDouble() / (1024 * 1024) else -1.0
+            OptimizedHttpClient.downloadFile(
+                url = zipUrl,
+                destination = outZip,
+                userAgent = USER_AGENT,
+                logger = logger,
+                progressPrefix = "Downloading $fileName"
+            )
 
-                        val msg = buildString {
-                            append("Downloading otzaria: ")
-                            if (pct >= 0) append("$pct% ")
-                            append("@ ${"%.2f".format(speedMb)} MB/s ")
-                            append("(${"%.1f".format(downloadedMb)}")
-                            if (totalMb > 0) append("/${"%.1f".format(totalMb)}")
-                            append(" MB)")
-                        }
-                        logger.i { msg }
-                        lastLoggedBytes = downloaded
-                        lastLogTime = now
-                        if (contentLength > 0) nextPctLog = ((pct / 5) + 1) * 5 // log every 5%
-                    }
-                }
-            }
+            downloadedFiles.add(outZip)
         }
-        logger.i { "Saved otzaria zip to ${outZip.toAbsolutePath()}" }
+
+        return downloadedFiles
     }
 
     private fun extractZip(zipFile: Path, destinationDir: Path, logger: Logger) {

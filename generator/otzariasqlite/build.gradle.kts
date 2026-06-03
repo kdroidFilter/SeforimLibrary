@@ -3,6 +3,13 @@ plugins {
     alias(libs.plugins.kotlinx.serialization)
 }
 
+// Generator forked-JVM heap. Honors -PgeneratorHeap=… (CI lowers it on 16 GB runners).
+// Default 10g matches local workstation use; CI sets 5g via the workflow.
+val generatorHeap: String = (project.findProperty("generatorHeap") as String?)
+    ?: System.getenv("SEFORIM_GENERATOR_HEAP")
+    ?: "10g"
+
+
 kotlin {
     jvmToolchain(libs.versions.jvmToolchain.get().toInt())
 
@@ -12,13 +19,14 @@ kotlin {
         commonMain.dependencies {
             api(project(":core"))
             api(project(":dao"))
+            implementation(project(":generator-common"))
 
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kermit)
-            implementation("org.jsoup:jsoup:1.17.2")
-            implementation("org.slf4j:slf4j-simple:2.0.17")
+            implementation(libs.jsoup)
+            implementation(libs.slf4j.simple)
         }
 
         commonTest.dependencies {
@@ -115,7 +123,7 @@ tasks.register<JavaExec>("generateLines") {
     }
 
     jvmArgs = listOf(
-        "-Xmx10g",
+        "-Xmx$generatorHeap",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200",
         "--enable-native-access=ALL-UNNAMED",
@@ -167,7 +175,7 @@ tasks.register<JavaExec>("generateLinks") {
     }
 
     jvmArgs = listOf(
-        "-Xmx10g",
+        "-Xmx$generatorHeap",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200",
         "--enable-native-access=ALL-UNNAMED",
@@ -211,7 +219,7 @@ tasks.register<JavaExec>("appendOtzariaLines") {
     }
 
     jvmArgs = listOf(
-        "-Xmx10g",
+        "-Xmx$generatorHeap",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200",
         "--enable-native-access=ALL-UNNAMED",
@@ -246,7 +254,7 @@ tasks.register<JavaExec>("appendOtzariaLinks") {
     }
 
     jvmArgs = listOf(
-        "-Xmx10g",
+        "-Xmx$generatorHeap",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200",
         "--enable-native-access=ALL-UNNAMED",
@@ -278,8 +286,12 @@ tasks.register<JavaExec>("generateHavroutaLinks") {
     }
     args(defaultDbPath)
 
+    // Bumped from 4g → 10g: the IdAllocator now loads a fully populated
+    // id_lookup (author/topic/pub_place/pub_date/toc_text) on top of the
+    // existing book/line/tocEntry/link tables, and 4g started OOM-ing
+    // once tocText was properly tracked (113k+ entries).
     jvmArgs = listOf(
-        "-Xmx4g",
+        "-Xmx$generatorHeap",
         "-XX:+UseG1GC"
     )
 }

@@ -18,6 +18,9 @@ insertAndGetId:
 INSERT OR IGNORE INTO tocText (text)
 VALUES (?);
 
+insertWithId:
+INSERT OR IGNORE INTO tocText (id, text) VALUES (?, ?);
+
 selectIdByText:
 SELECT id FROM tocText WHERE text = ? LIMIT 1;
 

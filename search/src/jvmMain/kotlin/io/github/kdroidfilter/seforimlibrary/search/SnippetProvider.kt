@@ -50,5 +50,5 @@ fun interface SnippetProvider {
      * @param lines List of line metadata for which to fetch text
      * @return Map of lineId to its source text. Missing lines should be omitted.
      */
-    fun getSnippetSources(lines: List<LineSnippetInfo>): Map<Long, String>
+    suspend fun getSnippetSources(lines: List<LineSnippetInfo>): Map<Long, String>
 }

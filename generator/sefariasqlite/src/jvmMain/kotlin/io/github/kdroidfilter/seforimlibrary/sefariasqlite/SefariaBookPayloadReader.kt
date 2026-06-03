@@ -119,6 +119,21 @@ internal class SefariaBookPayloadReader(
             val description = extractDescription(schemaJson, schemaObj)
             val pubDates = extractPubDates(schemaJson, schemaObj)
             val altStructures = parseAltStructures(schemaJson)
+            val dependence = extractDependence(schemaJson, schemaObj)
+            val rawBaseTextKeys = extractBaseTextTitleKeys(schemaJson, schemaObj)
+            // When Sefaria didn't ship `base_text_titles` (≈ 74 books, e.g.
+            // Nachalat Avot on Avot, Bartenura on Torah, Ralbag on Torah),
+            // try to recover the declared base from the title's "X on Y" /
+            // "X על Y" pattern. The extracted Y will be resolved against
+            // titleAliasKeys at first-pass to produce a canonical bookId.
+            val baseTextTitleKeys = if (rawBaseTextKeys.isEmpty() && dependence != null) {
+                rawBaseTextKeys + extractBaseKeysFromTitle(englishTitle, hebrewTitle)
+            } else {
+                rawBaseTextKeys
+            }
+            val collectiveTitleEn = (schemaJson["collective_title"] as? JsonObject)
+                ?.get("en")?.stringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+            val titleAliasKeys = extractTitleAliasKeys(schemaJson, schemaObj)
 
             BookPayload(
                 heTitle = hebrewTitle,
@@ -130,7 +145,11 @@ internal class SefariaBookPayloadReader(
                 authors = authors,
                 description = description,
                 pubDates = pubDates,
-                altStructures = altStructures
+                altStructures = altStructures,
+                dependence = dependence,
+                baseTextTitleKeys = baseTextTitleKeys,
+                collectiveTitleEn = collectiveTitleEn,
+                titleAliasKeys = titleAliasKeys,
             )
         }.onFailure { e ->
             logger.w(e) { "Failed to prepare book from $textPath" }
@@ -155,6 +174,89 @@ internal class SefariaBookPayloadReader(
             if (path.exists()) return path
         }
         return null
+    }
+
+    /**
+     * When a book has `dependence != null` but no `base_text_titles`, try to
+     * recover the declared base from the title's "X on Y" or "X על Y" pattern.
+     * Returns the normalized title key(s) for "Y", which the importer's first
+     * pass will resolve against `normalizedTitleToBookId` (including aliases).
+     *
+     * Drops empty or whitespace-only results — unresolvable keys are silently
+     * skipped at resolution time, so we don't filter further here.
+     */
+    private fun extractBaseKeysFromTitle(enTitle: String?, heTitle: String?): List<String> {
+        val out = mutableListOf<String>()
+        enTitle?.let {
+            val idx = it.lastIndexOf(" on ")
+            if (idx > 0) {
+                normalizeTitleKey(it.substring(idx + 4).trim())?.let(out::add)
+            }
+        }
+        heTitle?.let {
+            val idx = it.lastIndexOf(" על ")
+            if (idx > 0) {
+                normalizeTitleKey(it.substring(idx + 4).trim())?.let(out::add)
+                // Also try without the leading definite article "ה" (e.g. "התורה" → "תורה").
+                val raw = it.substring(idx + 4).trim()
+                if (raw.startsWith("ה") && raw.length > 1) {
+                    normalizeTitleKey(raw.substring(1))?.let(out::add)
+                }
+            }
+        }
+        return out.distinct()
+    }
+
+    /**
+     * Extracts all Sefaria-recognised title aliases for the book. Used by the
+     * importer to populate `normalizedTitleToBookId` so that title-pattern
+     * base parsing (e.g. "X on Avot" → Pirkei Avot) can resolve abbreviated
+     * names that aren't the primary `title`/`heTitle`.
+     *
+     * Filters out HTML-marked variants (`<i>Pirkei Avot</i>`) to avoid noise.
+     */
+    private fun extractTitleAliasKeys(schemaJson: JsonObject, schemaObj: JsonObject): List<String> {
+        val out = mutableListOf<String>()
+        fun ingest(key: String) {
+            (schemaJson[key]?.jsonArray ?: schemaObj[key]?.jsonArray)?.forEach { el ->
+                val s = el.jsonPrimitive.contentOrNull?.takeIf { it.isNotBlank() } ?: return@forEach
+                if (s.contains('<') || s.contains('>')) return@forEach
+                normalizeTitleKey(s)?.let(out::add)
+            }
+        }
+        ingest("titleVariants")
+        ingest("heTitleVariants")
+        return out.distinct()
+    }
+
+    private fun extractDependence(schemaJson: JsonObject, schemaObj: JsonObject): Dependence? {
+        val raw = (schemaJson["dependence"]?.stringOrNull() ?: schemaObj["dependence"]?.stringOrNull())
+            ?.trim()?.lowercase() ?: return null
+        return when (raw) {
+            "commentary", "sub-commentary", "supercommentary", "super-commentary",
+            "super_commentary" -> Dependence.COMMENTARY
+            "targum" -> Dependence.TARGUM
+            "midrash" -> Dependence.MIDRASH
+            else -> Dependence.OTHER_DEPENDANT
+        }
+    }
+
+    private fun extractBaseTextTitleKeys(schemaJson: JsonObject, schemaObj: JsonObject): List<String> {
+        val arr = schemaJson["base_text_titles"]?.jsonArray
+            ?: schemaObj["base_text_titles"]?.jsonArray
+            ?: return emptyList()
+        val keys = mutableListOf<String>()
+        arr.forEach { el ->
+            when (el) {
+                is JsonObject -> {
+                    el["en"]?.stringOrNull()?.let { normalizeTitleKey(it)?.let(keys::add) }
+                    el["he"]?.stringOrNull()?.let { normalizeTitleKey(it)?.let(keys::add) }
+                }
+                is JsonPrimitive -> el.contentOrNull?.let { normalizeTitleKey(it)?.let(keys::add) }
+                else -> {}
+            }
+        }
+        return keys.distinct()
     }
 
     private fun extractDescription(schemaJson: JsonObject, schemaObj: JsonObject): String? {
@@ -293,10 +395,11 @@ internal class SefariaBookPayloadReader(
                     processNode(childNode, childText, level + 1, nextRefPrefix, nextHeRefPrefix)
                 }
             } else {
-                val sectionNames = node["heSectionNames"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+                val sectionNames = readHeSectionNames(node)
                 val depth = node["depth"]?.jsonPrimitive?.intOrNullSafe() ?: sectionNames.size
                 val addressTypes = node["addressTypes"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
                 val referenceableSections = node["referenceableSections"]?.jsonArray?.mapNotNull { it.jsonPrimitive.booleanOrNull } ?: emptyList()
+                val childRefOffsets = readIndexOffsets(node, depth)
                 val nextLevel = if (hasTitle) level + 1 else level
                 recursiveSections(
                     sectionNames = sectionNames,
@@ -311,7 +414,8 @@ internal class SefariaBookPayloadReader(
                     bookHeTitle = bookHeTitle,
                     headings = headings,
                     addressTypes = addressTypes,
-                    referenceableSections = referenceableSections
+                    referenceableSections = referenceableSections,
+                    childRefOffsets = childRefOffsets
                 )
             }
         }
@@ -337,10 +441,11 @@ internal class SefariaBookPayloadReader(
                 processNode(node, nodeText, 1, refPrefix, heRefPrefix)
             }
         } else {
-            val sectionNames = schemaObj["heSectionNames"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+            val sectionNames = readHeSectionNames(schemaObj)
             val depth = schemaObj["depth"]?.jsonPrimitive?.intOrNullSafe() ?: sectionNames.size
             val addressTypes = schemaObj["addressTypes"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
             val referenceableSections = schemaObj["referenceableSections"]?.jsonArray?.mapNotNull { it.jsonPrimitive.booleanOrNull } ?: emptyList()
+            val childRefOffsets = readIndexOffsets(schemaObj, depth)
             recursiveSections(
                 sectionNames = sectionNames,
                 text = textElement,
@@ -354,7 +459,8 @@ internal class SefariaBookPayloadReader(
                 bookHeTitle = bookHeTitle,
                 headings = headings,
                 addressTypes = addressTypes,
-                referenceableSections = referenceableSections
+                referenceableSections = referenceableSections,
+                childRefOffsets = childRefOffsets
             )
         }
 
@@ -375,23 +481,39 @@ internal class SefariaBookPayloadReader(
         headings: MutableList<Heading>,
         linePrefix: String = "",
         addressTypes: List<String> = emptyList(),
-        referenceableSections: List<Boolean> = emptyList()
+        referenceableSections: List<Boolean> = emptyList(),
+        // Offsets applied to the *English* ref number built at this iteration.
+        // Propagated from `index_offsets_by_depth` so Zohar-style books emit
+        // the same global paragraph indices that Sefaria links use (e.g.
+        // "Zohar, Tetzaveh 14:127" instead of "14:13"). See readIndexOffsets.
+        refIndexOffset: Int = 0,
+        // Offsets to hand down to the *children* of the iteration at this
+        // level (one entry per outer-dim index).
+        childRefOffsets: List<Int>? = null
     ) {
-        if (depth == 0) {
-            val primitive = text as? JsonPrimitive
-            val content = primitive?.takeIf { it.isString }?.content
+        // Leaf when depth reached zero, OR when the data is shallower than the
+        // schema declares (e.g. Keter Malkhut: schema says depth=2 but most
+        // chapters are stored as a single string instead of a paragraph array).
+        // Falling through to `text !is JsonArray return` would silently drop
+        // the chapter's content.
+        val leafPrimitive = text as? JsonPrimitive
+        if (depth == 0 || (leafPrimitive != null && leafPrimitive.isString)) {
+            val content = leafPrimitive?.takeIf { it.isString }?.content
             if (!content.isNullOrEmpty()) {
-                output += linePrefix + content.replace("\n", "")
-                val cleanRef = trimTrailingSeparators(refPrefix)
-                val cleanHeRef = trimTrailingSeparators(heRefPrefix)
-                refEntries.add(
-                    RefEntry(
-                        ref = cleanRef,
-                        heRef = cleanHeRef,
-                        path = "",
-                        lineIndex = output.size
+                val cleaned = cleanSefariaLine(content)
+                if (cleaned.isNotEmpty()) {
+                    output += linePrefix + cleaned
+                    val cleanRef = trimTrailingSeparators(refPrefix)
+                    val cleanHeRef = trimTrailingSeparators(heRefPrefix)
+                    refEntries.add(
+                        RefEntry(
+                            ref = cleanRef,
+                            heRef = cleanHeRef,
+                            path = "",
+                            lineIndex = output.size
+                        )
                     )
-                )
+                }
             }
             return
         }
@@ -438,11 +560,15 @@ internal class SefariaBookPayloadReader(
                 )
             }
 
+            // Paragraph/ref offset from index_offsets_by_depth (Zohar-style):
+            // for the current iteration's element i, children should build refs
+            // as "(i+1):(offset[i]+childIdx+1)".
+            val shiftedIdx = idx + 1 + refIndexOffset
             val newRefPrefix = buildString {
                 append(refPrefix)
                 val refNumber = when (currentAddressType) {
-                    "Talmud" -> toEnglishDaf(idx + 1)
-                    else -> (idx + 1).toString()
+                    "Talmud" -> toEnglishDaf(shiftedIdx)
+                    else -> shiftedIdx.toString()
                 }
                 append(refNumber)
                 append(":")
@@ -452,6 +578,7 @@ internal class SefariaBookPayloadReader(
                 append(letter)
                 append(", ")
             }
+            val nextRefIndexOffset = childRefOffsets?.getOrNull(idx) ?: 0
 
             recursiveSections(
                 sectionNames = sectionNames,
@@ -467,8 +594,57 @@ internal class SefariaBookPayloadReader(
                 headings = headings,
                 linePrefix = nextLinePrefix,
                 addressTypes = addressTypes,
-                referenceableSections = referenceableSections
+                referenceableSections = referenceableSections,
+                refIndexOffset = nextRefIndexOffset
             )
+        }
+    }
+
+    /**
+     * Reads `index_offsets_by_depth` from a schema node and returns the list
+     * of cumulative offsets that should be applied to the child iteration
+     * when building English refs.
+     *
+     * Sefaria uses this mechanism for books like Zohar where chapters are
+     * stored as arrays but references use a single global paragraph index
+     * per parasha (e.g. "Zohar, Tetzaveh 14:127" means the 127th paragraph of
+     * Tetzaveh, which happens to live inside chapter 14). Without these
+     * offsets the alt-struct daf refs (and all external Zohar links) fail to
+     * resolve and pages like קפו: end up missing from the daf navigation.
+     *
+     * The map is keyed by the schema `depth` it applies at; the only
+     * practical use so far is `{"2": [...]}` on depth-2 Zohar-style nodes.
+     */
+    private fun readIndexOffsets(node: JsonObject, schemaDepth: Int): List<Int>? {
+        val map = node["index_offsets_by_depth"]?.jsonObject ?: return null
+        val key = schemaDepth.toString()
+        val arr = map[key]?.jsonArray ?: return null
+        val offsets = arr.mapNotNull { it.jsonPrimitive.intOrNullSafe() }
+        return if (offsets.isNotEmpty()) offsets else null
+    }
+
+    /**
+     * Returns the Hebrew section names for a schema node, filling in blanks
+     * with a best-effort mapping from the English `sectionNames` counterpart.
+     *
+     * Sefaria schemas frequently ship `heSectionNames=["", "פסקה"]` where the
+     * top-level Hebrew label (e.g. "תשובה", "סימן") was never filled in; the
+     * English `sectionNames` still has it. Without this fallback the importer
+     * skips the matching heading and responsa-style books end up with no TOC.
+     */
+    private fun readHeSectionNames(obj: JsonObject): List<String> {
+        val he = obj["heSectionNames"]?.jsonArray?.map { it.jsonPrimitive.contentOrNull.orEmpty() } ?: emptyList()
+        val en = obj["sectionNames"]?.jsonArray?.map { it.jsonPrimitive.contentOrNull.orEmpty() } ?: emptyList()
+        val size = maxOf(he.size, en.size)
+        if (size == 0) return emptyList()
+        return List(size) { idx ->
+            val heVal = he.getOrNull(idx)?.trim().orEmpty()
+            if (heVal.isNotEmpty()) {
+                heVal
+            } else {
+                val enVal = en.getOrNull(idx)?.trim().orEmpty()
+                mapSectionNameToHebrew(enVal.ifBlank { null }).orEmpty()
+            }
         }
     }
 

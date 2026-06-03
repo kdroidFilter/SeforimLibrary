@@ -19,6 +19,9 @@ INSERT INTO pub_place (name)
 VALUES (?)
 ON CONFLICT (name) DO NOTHING;
 
+insertWithId:
+INSERT OR IGNORE INTO pub_place (id, name) VALUES (?, ?);
+
 linkBookPubPlace:
 INSERT INTO book_pub_place (bookId, pubPlaceId)
 VALUES (?, ?)

@@ -3,6 +3,8 @@ package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
+import io.github.kdroidfilter.seforimlibrary.common.db.SEFORIM_DB_PAGE_SIZE_PRAGMA
+import io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import kotlinx.coroutines.runBlocking
@@ -55,13 +57,45 @@ fun main(args: Array<String>) = runBlocking {
 
     val jdbcUrl = if (useMemoryDb) "jdbc:sqlite::memory:" else "jdbc:sqlite:$dbPath"
     val driver = JdbcSqliteDriver(url = jdbcUrl)
+    // Must run before any table is created so the DB is born with 16 KiB pages.
+    // For the in-memory path, VACUUM INTO carries this page size to the on-disk file.
+    driver.execute(null, SEFORIM_DB_PAGE_SIZE_PRAGMA, 0)
     runCatching { SeforimDb.Schema.create(driver) }
     val repository = SeforimRepository(dbPath, driver)
+
+    // ─── IdAllocator wiring (delta-update support, DELTA_UPDATE_PLAN.md §3.5) ──
+    // Load the previous build_state.db so primary keys remain stable across
+    // builds. Path defaults to <dbPath>.buildstate; override via -PbuildStatePath
+    // or BUILD_STATE_PATH env var.
+    val buildStatePath: Path = run {
+        val explicit = System.getProperty("buildStatePath")
+            ?: System.getenv("BUILD_STATE_PATH")
+        if (explicit != null) Paths.get(explicit)
+        else Paths.get("$persistDbPath.buildstate")
+    }
+    val prevBuildState: Path? = buildStatePath.takeIf { java.nio.file.Files.exists(it) }
+    val allocator = InMemoryIdAllocator.load(
+        path = prevBuildState,
+        logger = Logger.withTag("IdAllocator"),
+    )
+    if (prevBuildState != null) {
+        logger.i { "Loaded previous build_state from $prevBuildState" }
+    } else {
+        logger.i { "No previous build_state at $buildStatePath — starting fresh." }
+    }
+
+    // Build version: pulled from -PbuildVersion / BUILD_VERSION env, defaults to current epoch seconds.
+    val buildVersion: Int = (System.getProperty("buildVersion")
+        ?: System.getenv("BUILD_VERSION"))
+        ?.toIntOrNull()
+        ?: (System.currentTimeMillis() / 1000).toInt()
 
     try {
         val importer = SefariaDirectImporter(
             exportRoot = exportRoot,
             repository = repository,
+            allocator = allocator,
+            buildVersion = buildVersion,
             logger = Logger.withTag("SefariaDirect")
         )
         importer.import()
@@ -83,6 +117,19 @@ fun main(args: Array<String>) = runBlocking {
             repository.executeRawQuery("VACUUM INTO '$escaped'")
             logger.i { "In-memory DB persisted to $persistDbPath" }
         }
+
+        // Persist build_state.db so the next build re-uses the same primary keys.
+        runCatching {
+            allocator.snapshotTo(
+                target = buildStatePath,
+                extraMeta = mapOf(
+                    "generator" to "sefariasqlite",
+                    "generated_at" to java.time.Instant.now().toString(),
+                    "build_version" to buildVersion.toString(),
+                ),
+            )
+        }.onFailure { logger.w(it) { "Failed to write build_state to $buildStatePath" } }
+        Unit
 
         logger.i { "Sefaria -> SQLite completed. DB at ${if (useMemoryDb) persistDbPath else dbPath}" }
     } catch (e: Exception) {

@@ -2,16 +2,12 @@ package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
 import co.touchlab.kermit.Logger
 import com.github.luben.zstd.ZstdInputStream
+import io.github.kdroidfilter.seforimlibrary.common.OptimizedHttpClient
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import java.io.BufferedInputStream
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
-import kotlin.io.DEFAULT_BUFFER_SIZE
 import kotlin.io.path.exists
 import kotlin.io.path.isDirectory
 
@@ -22,6 +18,7 @@ import kotlin.io.path.isDirectory
  */
 object SefariaExportFetcher {
     private const val LATEST_API = "https://api.github.com/repos/kdroidFilter/SefariaExport/releases/latest"
+    private const val USER_AGENT = "SeforimLibrary-SefariaExportFetcher/1.0"
 
     /**
      * Ensure a Sefaria export is available locally under `build/sefaria/export` (relative to CWD).
@@ -44,78 +41,22 @@ object SefariaExportFetcher {
     }
 
     private fun downloadLatestArchive(out: Path, logger: Logger) {
-        val client = HttpClient.newBuilder()
-            .version(HttpClient.Version.HTTP_2)
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build()
-        val token = System.getenv("GITHUB_TOKEN") ?: System.getenv("GH_TOKEN")
-        val req = HttpRequest.newBuilder(URI(LATEST_API))
-            .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "SeforimLibrary-SefariaExportFetcher/1.0")
-            .apply { if (!token.isNullOrBlank()) header("Authorization", "Bearer $token") }
-            .build()
-        val res = client.send(req, HttpResponse.BodyHandlers.ofString())
-        if (res.statusCode() !in 200..299) {
-            throw IllegalStateException("GitHub API error: HTTP ${res.statusCode()}\n${res.body()}")
-        }
-        val body = res.body()
+        // Fetch release info from GitHub API
+        val body = OptimizedHttpClient.fetchJson(LATEST_API, USER_AGENT, logger)
+
         val regex = Regex(""""browser_download_url"\s*:\s*"([^"]+\.tar\.zst)"""")
         val archiveUrl = regex.findAll(body).map { it.groupValues[1] }.firstOrNull()
             ?: throw IllegalStateException("No .tar.zst asset found in latest SefariaExport release")
         logger.i { "Downloading Sefaria export from $archiveUrl" }
 
-        val dlReq = HttpRequest.newBuilder(URI(archiveUrl))
-            .header("Accept", "application/octet-stream")
-            .header("User-Agent", "SeforimLibrary-SefariaExportFetcher/1.0")
-            .apply { if (!token.isNullOrBlank()) header("Authorization", "Bearer $token") }
-            .build()
-        val dlRes = client.send(dlReq, HttpResponse.BodyHandlers.ofInputStream())
-        if (dlRes.statusCode() !in 200..299) {
-            throw IllegalStateException("Failed to download Sefaria export: HTTP ${dlRes.statusCode()}")
-        }
-        val contentLength = dlRes.headers().firstValue("Content-Length").orElse(null)?.toLongOrNull() ?: -1L
-        if (contentLength > 0) {
-            val totalMb = contentLength.toDouble() / (1024 * 1024)
-            logger.i { "Download size: ${"%.1f".format(totalMb)} MB" }
-        }
-        Files.createDirectories(out.parent)
-        dlRes.body().use { input ->
-            Files.newOutputStream(out).use { output ->
-                val buffer = ByteArray(1 shl 20) // 1 MiB
-                var downloaded = 0L
-                var lastLog = System.nanoTime()
-                var nextPct = 0
-                val start = lastLog
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    output.write(buffer, 0, read)
-                    downloaded += read
-                    val now = System.nanoTime()
-                    val elapsed = (now - lastLog) / 1_000_000_000.0
-                    val pct = if (contentLength > 0) ((downloaded * 100.0) / contentLength).toInt().coerceIn(0, 100) else -1
-                    val shouldLog = (contentLength > 0 && pct >= nextPct) || elapsed >= 1.0
-                    if (shouldLog) {
-                        val totalElapsed = (now - start) / 1_000_000_000.0
-                        val speedMb = if (totalElapsed > 0) (downloaded / totalElapsed) / (1024 * 1024) else 0.0
-                        val downloadedMb = downloaded.toDouble() / (1024 * 1024)
-                        val totalMb = if (contentLength > 0) contentLength.toDouble() / (1024 * 1024) else -1.0
-                        val msg = buildString {
-                            append("Downloading Sefaria export: ")
-                            if (pct >= 0) append("$pct% ")
-                            append("@ ${"%.2f".format(speedMb)} MB/s ")
-                            append("(${"%.1f".format(downloadedMb)}")
-                            if (totalMb > 0) append("/${"%.1f".format(totalMb)}")
-                            append(" MB)")
-                        }
-                        logger.i { msg }
-                        lastLog = now
-                        if (pct >= 0) nextPct = ((pct / 5) + 1) * 5
-                    }
-                }
-            }
-        }
-        logger.i { "Saved Sefaria export to ${out.toAbsolutePath()}" }
+        // Download the archive with optimized client
+        OptimizedHttpClient.downloadFile(
+            url = archiveUrl,
+            destination = out,
+            userAgent = USER_AGENT,
+            logger = logger,
+            progressPrefix = "Downloading Sefaria export"
+        )
     }
 
     private fun extractTarZst(archive: Path, destinationDir: Path, logger: Logger) {

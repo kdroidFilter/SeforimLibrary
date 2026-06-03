@@ -78,6 +78,7 @@ fun io.github.kdroidfilter.seforimlibrary.db.Book.toModel(json: Json, authors: L
         categoryId = categoryId,
         sourceId = sourceId,
         title = title,
+        heRef = heRef,
         authors = authors,
         topics = emptyList(),
         pubPlaces = pubPlaces,
@@ -134,7 +135,8 @@ fun io.github.kdroidfilter.seforimlibrary.db.Line.toModel(): Line {
         bookId = bookId,
         lineIndex = lineIndex.toInt(),
         content = content,
-        heRef = heRef
+        heRef = heRef,
+        charCount = charCount.toInt(),
     )
 }
 
@@ -241,6 +243,19 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectByLineId.toModel(): TocEntry 
     )
 }
 
+fun io.github.kdroidfilter.seforimlibrary.db.SelectAncestorPath.toModel(): TocEntry =
+    TocEntry(
+        id = id,
+        bookId = bookId,
+        parentId = parentId,
+        textId = textId,
+        text = text,
+        level = level.toInt(),
+        lineId = lineId,
+        isLastChild = isLastChild == 1L,
+        hasChildren = hasChildren == 1L
+    )
+
 // --- Alternative TOC mappings ---
 
 fun io.github.kdroidfilter.seforimlibrary.db.Alt_toc_structure.toModel(): AltTocStructure =
@@ -332,7 +347,9 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectLinkById.toModel(): Link {
         targetBookId = targetBookId,
         sourceLineId = sourceLineId,
         targetLineId = targetLineId,
-        connectionType = ConnectionType.fromString(connectionType)
+        targetLineIndex = targetLineIndex.toInt(),
+        connectionType = ConnectionType.fromString(connectionType),
+        isDeclaredBase = isDeclaredBase == 1L,
     )
 }
 
@@ -348,7 +365,9 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectLinksBySourceLineIds.toModel(
         targetBookId = targetBookId,
         sourceLineId = sourceLineId,
         targetLineId = targetLineId,
-        connectionType = ConnectionType.fromString(connectionType)
+        targetLineIndex = targetLineIndex.toInt(),
+        connectionType = ConnectionType.fromString(connectionType),
+        isDeclaredBase = isDeclaredBase == 1L,
     )
 }
 
@@ -364,7 +383,9 @@ fun io.github.kdroidfilter.seforimlibrary.db.SelectLinksBySourceBook.toModel(): 
         targetBookId = targetBookId,
         sourceLineId = sourceLineId,
         targetLineId = targetLineId,
-        connectionType = ConnectionType.fromString(connectionType)
+        targetLineIndex = targetLineIndex.toInt(),
+        connectionType = ConnectionType.fromString(connectionType),
+        isDeclaredBase = isDeclaredBase == 1L,
     )
 }
 

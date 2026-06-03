@@ -1,0 +1,225 @@
+name: Delta pipeline — real diff test
+
+# Tests the full delta-update pipeline against a REAL content diff:
+#
+#   v1 baseline ← built with the SECOND-TO-LAST GitHub releases of
+#                 Sefaria + Otzaria (= what was current "yesterday")
+#   v2 fresh    ← built with the LATEST GitHub releases of those repos
+#                 (= what's current "today")
+#
+# Because the two builds use different source snapshots, the producer
+# computes a real, non-empty diff — exercising every code path that
+# the dry-run smoke test only mocks. producePatchAndVerify's strict
+# `prev + patch == new` invariant is the verdict.
+#
+# Workflow stages everything via the fetchers' own cache directories
+# so no Kotlin needs to change: the fetcher checks for an existing
+# non-empty extract and skips downloading when it finds one.
+#
+# Everything is uploaded as workflow artefacts. Nothing is pushed to
+# a GitHub Release.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-diff:
+    name: Build v1 (N-1 sources) + v2 (N sources) + verify patch
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout SeforimLibrary
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Free disk space on runner
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: false
+
+      - name: Bridle daemon heaps + generator forks for the 16 GB runner
+        run: |
+          # The runner has 16 GB total. Default config blows past it:
+          #   Gradle daemon (default unbounded) + Kotlin daemon (4g) +
+          #   forked generator JVM (-Xmx10g per task) → OOM-kill.
+          # Bridle each component:
+          #   • Gradle daemon: 3g
+          #   • Kotlin compile in-process (no separate 4g daemon)
+          #   • Generator forks: 5g per task (well under what they actually use)
+          mkdir -p ~/.gradle
+          cat >> ~/.gradle/gradle.properties <<EOF
+          org.gradle.jvmargs=-Xmx3g
+          kotlin.compiler.execution.strategy=in-process
+          generatorHeap=8g
+          EOF
+
+      - name: Disk after cleanup
+        run: df -h
+
+      - name: Install JBR 25
+        run: |
+          curl -L -o jbr.tar.gz "https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk-25.0.1-linux-x64-b268.52.tar.gz"
+          mkdir -p "$RUNNER_TEMP/jbr"
+          tar -xzf jbr.tar.gz -C "$RUNNER_TEMP/jbr"
+          JBR_DIR=$(find "$RUNNER_TEMP/jbr" -mindepth 1 -maxdepth 1 -type d -name "jbr*" -o -name "jbrsdk*" | head -n 1)
+          echo "JAVA_HOME=$JBR_DIR" >> "$GITHUB_ENV"
+          echo "$JBR_DIR/bin" >> "$GITHUB_PATH"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Install zstd
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zstd sqlite3
+
+      # ─── Pre-stage SECOND-TO-LAST releases into fetcher caches ─────────────
+      - name: Pre-stage Sefaria N-1 export into fetcher cache
+        run: |
+          set -euo pipefail
+          SEFARIA_CACHE=generator/sefariasqlite/build/sefaria
+          mkdir -p "$SEFARIA_CACHE"
+          # The Sefaria fetcher cache lives under build/sefaria/export and is
+          # considered "valid" iff non-empty. We extract the N-1 archive
+          # there so the fetcher uses it instead of /releases/latest.
+          URL=$(gh api repos/kdroidFilter/SefariaExport/releases \
+                  --jq '.[1].assets[] | select(.name | endswith(".tar.zst")) | .browser_download_url')
+          echo "Sefaria N-1 archive: $URL"
+          curl -L -o /tmp/sefaria.tar.zst "$URL"
+          mkdir -p "$SEFARIA_CACHE/export"
+          tar --use-compress-program=unzstd -xf /tmp/sefaria.tar.zst -C "$SEFARIA_CACHE/export"
+          rm /tmp/sefaria.tar.zst
+          echo "Sefaria cache layout:"
+          ls "$SEFARIA_CACHE/export" | head -20
+
+      - name: Pre-stage Otzaria N-1 source into fetcher cache
+        run: |
+          set -euo pipefail
+          OTZARIA_CACHE=generator/otzariasqlite/build/otzaria
+          mkdir -p "$OTZARIA_CACHE/source"
+          # otzaria-library ships multiple .zip assets (otzaria_latest.zip +
+          # otzaria_dicta_latest.zip etc). Grab all of N-1.
+          URLS=$(gh api repos/otzaria/otzaria-library/releases \
+                   --jq '.[1].assets[] | select(.name | endswith(".zip")) | .browser_download_url')
+          for url in $URLS; do
+            name=$(basename "$url")
+            echo "Downloading Otzaria N-1 asset: $name"
+            curl -L -o "/tmp/$name" "$url"
+            unzip -q -o "/tmp/$name" -d "$OTZARIA_CACHE/source"
+            rm "/tmp/$name"
+          done
+          echo "Otzaria cache layout (top of source/):"
+          ls "$OTZARIA_CACHE/source" | head -20
+
+      # ─── BUILD v1 BASELINE ─────────────────────────────────────────────────
+      - name: Build v1 baseline (uses pre-staged N-1 sources)
+        run: ./gradlew generateSeforimDb -PdbVersion=1 --no-daemon --stacktrace
+
+      - name: Verify v1 stamp
+        run: |
+          V=$(sqlite3 build/seforim.db "SELECT value FROM schema_meta WHERE key='db_version'")
+          test "$V" = "1" || { echo "❌ db_version=$V (expected 1)"; exit 1; }
+          echo "✓ v1 stamped"
+
+      - name: Stash v1 artefacts + clear v1 sources + lucene
+        run: |
+          set -euo pipefail
+          mv build/seforim.db build/seforim.db.v1
+          mv build/seforim.db.buildstate build/seforim.db.buildstate.v1
+          mv build/catalog.pb build/catalog.pb.v1
+          # Drop v1's Lucene/lexical (~3 GB) — only need DB + buildstate + catalog
+          rm -rf build/seforim.db.lucene build/seforim.db.lookup.lucene
+          rm -f build/lexical.db build/release_info.txt
+          # Clear cached sources so v2 re-fetches /releases/latest
+          rm -rf generator/sefariasqlite/build/sefaria
+          rm -rf generator/otzariasqlite/build/otzaria
+          # Also clear the acronymizer cache so it gets the current version
+          rm -rf generator/otzariasqlite/build/acronymizer
+          ls -lah build/seforim.db.v1 build/seforim.db.buildstate.v1 build/catalog.pb.v1
+          df -h
+
+      # ─── BUILD v2 (LATEST sources, seeded by v1 buildstate) ────────────────
+      - name: Re-seed allocator with v1 buildstate
+        run: cp build/seforim.db.buildstate.v1 build/seforim.db.buildstate
+
+      - name: Build v2 (lets fetcher download /releases/latest)
+        run: ./gradlew generateSeforimDb -PdbVersion=2 -PtoVersion=2 --no-daemon --stacktrace
+
+      - name: Verify v2 stamp
+        run: |
+          V=$(sqlite3 build/seforim.db "SELECT value FROM schema_meta WHERE key='db_version'")
+          test "$V" = "2" || { echo "❌ db_version=$V (expected 2)"; exit 1; }
+          echo "✓ v2 stamped"
+
+      # ─── PRODUCE + VERIFY PATCH ────────────────────────────────────────────
+      - name: producePatchAndVerify (strict invariant)
+        run: |
+          ./gradlew :generator-common:producePatchAndVerify \
+            -PprevDb=$PWD/build/seforim.db.v1 \
+            -PnewDb=$PWD/build/seforim.db \
+            -Pout=$PWD/build/patch-v1-v2.db \
+            -PcatalogPb=$PWD/build/catalog.pb \
+            -PfromVersion=1 -PtoVersion=2 \
+            --no-daemon --stacktrace
+
+      - name: Summarise patch
+        run: |
+          set -euo pipefail
+          echo "=== Patch artefacts ==="
+          ls -lah build/patch-v1-v2.db build/patch-v1-v2.db.manifest.json
+          echo ""
+          echo "=== Manifest ==="
+          cat build/patch-v1-v2.db.manifest.json
+          echo ""
+          echo "=== Patch.blobs ==="
+          sqlite3 build/patch-v1-v2.db "SELECT name, length(content) FROM blobs"
+          echo ""
+          echo "=== Patch upserts/deletes per table (non-zero only) ==="
+          for t in source author topic pub_place pub_date connection_type category \
+                   category_closure tocText book book_author book_topic book_pub_place \
+                   book_pub_date book_acronym tocEntry line line_toc link book_has_links \
+                   alt_toc_structure alt_toc_entry line_alt_toc default_commentator \
+                   default_targum schema_meta; do
+            UC=$(sqlite3 build/patch-v1-v2.db "SELECT COUNT(*) FROM upsert_${t}" 2>/dev/null || echo 0)
+            DC=$(sqlite3 build/patch-v1-v2.db "SELECT COUNT(*) FROM delete_${t}" 2>/dev/null || echo 0)
+            if [ "$UC" != "0" ] || [ "$DC" != "0" ]; then
+              echo "  $t: +$UC / -$DC"
+            fi
+          done
+
+      # ─── ARTEFACTS ─────────────────────────────────────────────────────────
+      - name: Upload patch + manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: delta-real-diff-patch
+          path: |
+            build/patch-v1-v2.db
+            build/patch-v1-v2.db.manifest.json
+          retention-days: 7
+
+      - name: Upload v1 + v2 catalogues + buildstates
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: delta-real-diff-context
+          path: |
+            build/catalog.pb.v1
+            build/catalog.pb
+            build/seforim.db.buildstate.v1
+            build/seforim.db.buildstate
+          retention-days: 7

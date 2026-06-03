@@ -16,7 +16,7 @@ JOIN connection_type ct ON l.connectionTypeId = ct.id
 JOIN book b ON l.targetBookId = b.id
 JOIN line tl ON l.targetLineId = tl.id
 WHERE l.sourceLineId IN ?
-ORDER BY b.orderIndex;
+ORDER BY l.targetBookOrderIndex, l.targetLineIndex;
 
 selectLinksBySourceLineIdsPaged:
 SELECT l.*, ct.name AS connectionType, b.title AS targetBookTitle, tl.content AS targetText
@@ -25,7 +25,7 @@ JOIN connection_type ct ON l.connectionTypeId = ct.id
 JOIN book b ON l.targetBookId = b.id
 JOIN line tl ON l.targetLineId = tl.id
 WHERE l.sourceLineId IN ?
-ORDER BY b.orderIndex
+ORDER BY l.targetBookOrderIndex, l.targetLineIndex
 LIMIT ? OFFSET ?;
 
 selectLinksBySourceLineIdsAndTargetsPaged:
@@ -35,7 +35,7 @@ JOIN connection_type ct ON l.connectionTypeId = ct.id
 JOIN book b ON l.targetBookId = b.id
 JOIN line tl ON l.targetLineId = tl.id
 WHERE l.sourceLineId IN ? AND l.targetBookId IN ?
-ORDER BY b.orderIndex
+ORDER BY l.targetBookOrderIndex, l.targetLineIndex
 LIMIT ? OFFSET ?;
 
 selectLinksBySourceLineIdsAndTypesPaged:
@@ -45,18 +45,18 @@ JOIN connection_type ct ON l.connectionTypeId = ct.id
 JOIN book b ON l.targetBookId = b.id
 JOIN line tl ON l.targetLineId = tl.id
 WHERE l.sourceLineId IN ? AND ct.name IN ?
-ORDER BY b.orderIndex
+ORDER BY l.targetBookOrderIndex, l.targetLineIndex
 LIMIT ? OFFSET ?;
 
 selectLinksBySourceLineIdsAndTypesPagedDistinct:
-SELECT MIN(l.id) AS id, MIN(l.sourceBookId) AS sourceBookId, l.targetBookId, MIN(l.sourceLineId) AS sourceLineId, l.targetLineId, MIN(l.connectionTypeId) AS connectionTypeId, ct.name AS connectionType, b.title AS targetBookTitle, tl.content AS targetText
+SELECT MIN(l.id) AS id, MIN(l.sourceBookId) AS sourceBookId, l.targetBookId, MIN(l.sourceLineId) AS sourceLineId, l.targetLineId, MIN(l.targetLineIndex) AS targetLineIndex, MIN(l.connectionTypeId) AS connectionTypeId, ct.name AS connectionType, b.title AS targetBookTitle, tl.content AS targetText
 FROM link l
 JOIN connection_type ct ON l.connectionTypeId = ct.id
 JOIN book b ON l.targetBookId = b.id
 JOIN line tl ON l.targetLineId = tl.id
 WHERE l.sourceLineId IN ? AND ct.name IN ?
 GROUP BY l.targetLineId
-ORDER BY b.orderIndex
+ORDER BY MIN(l.targetBookOrderIndex), MIN(l.targetLineIndex)
 LIMIT ? OFFSET ?;
 
 selectLinksBySourceLineIdsTargetsAndTypesPaged:
@@ -66,19 +66,40 @@ JOIN connection_type ct ON l.connectionTypeId = ct.id
 JOIN book b ON l.targetBookId = b.id
 JOIN line tl ON l.targetLineId = tl.id
 WHERE l.sourceLineId IN ? AND l.targetBookId IN ? AND ct.name IN ?
-ORDER BY b.orderIndex
+ORDER BY l.targetBookOrderIndex, l.targetLineIndex
 LIMIT ? OFFSET ?;
 
 selectLinksBySourceLineIdsTargetsAndTypesPagedDistinct:
-SELECT MIN(l.id) AS id, MIN(l.sourceBookId) AS sourceBookId, l.targetBookId, MIN(l.sourceLineId) AS sourceLineId, l.targetLineId, MIN(l.connectionTypeId) AS connectionTypeId, ct.name AS connectionType, b.title AS targetBookTitle, tl.content AS targetText
+SELECT MIN(l.id) AS id, MIN(l.sourceBookId) AS sourceBookId, l.targetBookId, MIN(l.sourceLineId) AS sourceLineId, l.targetLineId, MIN(l.targetLineIndex) AS targetLineIndex, MIN(l.connectionTypeId) AS connectionTypeId, ct.name AS connectionType, b.title AS targetBookTitle, tl.content AS targetText
 FROM link l
 JOIN connection_type ct ON l.connectionTypeId = ct.id
 JOIN book b ON l.targetBookId = b.id
 JOIN line tl ON l.targetLineId = tl.id
 WHERE l.sourceLineId IN ? AND l.targetBookId IN ? AND ct.name IN ?
 GROUP BY l.targetLineId
-ORDER BY b.orderIndex
+ORDER BY MIN(l.targetBookOrderIndex), MIN(l.targetLineIndex)
 LIMIT ? OFFSET ?;
+
+-- Ordered list of per-link charCounts matching `selectLinksBySourceLineIdsAndTypesPaged`.
+-- The scrollbar needs the whole vector (not just the sum) so it can turn each raw
+-- charCount into `ceil(charCount / capacity) * capacity` at runtime, where `capacity`
+-- is the measured chars-per-visual-line at the current width/font.
+selectLinkCharCountsBySourceLineIdsAndTypes:
+SELECT tl.charCount FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN book b ON l.targetBookId = b.id
+JOIN line tl ON l.targetLineId = tl.id
+WHERE l.sourceLineId IN ? AND ct.name IN ?
+ORDER BY l.targetBookOrderIndex, l.targetLineIndex;
+
+-- Same ordered vector with the commentator-book filter applied.
+selectLinkCharCountsBySourceLineIdsTargetsAndTypes:
+SELECT tl.charCount FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN book b ON l.targetBookId = b.id
+JOIN line tl ON l.targetLineId = tl.id
+WHERE l.sourceLineId IN ? AND l.targetBookId IN ? AND ct.name IN ?
+ORDER BY l.targetBookOrderIndex, l.targetLineIndex;
 
 selectLinkSummariesBySourceLineIds:
 SELECT l.*, ct.name AS connectionType, b.title AS targetBookTitle
@@ -86,7 +107,7 @@ FROM link l
 JOIN connection_type ct ON l.connectionTypeId = ct.id
 JOIN book b ON l.targetBookId = b.id
 WHERE l.sourceLineId IN ?
-ORDER BY b.orderIndex;
+ORDER BY l.targetBookOrderIndex, l.targetLineIndex;
 
 selectLinksBySourceBook:
 SELECT l.*, ct.name AS connectionType
@@ -107,8 +128,12 @@ GROUP BY l.targetBookId, b.title, a.name
 ORDER BY b.orderIndex, b.title;
 
 insert:
-INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, connectionTypeId)
-VALUES (?, ?, ?, ?, ?);
+INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, targetBookOrderIndex, connectionTypeId, isDeclaredBase)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+insertWithId:
+INSERT OR IGNORE INTO link (id, sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, targetBookOrderIndex, connectionTypeId, isDeclaredBase)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 delete:
 DELETE FROM link WHERE id = ?;
@@ -140,3 +165,175 @@ SELECT COUNT(*)
 FROM link l
 JOIN connection_type ct ON l.connectionTypeId = ct.id
 WHERE l.targetBookId = ? AND ct.name = ?;
+
+-- ===========================================================================
+-- Mirror queries for the virtual SOURCE view.
+--
+-- Links are stored in a single canonical direction `source → target`
+-- (base book → dependant book). When a caller asks "what are the SOURCES of
+-- these lines?" (i.e. "what does this commentary line comment on?"), we run
+-- the mirror queries below: they match on `targetLineId IN ?` and swap
+-- src↔tgt columns at the SELECT level so the consuming Kotlin mapper sees
+-- exactly the same shape as the forward queries.
+--
+-- Ordering uses `b.orderIndex, sl.lineIndex` (JOIN line sl ON sl.id = sourceLineId).
+-- ===========================================================================
+
+selectInverseLinksByTargetLineIds:
+SELECT
+    l.id AS id,
+    l.targetBookId AS sourceBookId,
+    l.sourceBookId AS targetBookId,
+    l.targetLineId AS sourceLineId,
+    l.sourceLineId AS targetLineId,
+    sl.lineIndex AS targetLineIndex,
+    ct.name AS connectionType,
+    b.title AS targetBookTitle,
+    sl.content AS targetText
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.orderIndex, sl.lineIndex;
+
+selectInverseLinkSummariesByTargetLineIds:
+SELECT
+    l.id AS id,
+    l.targetBookId AS sourceBookId,
+    l.sourceBookId AS targetBookId,
+    l.targetLineId AS sourceLineId,
+    l.sourceLineId AS targetLineId,
+    sl.lineIndex AS targetLineIndex,
+    ct.name AS connectionType,
+    b.title AS targetBookTitle
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.orderIndex, sl.lineIndex;
+
+selectInverseLinksByTargetLineIdsPaged:
+SELECT
+    l.id AS id,
+    l.targetBookId AS sourceBookId,
+    l.sourceBookId AS targetBookId,
+    l.targetLineId AS sourceLineId,
+    l.sourceLineId AS targetLineId,
+    sl.lineIndex AS targetLineIndex,
+    ct.name AS connectionType,
+    b.title AS targetBookTitle,
+    sl.content AS targetText
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.orderIndex, sl.lineIndex
+LIMIT ? OFFSET ?;
+
+selectInverseLinksByTargetLineIdsAndSourcesPaged:
+SELECT
+    l.id AS id,
+    l.targetBookId AS sourceBookId,
+    l.sourceBookId AS targetBookId,
+    l.targetLineId AS sourceLineId,
+    l.sourceLineId AS targetLineId,
+    sl.lineIndex AS targetLineIndex,
+    ct.name AS connectionType,
+    b.title AS targetBookTitle,
+    sl.content AS targetText
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ? AND l.sourceBookId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.orderIndex, sl.lineIndex
+LIMIT ? OFFSET ?;
+
+selectInverseLinksByTargetLineIdsAndSourcesPagedDistinct:
+SELECT MIN(l.id) AS id,
+       l.targetBookId AS sourceBookId,
+       MIN(l.sourceBookId) AS targetBookId,
+       MIN(l.targetLineId) AS sourceLineId,
+       l.sourceLineId AS targetLineId,
+       MIN(sl.lineIndex) AS targetLineIndex,
+       MIN(l.connectionTypeId) AS connectionTypeId,
+       ct.name AS connectionType,
+       b.title AS targetBookTitle,
+       sl.content AS targetText
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ? AND l.sourceBookId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+GROUP BY l.sourceLineId
+ORDER BY MAX(l.isDeclaredBase) DESC, b.isBaseBook DESC, b.orderIndex, MIN(sl.lineIndex)
+LIMIT ? OFFSET ?;
+
+selectInverseLinksByTargetLineIdsPagedDistinct:
+SELECT MIN(l.id) AS id,
+       l.targetBookId AS sourceBookId,
+       MIN(l.sourceBookId) AS targetBookId,
+       MIN(l.targetLineId) AS sourceLineId,
+       l.sourceLineId AS targetLineId,
+       MIN(sl.lineIndex) AS targetLineIndex,
+       MIN(l.connectionTypeId) AS connectionTypeId,
+       ct.name AS connectionType,
+       b.title AS targetBookTitle,
+       sl.content AS targetText
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+GROUP BY l.sourceLineId
+ORDER BY MAX(l.isDeclaredBase) DESC, b.isBaseBook DESC, b.orderIndex, MIN(sl.lineIndex)
+LIMIT ? OFFSET ?;
+
+selectInverseLinkCharCountsByTargetLineIds:
+SELECT sl.charCount FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.orderIndex, sl.lineIndex;
+
+selectInverseLinkCharCountsByTargetLineIdsAndSources:
+SELECT sl.charCount FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line sl ON sl.id = l.sourceLineId
+JOIN book b ON l.sourceBookId = b.id
+WHERE l.targetLineId IN ? AND l.sourceBookId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.orderIndex, sl.lineIndex;
+
+-- "Source-side commentators" — books that appear as base/source for this book's lines.
+selectSourcesByBook:
+SELECT DISTINCT l.sourceBookId AS targetBookId, b.title AS targetBookTitle, a.name AS author, COUNT(*) AS linkCount
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN book b ON l.sourceBookId = b.id
+LEFT JOIN book_author ba ON b.id = ba.bookId
+LEFT JOIN author a ON ba.authorId = a.id
+WHERE l.targetBookId = ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+GROUP BY l.sourceBookId, b.title, a.name
+ORDER BY MAX(l.isDeclaredBase) DESC, b.isBaseBook DESC, b.orderIndex, b.title;

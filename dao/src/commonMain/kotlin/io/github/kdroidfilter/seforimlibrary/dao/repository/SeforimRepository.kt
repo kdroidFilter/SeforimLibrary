@@ -36,10 +36,27 @@ import kotlinx.serialization.json.Json
  * @property driver The SQL driver used to connect to the database
  * @constructor Creates a repository with the specified database path and driver
  */
-class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
+class SeforimRepository(databasePath: String, private val driver: SqlDriver) : LineSelectionRepository {
     private val database = SeforimDb(driver)
     private val json = Json { ignoreUnknownKeys = true }
     private val logger = Logger.withTag("SeforimRepository")
+
+    // Category rows are immutable at runtime, so a plain read-through cache avoids
+    // paying a SQLite prepare + connection round-trip for every breadcrumb/tree walk.
+    // Profiling (see JFR 2026-04-23) showed 70 `sqlite3_prepare` calls in 20 s all
+    // coming from `getCategory`. Both KMP targets (JVM + Android) are JVM-based so
+    // `ConcurrentHashMap` is safe to use directly from commonMain.
+    private val categoryCache = java.util.concurrent.ConcurrentHashMap<Long, Category>()
+
+    // book.orderIndex is denormalized onto each link row at insert time (targetBookOrderIndex)
+    // so the commentaries path can sort without JOINing book. Books are immutable once inserted
+    // and exist before any link references them, so a read-through cache is safe during import.
+    private val bookOrderIndexCache = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+
+    private fun resolveBookOrderIndex(bookId: Long): Long =
+        bookOrderIndexCache.getOrPut(bookId) {
+            database.bookQueriesQueries.selectOrderIndexById(bookId).executeAsOneOrNull() ?: 0L
+        }
 
     init {
         val repositoryLoggingEnv = getEnvironmentVariable("SEFORIMAPP_REPOSITORY_LOGGING")?.lowercase()
@@ -51,10 +68,11 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         logger.d{"Initializing SeforimRepository"}
         // Create the database schema (fresh builds only; no runtime migrations needed)
         SeforimDb.Schema.create(driver)
-        // SQLite optimizations
+        // SQLite optimizations (balanced mode for desktop: 256MB cache + 512MB mmap)
         driver.execute(null, "PRAGMA journal_mode=WAL", 0)
         driver.execute(null, "PRAGMA synchronous=NORMAL", 0)
-        driver.execute(null, "PRAGMA cache_size=40000", 0)
+        driver.execute(null, "PRAGMA cache_size=-256000", 0) // 256MB cache (negative = KiB)
+        driver.execute(null, "PRAGMA mmap_size=536870912", 0) // 512MB memory-mapped I/O
         driver.execute(null, "PRAGMA temp_store=MEMORY", 0)
 
         // Check if the database is empty
@@ -64,9 +82,19 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         } catch (e: Exception) {
             logger.d{"Error counting books: ${e.message}"}
         }
+
+        // Warm up SQLite page cache by touching the line table index
+        try {
+            driver.executeQuery(
+                null,
+                "SELECT COUNT(*) FROM line WHERE bookId = 1",
+                { c -> QueryResult.Value(if (c.next().value) c.getLong(0) else 0L) },
+                0,
+            )
+        } catch (_: Exception) { }
     }
 
-    
+
 
     // --- Line ⇄ TOC mapping ---
 
@@ -160,7 +188,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     /**
      * Gets the tocEntryId associated with a line via the mapping table.
      */
-    suspend fun getTocEntryIdForLine(lineId: Long): Long? = withContext(Dispatchers.IO) {
+    override suspend fun getTocEntryIdForLine(lineId: Long): Long? = withContext(Dispatchers.IO) {
         database.lineTocQueriesQueries.selectTocEntryIdByLineId(lineId).executeAsOneOrNull()
     }
 
@@ -183,14 +211,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     /**
      * Returns the TOC entry whose heading line is the given line id, or null if not a TOC heading.
      */
-    suspend fun getHeadingTocEntryByLineId(lineId: Long): TocEntry? = withContext(Dispatchers.IO) {
+    override suspend fun getHeadingTocEntryByLineId(lineId: Long): TocEntry? = withContext(Dispatchers.IO) {
         database.tocQueriesQueries.selectByLineId(lineId).executeAsOneOrNull()?.toModel()
     }
 
     /**
      * Returns all line ids that belong to the given TOC entry (section), ordered by lineIndex.
      */
-    suspend fun getLineIdsForTocEntry(tocEntryId: Long): List<Long> = withContext(Dispatchers.IO) {
+    override suspend fun getLineIdsForTocEntry(tocEntryId: Long): List<Long> = withContext(Dispatchers.IO) {
         database.lineTocQueriesQueries.selectLineIdsByTocEntryId(tocEntryId).executeAsList()
     }
 
@@ -238,13 +266,16 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     // --- Categories ---
 
     /**
-     * Retrieves a category by its ID.
-     *
-     * @param id The ID of the category to retrieve
-     * @return The category if found, null otherwise
+     * Retrieves a category by its ID. Backed by a read-through in-memory cache —
+     * categories are immutable at runtime, so we only hit SQLite on the first lookup
+     * for each id. Returns `null` for unknown ids (not cached as negative — cheap).
      */
-    suspend fun getCategory(id: Long): Category? = withContext(Dispatchers.IO) {
-        database.categoryQueriesQueries.selectById(id).executeAsOneOrNull()?.toModel()
+    suspend fun getCategory(id: Long): Category? {
+        categoryCache[id]?.let { return it }
+        val loaded = withContext(Dispatchers.IO) {
+            database.categoryQueriesQueries.selectById(id).executeAsOneOrNull()?.toModel()
+        } ?: return null
+        return categoryCache.putIfAbsent(id, loaded) ?: loaded
     }
 
     /**
@@ -287,6 +318,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
      */
     suspend fun getDescendantCategoryIds(ancestorId: Long): List<Long> = withContext(Dispatchers.IO) {
         database.categoryClosureQueriesQueries.selectDescendants(ancestorId).executeAsList()
+    }
+
+    /**
+     * Returns all ancestor category IDs (including the category itself) using the
+     * category_closure table. Used for pre-indexing ancestors in search indexes.
+     */
+    suspend fun getAncestorCategoryIds(categoryId: Long): List<Long> = withContext(Dispatchers.IO) {
+        database.categoryClosureQueriesQueries.selectAncestors(categoryId).executeAsList()
     }
 
     /**
@@ -518,7 +557,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         rows.map { bookData -> bookData.toModel(json) }
     }
 
-    
+
 
 
 
@@ -634,6 +673,19 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     suspend fun getBookByTitle(title: String): Book? = withContext(Dispatchers.IO) {
         val bookData = database.bookQueriesQueries.selectByTitle(title).executeAsOneOrNull() ?: return@withContext null
+        val authors = getBookAuthors(bookData.id)
+        val topics = getBookTopics(bookData.id)
+        val pubPlaces = getBookPubPlaces(bookData.id)
+        val pubDates = getBookPubDates(bookData.id)
+        return@withContext bookData.toModel(json, authors, pubPlaces, pubDates).copy(topics = topics)
+    }
+
+    /**
+     * Retrieves a book by its stable Hebrew reference identifier (heRef).
+     * Returns null if no book with the given heRef exists.
+     */
+    suspend fun getBookByHeRef(heRef: String): Book? = withContext(Dispatchers.IO) {
+        val bookData = database.bookQueriesQueries.selectByHeRef(heRef).executeAsOneOrNull() ?: return@withContext null
         val authors = getBookAuthors(bookData.id)
         val topics = getBookTopics(bookData.id)
         val pubPlaces = getBookPubPlaces(bookData.id)
@@ -852,6 +904,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 categoryId = book.categoryId,
                 sourceId = book.sourceId,
                 title = book.title,
+                heRef = book.heRef,
                 heShortDesc = book.heShortDesc,
                 notesContent = book.notesContent,
                 orderIndex = book.order.toLong(),
@@ -909,6 +962,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 categoryId = book.categoryId,
                 sourceId = book.sourceId,
                 title = book.title,
+                heRef = book.heRef,
                 heShortDesc = book.heShortDesc,
                 notesContent = book.notesContent,
                 orderIndex = book.order.toLong(),
@@ -1017,7 +1071,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     // --- Lines ---
 
-    suspend fun getLine(id: Long): Line? = withContext(Dispatchers.IO) {
+    override suspend fun getLine(id: Long): Line? = withContext(Dispatchers.IO) {
         database.lineQueriesQueries.selectById(id).executeAsOneOrNull()?.toModel()
     }
 
@@ -1026,7 +1080,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             .executeAsOneOrNull()?.toModel()
     }
 
-    suspend fun getLines(bookId: Long, startIndex: Int, endIndex: Int): List<Line> =
+    override suspend fun getLines(bookId: Long, startIndex: Int, endIndex: Int): List<Line> =
         withContext(Dispatchers.IO) {
             database.lineQueriesQueries.selectByBookIdRange(
                 bookId = bookId,
@@ -1042,28 +1096,42 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         }
 
     /**
+     * Light-weight projection of per-line `charCount` for a full book, in `lineIndex`
+     * order. Feeds the content-aware scrollbar: loaded once at book open, converted
+     * to a visual-line prefix-sum whenever the measured chars-per-visual-line
+     * capacity changes (resize, font swap, text-size tweak). Returned as an
+     * `IntArray` so the prefix sum can run without allocating boxed integers.
+     */
+    suspend fun getBookCharCounts(bookId: Long): IntArray = withContext(Dispatchers.IO) {
+        val rows = database.lineQueriesQueries
+            .selectCharCountsByBookId(bookId)
+            .executeAsList()
+        IntArray(rows.size) { rows[it].toInt() }
+    }
+
+    /**
      * Gets the previous line for a given book and line index.
-     * 
+     *
      * @param bookId The ID of the book
      * @param currentLineIndex The index of the current line
      * @return The previous line, or null if there is no previous line
      */
-    suspend fun getPreviousLine(bookId: Long, currentLineIndex: Int): Line? = withContext(Dispatchers.IO) {
+    override suspend fun getPreviousLine(bookId: Long, currentLineIndex: Int): Line? = withContext(Dispatchers.IO) {
         if (currentLineIndex <= 0) return@withContext null
-        
+
         val previousIndex = currentLineIndex - 1
         database.lineQueriesQueries.selectByBookIdAndIndex(bookId, previousIndex.toLong())
             .executeAsOneOrNull()?.toModel()
     }
-    
+
     /**
      * Gets the next line for a given book and line index.
-     * 
+     *
      * @param bookId The ID of the book
      * @param currentLineIndex The index of the current line
      * @return The next line, or null if there is no next line
      */
-    suspend fun getNextLine(bookId: Long, currentLineIndex: Int): Line? = withContext(Dispatchers.IO) {
+    override suspend fun getNextLine(bookId: Long, currentLineIndex: Int): Line? = withContext(Dispatchers.IO) {
         val nextIndex = currentLineIndex + 1
         database.lineQueriesQueries.selectByBookIdAndIndex(bookId, nextIndex.toLong())
             .executeAsOneOrNull()?.toModel()
@@ -1085,7 +1153,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                     lineIndex = line.lineIndex.toLong(),
                     content = line.content,
                     heRef = line.heRef,
-                    tocEntryId = null
+                    tocEntryId = null,
+                    charCount = line.charCount.toLong(),
                 )
             }
         }
@@ -1102,7 +1171,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 lineIndex = line.lineIndex.toLong(),
                 content = line.content,
                 heRef = line.heRef,
-                tocEntryId = null
+                tocEntryId = null,
+                charCount = line.charCount.toLong(),
             )
             logger.d{"Repository inserted line with explicit ID: ${line.id} and bookId: ${line.bookId}"}
             return@withContext line.id
@@ -1113,7 +1183,8 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 lineIndex = line.lineIndex.toLong(),
                 content = line.content,
                 heRef = line.heRef,
-                tocEntryId = null
+                tocEntryId = null,
+                charCount = line.charCount.toLong(),
             )
             val lineId = database.lineQueriesQueries.lastInsertRowId().executeAsOne()
             logger.d{"Repository inserted line with auto-generated ID: $lineId and bookId: ${line.bookId}"}
@@ -1140,9 +1211,36 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         logger.d{"Repository updated line $lineId with tocEntryId: $tocEntryId"}
     }
 
+    /**
+     * Bulk variant of [updateLineTocEntry] for the Otzaria importer hot path.
+     * Each pair is (lineId, tocEntryId). Wrapped in a single transaction —
+     * avoids one Dispatchers.IO context switch per row (the per-row
+     * `withContext` was burning park/unpark cycles on 4M+ header lines).
+     */
+    suspend fun bulkUpdateLineTocEntryIds(pairs: List<Pair<Long, Long>>) = withContext(Dispatchers.IO) {
+        if (pairs.isEmpty()) return@withContext
+        database.transaction {
+            for ((lineId, tocEntryId) in pairs) {
+                database.lineQueriesQueries.updateTocEntryId(tocEntryId, lineId)
+            }
+        }
+    }
+
+    /**
+     * Bulk variant of [updateTocEntryLineId]. Each pair is (tocEntryId, lineId).
+     */
+    suspend fun bulkUpdateTocEntryLineIds(pairs: List<Pair<Long, Long>>) = withContext(Dispatchers.IO) {
+        if (pairs.isEmpty()) return@withContext
+        database.transaction {
+            for ((tocEntryId, lineId) in pairs) {
+                database.tocQueriesQueries.updateLineId(lineId, tocEntryId)
+            }
+        }
+    }
+
     // --- Table of Contents ---
 
-    suspend fun getTocEntry(id: Long): TocEntry? = withContext(Dispatchers.IO) {
+    override suspend fun getTocEntry(id: Long): TocEntry? = withContext(Dispatchers.IO) {
         database.tocQueriesQueries.selectTocById(id).executeAsOneOrNull()?.toModel()
     }
 
@@ -1156,6 +1254,14 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     suspend fun getTocChildren(parentId: Long): List<TocEntry> = withContext(Dispatchers.IO) {
         database.tocQueriesQueries.selectChildren(parentId).executeAsList().map { it.toModel() }
+    }
+
+    override suspend fun getAncestorPath(tocId: Long): List<TocEntry> = withContext(Dispatchers.IO) {
+        database.tocQueriesQueries.selectAncestorPath(tocId).executeAsList().map { it.toModel() }
+    }
+
+    suspend fun getFirstLeafTocId(tocId: Long): Long? = withContext(Dispatchers.IO) {
+        database.tocQueriesQueries.selectFirstLeafUnder(tocId).executeAsOneOrNull()
     }
 
     // --- Alternative TOC structures ---
@@ -1298,7 +1404,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         logger.d { "Getting all tocText values (using generated query)" }
         database.tocTextQueriesQueries.selectAll().executeAsList().map { it.text }
     }
-    
+
     // Get or create a tocText entry and return its ID
     private suspend fun getOrCreateTocText(text: String): Long = withContext(Dispatchers.IO) {
         // Truncate text for logging if it's too long
@@ -1422,11 +1528,32 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
         database.tocQueriesQueries.updateLineId(lineId, tocEntryId)
         logger.d{"Repository updated TOC entry $tocEntryId with lineId: $lineId"}
     }
-    
+
     suspend fun updateTocEntryIsLastChild(tocEntryId: Long, isLastChild: Boolean) = withContext(Dispatchers.IO) {
         logger.d{"Repository updating TOC entry $tocEntryId with isLastChild: $isLastChild"}
         database.tocQueriesQueries.updateIsLastChild(if (isLastChild) 1 else 0, tocEntryId)
         logger.d{"Repository updated TOC entry $tocEntryId with isLastChild: $isLastChild"}
+    }
+
+    /**
+     * Bulk-update the `hasChildren` and `isLastChild` flags on tocEntry in a
+     * single transaction — avoids the per-row coroutine + transaction
+     * overhead that dominated SefariaTocInserter's finalisation phase (JFR
+     * 2026-05-13 showed ~979 samples on insertTocEntriesOptimized).
+     */
+    suspend fun bulkUpdateTocEntryFlags(
+        hasChildrenIds: Collection<Long>,
+        lastChildIds: Collection<Long>,
+    ) = withContext(Dispatchers.IO) {
+        if (hasChildrenIds.isEmpty() && lastChildIds.isEmpty()) return@withContext
+        database.transaction {
+            for (id in hasChildrenIds) {
+                database.tocQueriesQueries.updateHasChildren(1, id)
+            }
+            for (id in lastChildIds) {
+                database.tocQueriesQueries.updateIsLastChild(1, id)
+            }
+        }
     }
 
     // --- Connection Types ---
@@ -1475,7 +1602,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
      * @return A list of all connection types
      */
     suspend fun getAllConnectionTypes(): List<ConnectionType> = withContext(Dispatchers.IO) {
-        database.connectionTypeQueriesQueries.selectAll().executeAsList().map { 
+        database.connectionTypeQueriesQueries.selectAll().executeAsList().map {
             ConnectionType.fromString(it.name)
         }
     }
@@ -1495,9 +1622,11 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     suspend fun getCommentariesForLines(
         lineIds: List<Long>,
-        activeCommentatorIds: Set<Long> = emptySet()
+        activeCommentatorIds: Set<Long> = emptySet(),
+        includeSources: Boolean = false,
     ): List<CommentaryWithText> = withContext(Dispatchers.IO) {
-        database.linkQueriesQueries.selectLinksBySourceLineIds(lineIds).executeAsList()
+        if (lineIds.isEmpty()) return@withContext emptyList()
+        val forward = database.linkQueriesQueries.selectLinksBySourceLineIds(lineIds).executeAsList()
             .filter { activeCommentatorIds.isEmpty() || it.targetBookId in activeCommentatorIds }
             .map {
                 CommentaryWithText(
@@ -1507,22 +1636,46 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                         targetBookId = it.targetBookId,
                         sourceLineId = it.sourceLineId,
                         targetLineId = it.targetLineId,
+                        targetLineIndex = it.targetLineIndex.toInt(),
                         connectionType = ConnectionType.fromString(it.connectionType)
                     ),
                     targetBookTitle = it.targetBookTitle,
                     targetText = it.targetText
                 )
             }
+        if (!includeSources) return@withContext forward
+        val inverse = database.linkQueriesQueries.selectInverseLinksByTargetLineIds(lineIds).executeAsList()
+            .filter { activeCommentatorIds.isEmpty() || it.targetBookId in activeCommentatorIds }
+            .map {
+                CommentaryWithText(
+                    link = Link(
+                        id = it.id,
+                        sourceBookId = it.sourceBookId,
+                        targetBookId = it.targetBookId,
+                        sourceLineId = it.sourceLineId,
+                        targetLineId = it.targetLineId,
+                        targetLineIndex = it.targetLineIndex.toInt(),
+                        connectionType = ConnectionType.SOURCE,
+                    ),
+                    targetBookTitle = it.targetBookTitle,
+                    targetText = it.targetText
+                )
+            }
+        forward + inverse
     }
 
     /**
      * Lightweight variant for prefetch/navigation use cases; omits target text content.
+     * When [includeSources] is false (default), only forward links are returned — callers
+     * that need the virtual SOURCE view must opt in.
      */
     suspend fun getCommentarySummariesForLines(
         lineIds: List<Long>,
-        activeCommentatorIds: Set<Long> = emptySet()
+        activeCommentatorIds: Set<Long> = emptySet(),
+        includeSources: Boolean = false,
     ): List<CommentarySummary> = withContext(Dispatchers.IO) {
-        database.linkQueriesQueries.selectLinkSummariesBySourceLineIds(lineIds).executeAsList()
+        if (lineIds.isEmpty()) return@withContext emptyList()
+        val forward = database.linkQueriesQueries.selectLinkSummariesBySourceLineIds(lineIds).executeAsList()
             .filter { activeCommentatorIds.isEmpty() || it.targetBookId in activeCommentatorIds }
             .map {
                 CommentarySummary(
@@ -1532,11 +1685,30 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                         targetBookId = it.targetBookId,
                         sourceLineId = it.sourceLineId,
                         targetLineId = it.targetLineId,
+                        targetLineIndex = it.targetLineIndex.toInt(),
                         connectionType = ConnectionType.fromString(it.connectionType)
                     ),
                     targetBookTitle = it.targetBookTitle
                 )
             }
+        if (!includeSources) return@withContext forward
+        val inverse = database.linkQueriesQueries.selectInverseLinkSummariesByTargetLineIds(lineIds).executeAsList()
+            .filter { activeCommentatorIds.isEmpty() || it.targetBookId in activeCommentatorIds }
+            .map {
+                CommentarySummary(
+                    link = Link(
+                        id = it.id,
+                        sourceBookId = it.sourceBookId,
+                        targetBookId = it.targetBookId,
+                        sourceLineId = it.sourceLineId,
+                        targetLineId = it.targetLineId,
+                        targetLineIndex = it.targetLineIndex.toInt(),
+                        connectionType = ConnectionType.SOURCE,
+                    ),
+                    targetBookTitle = it.targetBookTitle
+                )
+            }
+        forward + inverse
     }
 
     suspend fun getAvailableCommentators(bookId: Long): List<CommentatorInfo> =
@@ -1563,6 +1735,21 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
     ): List<CommentaryWithText> = withContext(Dispatchers.IO) {
         if (lineIds.isEmpty()) return@withContext emptyList()
         if (connectionTypes.isEmpty()) return@withContext emptyList()
+        // SOURCE is a virtual type: route to mirror queries that read inverse
+        // direction (where targetLineId IN lineIds). Mixing SOURCE with other
+        // types is unsupported — callers should query them separately.
+        if (ConnectionType.SOURCE in connectionTypes) {
+            require(connectionTypes.size == 1) {
+                "SOURCE cannot be mixed with other connection types in a single query"
+            }
+            return@withContext getSourceLinksForLineRange(
+                lineIds = lineIds,
+                activeSourceBookIds = activeCommentatorIds,
+                offset = offset,
+                limit = limit,
+                distinctBySourceLine = distinctByTargetLine,
+            )
+        }
         val typeNames = connectionTypes.map { it.name }
         // Use distinct queries when dealing with multiple source lines to avoid duplicate target lines
         val useDistinct = distinctByTargetLine && lineIds.size > 1
@@ -1581,6 +1768,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                             targetBookId = it.targetBookId,
                             sourceLineId = it.sourceLineId ?: 0L,
                             targetLineId = it.targetLineId,
+                            targetLineIndex = (it.targetLineIndex ?: 0L).toInt(),
                             connectionType = ConnectionType.fromString(it.connectionType)
                         ),
                         targetBookTitle = it.targetBookTitle,
@@ -1601,6 +1789,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                             targetBookId = it.targetBookId,
                             sourceLineId = it.sourceLineId,
                             targetLineId = it.targetLineId,
+                            targetLineIndex = it.targetLineIndex.toInt(),
                             connectionType = ConnectionType.fromString(it.connectionType)
                         ),
                         targetBookTitle = it.targetBookTitle,
@@ -1624,6 +1813,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                             targetBookId = it.targetBookId,
                             sourceLineId = it.sourceLineId ?: 0L,
                             targetLineId = it.targetLineId,
+                            targetLineIndex = (it.targetLineIndex ?: 0L).toInt(),
                             connectionType = ConnectionType.fromString(it.connectionType)
                         ),
                         targetBookTitle = it.targetBookTitle,
@@ -1645,6 +1835,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                             targetBookId = it.targetBookId,
                             sourceLineId = it.sourceLineId,
                             targetLineId = it.targetLineId,
+                            targetLineIndex = it.targetLineIndex.toInt(),
                             connectionType = ConnectionType.fromString(it.connectionType)
                         ),
                         targetBookTitle = it.targetBookTitle,
@@ -1653,6 +1844,183 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 }
             }
         }
+    }
+
+    /**
+     * Virtual SOURCE view: returns links where the given lines appear as
+     * `targetLineId` of a stored COMMENTARY/TARGUM/MIDRASH/… link, with
+     * source/target columns swapped and `connectionType = SOURCE`. Mirrors
+     * the pagination/ordering contract of [getCommentariesForLineRange].
+     */
+    private fun getSourceLinksForLineRange(
+        lineIds: List<Long>,
+        activeSourceBookIds: Set<Long>,
+        offset: Int,
+        limit: Int,
+        distinctBySourceLine: Boolean,
+    ): List<CommentaryWithText> {
+        val useDistinct = distinctBySourceLine && lineIds.size > 1
+        return if (activeSourceBookIds.isEmpty()) {
+            if (useDistinct) {
+                database.linkQueriesQueries.selectInverseLinksByTargetLineIdsPagedDistinct(
+                    lineIds,
+                    limit.toLong(),
+                    offset.toLong(),
+                ).executeAsList().map {
+                    CommentaryWithText(
+                        link = Link(
+                            id = it.id ?: 0L,
+                            sourceBookId = it.sourceBookId,
+                            targetBookId = it.targetBookId ?: 0L,
+                            sourceLineId = it.sourceLineId ?: 0L,
+                            targetLineId = it.targetLineId,
+                            targetLineIndex = (it.targetLineIndex ?: 0L).toInt(),
+                            connectionType = ConnectionType.SOURCE,
+                        ),
+                        targetBookTitle = it.targetBookTitle,
+                        targetText = it.targetText,
+                    )
+                }
+            } else {
+                database.linkQueriesQueries.selectInverseLinksByTargetLineIdsPaged(
+                    lineIds,
+                    limit.toLong(),
+                    offset.toLong(),
+                ).executeAsList().map {
+                    CommentaryWithText(
+                        link = Link(
+                            id = it.id,
+                            sourceBookId = it.sourceBookId,
+                            targetBookId = it.targetBookId,
+                            sourceLineId = it.sourceLineId,
+                            targetLineId = it.targetLineId,
+                            targetLineIndex = it.targetLineIndex.toInt(),
+                            connectionType = ConnectionType.SOURCE,
+                        ),
+                        targetBookTitle = it.targetBookTitle,
+                        targetText = it.targetText,
+                    )
+                }
+            }
+        } else {
+            if (useDistinct) {
+                database.linkQueriesQueries.selectInverseLinksByTargetLineIdsAndSourcesPagedDistinct(
+                    lineIds,
+                    activeSourceBookIds.toList(),
+                    limit.toLong(),
+                    offset.toLong(),
+                ).executeAsList().map {
+                    CommentaryWithText(
+                        link = Link(
+                            id = it.id ?: 0L,
+                            sourceBookId = it.sourceBookId,
+                            targetBookId = it.targetBookId ?: 0L,
+                            sourceLineId = it.sourceLineId ?: 0L,
+                            targetLineId = it.targetLineId,
+                            targetLineIndex = (it.targetLineIndex ?: 0L).toInt(),
+                            connectionType = ConnectionType.SOURCE,
+                        ),
+                        targetBookTitle = it.targetBookTitle,
+                        targetText = it.targetText,
+                    )
+                }
+            } else {
+                database.linkQueriesQueries.selectInverseLinksByTargetLineIdsAndSourcesPaged(
+                    lineIds,
+                    activeSourceBookIds.toList(),
+                    limit.toLong(),
+                    offset.toLong(),
+                ).executeAsList().map {
+                    CommentaryWithText(
+                        link = Link(
+                            id = it.id,
+                            sourceBookId = it.sourceBookId,
+                            targetBookId = it.targetBookId,
+                            sourceLineId = it.sourceLineId,
+                            targetLineId = it.targetLineId,
+                            targetLineIndex = it.targetLineIndex.toInt(),
+                            connectionType = ConnectionType.SOURCE,
+                        ),
+                        targetBookTitle = it.targetBookTitle,
+                        targetText = it.targetText,
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Ordered list of per-link target charCounts matching the same filter the
+     * commentaries pager uses. The scrollbar converts every value into
+     * `ceil(charCount / capacity) * capacity` at runtime, where `capacity` is the
+     * measured chars-per-visual-line at the current width/font — so a short item
+     * still contributes one visual line to the total instead of a handful of chars.
+     *
+     * Returns the vector in pager order (`book.orderIndex`, `targetLineIndex`).
+     */
+    suspend fun getCommentaryCharCountsForLines(
+        lineIds: List<Long>,
+        activeCommentatorIds: Set<Long> = emptySet(),
+        connectionTypes: Set<ConnectionType> = setOf(ConnectionType.COMMENTARY),
+    ): List<Int> = withContext(Dispatchers.IO) {
+        if (lineIds.isEmpty() || connectionTypes.isEmpty()) return@withContext emptyList()
+        if (ConnectionType.SOURCE in connectionTypes) {
+            require(connectionTypes.size == 1) {
+                "SOURCE cannot be mixed with other connection types in a single query"
+            }
+            val rows = if (activeCommentatorIds.isEmpty()) {
+                database.linkQueriesQueries
+                    .selectInverseLinkCharCountsByTargetLineIds(lineIds)
+                    .executeAsList()
+            } else {
+                database.linkQueriesQueries
+                    .selectInverseLinkCharCountsByTargetLineIdsAndSources(
+                        lineIds,
+                        activeCommentatorIds.toList(),
+                    )
+                    .executeAsList()
+            }
+            return@withContext rows.map { it.toInt() }
+        }
+        val typeNames = connectionTypes.map { it.name }
+        val rows = if (activeCommentatorIds.isEmpty()) {
+            database.linkQueriesQueries
+                .selectLinkCharCountsBySourceLineIdsAndTypes(lineIds, typeNames)
+                .executeAsList()
+        } else {
+            database.linkQueriesQueries
+                .selectLinkCharCountsBySourceLineIdsTargetsAndTypes(
+                    lineIds,
+                    activeCommentatorIds.toList(),
+                    typeNames,
+                )
+                .executeAsList()
+        }
+        rows.map { it.toInt() }
+    }
+
+    /**
+     * Ordered charCount vector for the line set used by
+     * [io.github.kdroidfilter.seforimapp.pagination.CommentsForLineOrTocPagingSource].
+     * See [getCommentaryCharCountsForLines] for semantics; this variant mirrors the
+     * pager's TOC-heading expansion (and its `maxBatchSize = 64` cap) so the vector
+     * describes exactly the set the user will paginate through.
+     */
+    suspend fun getCommentaryCharCountsForLineOrSection(
+        baseLineId: Long,
+        activeCommentatorIds: Set<Long> = emptySet(),
+        connectionTypes: Set<ConnectionType> = setOf(ConnectionType.COMMENTARY),
+        maxSectionLines: Int = 64,
+    ): List<Int> {
+        val headingToc = getHeadingTocEntryByLineId(baseLineId)
+        val resolvedLineIds = if (headingToc != null) {
+            getLineIdsForTocEntry(headingToc.id)
+                .filter { it != baseLineId }
+                .take(maxSectionLines)
+        } else {
+            listOf(baseLineId)
+        }
+        return getCommentaryCharCountsForLines(resolvedLineIds, activeCommentatorIds, connectionTypes)
     }
 
     suspend fun getAvailableCommentators(
@@ -1708,7 +2076,10 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
                 targetBookId = link.targetBookId,
                 sourceLineId = link.sourceLineId,
                 targetLineId = link.targetLineId,
-                connectionTypeId = connectionTypeId
+                targetLineIndex = link.targetLineIndex.toLong(),
+                targetBookOrderIndex = resolveBookOrderIndex(link.targetBookId),
+                connectionTypeId = connectionTypeId,
+                isDeclaredBase = if (link.isDeclaredBase) 1L else 0L,
             )
             val linkId = database.linkQueriesQueries.lastInsertRowId().executeAsOne()
             logger.d{"Repository inserted link with ID: $linkId"}
@@ -1718,10 +2089,10 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
                 // Try to find a matching link
                 val existingLinks = database.linkQueriesQueries.selectLinksBySourceBook(link.sourceBookId).executeAsList()
-                val matchingLink = existingLinks.find { 
-                    it.targetBookId == link.targetBookId && 
-                    it.sourceLineId == link.sourceLineId && 
-                    it.targetLineId == link.targetLineId 
+                val matchingLink = existingLinks.find {
+                    it.targetBookId == link.targetBookId &&
+                    it.sourceLineId == link.sourceLineId &&
+                    it.targetLineId == link.targetLineId
                 }
 
                 if (matchingLink != null) {
@@ -1756,18 +2127,40 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             }
         }
 
+        // Pre-resolve target book orderIndex per distinct targetBookId (read-through cache).
+        links.asSequence().map { it.targetBookId }.distinct().forEach { resolveBookOrderIndex(it) }
+
         database.transaction {
             links.forEach { link ->
                 val connectionTypeId = typeIdCache[link.connectionType.name]
                     ?: error("Missing connection type id for ${link.connectionType.name}")
+                val targetBookOrderIndex = resolveBookOrderIndex(link.targetBookId)
 
-                database.linkQueriesQueries.insert(
-                    sourceBookId = link.sourceBookId,
-                    targetBookId = link.targetBookId,
-                    sourceLineId = link.sourceLineId,
-                    targetLineId = link.targetLineId,
-                    connectionTypeId = connectionTypeId
-                )
+                val declaredFlag: Long = if (link.isDeclaredBase) 1L else 0L
+                if (link.id > 0) {
+                    database.linkQueriesQueries.insertWithId(
+                        id = link.id,
+                        sourceBookId = link.sourceBookId,
+                        targetBookId = link.targetBookId,
+                        sourceLineId = link.sourceLineId,
+                        targetLineId = link.targetLineId,
+                        targetLineIndex = link.targetLineIndex.toLong(),
+                        targetBookOrderIndex = targetBookOrderIndex,
+                        connectionTypeId = connectionTypeId,
+                        isDeclaredBase = declaredFlag,
+                    )
+                } else {
+                    database.linkQueriesQueries.insert(
+                        sourceBookId = link.sourceBookId,
+                        targetBookId = link.targetBookId,
+                        sourceLineId = link.sourceLineId,
+                        targetLineId = link.targetLineId,
+                        targetLineIndex = link.targetLineIndex.toLong(),
+                        targetBookOrderIndex = targetBookOrderIndex,
+                        connectionTypeId = connectionTypeId,
+                        isDeclaredBase = declaredFlag,
+                    )
+                }
             }
         }
     }
@@ -1831,7 +2224,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Updates the book_has_links table to indicate whether a book has source links, target links, or both.
-     * 
+     *
      * @param bookId The ID of the book to update
      * @param hasSourceLinks Whether the book has source links (true) or not (false)
      * @param hasTargetLinks Whether the book has target links (true) or not (false)
@@ -1849,7 +2242,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Updates only the source links status for a book.
-     * 
+     *
      * @param bookId The ID of the book to update
      * @param hasSourceLinks Whether the book has source links (true) or not (false)
      */
@@ -1865,7 +2258,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Updates only the target links status for a book.
-     * 
+     *
      * @param bookId The ID of the book to update
      * @param hasTargetLinks Whether the book has target links (true) or not (false)
      */
@@ -1907,7 +2300,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Checks if a book has any links (source or target).
-     * 
+     *
      * @param bookId The ID of the book to check
      * @return True if the book has any links, false otherwise
      */
@@ -1925,7 +2318,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Checks if a book has source links.
-     * 
+     *
      * @param bookId The ID of the book to check
      * @return True if the book has source links, false otherwise
      */
@@ -1939,7 +2332,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Checks if a book has target links.
-     * 
+     *
      * @param bookId The ID of the book to check
      * @return True if the book has target links, false otherwise
      */
@@ -1997,7 +2390,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Gets all books that have any links (source or target).
-     * 
+     *
      * @return A list of books that have any links
      */
     suspend fun getBooksWithAnyLinks(): List<Book> = withContext(Dispatchers.IO) {
@@ -2017,7 +2410,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Gets all books that have source links.
-     * 
+     *
      * @return A list of books that have source links
      */
     suspend fun getBooksWithSourceLinks(): List<Book> = withContext(Dispatchers.IO) {
@@ -2037,7 +2430,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Gets all books that have target links.
-     * 
+     *
      * @return A list of books that have target links
      */
     suspend fun getBooksWithTargetLinks(): List<Book> = withContext(Dispatchers.IO) {
@@ -2057,7 +2450,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Counts the number of books that have any links (source or target).
-     * 
+     *
      * @return The number of books that have any links
      */
     suspend fun countBooksWithAnyLinks(): Long = withContext(Dispatchers.IO) {
@@ -2069,7 +2462,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Counts the number of books that have source links.
-     * 
+     *
      * @return The number of books that have source links
      */
     suspend fun countBooksWithSourceLinks(): Long = withContext(Dispatchers.IO) {
@@ -2081,7 +2474,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Counts the number of books that have target links.
-     * 
+     *
      * @return The number of books that have target links
      */
     suspend fun countBooksWithTargetLinks(): Long = withContext(Dispatchers.IO) {
@@ -2094,7 +2487,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Gets all books from the database.
-     * 
+     *
      * @return A list of all books
      */
     suspend fun getAllBooks(): List<Book> = withContext(Dispatchers.IO) {
@@ -2121,7 +2514,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Counts the number of links where the given book is the source.
-     * 
+     *
      * @param bookId The ID of the book to count links for
      * @return The number of links where the book is the source
      */
@@ -2134,7 +2527,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
 
     /**
      * Counts the number of links where the given book is the target.
-     * 
+     *
      * @param bookId The ID of the book to count links for
      * @return The number of links where the book is the target
      */
@@ -2299,6 +2692,89 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) {
             parameters = 0
         ).await()
         result
+    }
+
+    // ─── Explicit-id inserts (delta-update support) ────────────────────────────
+    // These helpers let an external IdAllocator drive primary-key allocation so
+    // that two builds with the same input produce identical row ids. They are
+    // idempotent (ON CONFLICT DO NOTHING for lookup tables): calling them twice
+    // with the same id is safe. See DELTA_UPDATE_PLAN.md §3.3.
+
+    suspend fun insertSourceWithId(id: Long, name: String) = withContext(Dispatchers.IO) {
+        database.sourceQueriesQueries.insertWithId(id, name)
+    }
+
+    suspend fun insertAuthorWithId(id: Long, name: String) = withContext(Dispatchers.IO) {
+        database.authorQueriesQueries.insertWithId(id, name)
+    }
+
+    suspend fun insertTopicWithId(id: Long, name: String) = withContext(Dispatchers.IO) {
+        database.topicQueriesQueries.insertWithId(id, name)
+    }
+
+    suspend fun insertPubPlaceWithId(id: Long, name: String) = withContext(Dispatchers.IO) {
+        database.pubPlaceQueriesQueries.insertWithId(id, name)
+    }
+
+    suspend fun insertPubDateWithId(id: Long, date: String) = withContext(Dispatchers.IO) {
+        database.pubDateQueriesQueries.insertWithId(id, date)
+    }
+
+    suspend fun insertConnectionTypeWithId(id: Long, name: String) = withContext(Dispatchers.IO) {
+        database.connectionTypeQueriesQueries.insertWithId(id, name)
+    }
+
+    suspend fun insertCategoryWithId(
+        id: Long,
+        parentId: Long?,
+        title: String,
+        level: Int,
+        orderIndex: Int,
+    ) = withContext(Dispatchers.IO) {
+        database.categoryQueriesQueries.insertWithId(
+            id = id,
+            parentId = parentId,
+            title = title,
+            level = level.toLong(),
+            orderIndex = orderIndex.toLong(),
+        )
+    }
+
+    suspend fun insertTocTextWithId(id: Long, text: String) = withContext(Dispatchers.IO) {
+        database.tocTextQueriesQueries.insertWithId(id, text)
+    }
+
+    suspend fun insertLinkWithId(
+        id: Long,
+        sourceBookId: Long,
+        targetBookId: Long,
+        sourceLineId: Long,
+        targetLineId: Long,
+        targetLineIndex: Long,
+        connectionTypeId: Long,
+        isDeclaredBase: Boolean = false,
+    ) = withContext(Dispatchers.IO) {
+        database.linkQueriesQueries.insertWithId(
+            id = id,
+            sourceBookId = sourceBookId,
+            targetBookId = targetBookId,
+            sourceLineId = sourceLineId,
+            targetLineId = targetLineId,
+            targetLineIndex = targetLineIndex,
+            targetBookOrderIndex = resolveBookOrderIndex(targetBookId),
+            connectionTypeId = connectionTypeId,
+            isDeclaredBase = if (isDeclaredBase) 1L else 0L,
+        )
+    }
+
+    // ─── schema_meta accessors ────────────────────────────────────────────────
+
+    suspend fun getSchemaMeta(key: String): String? = withContext(Dispatchers.IO) {
+        database.schemaMetaQueriesQueries.getSchemaMeta(key).executeAsOneOrNull()
+    }
+
+    suspend fun setSchemaMeta(key: String, value: String) = withContext(Dispatchers.IO) {
+        database.schemaMetaQueriesQueries.upsertSchemaMeta(key, value)
     }
 
     /**

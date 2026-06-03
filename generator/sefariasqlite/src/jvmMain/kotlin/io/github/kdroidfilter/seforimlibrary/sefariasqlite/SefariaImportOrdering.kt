@@ -4,6 +4,7 @@ import co.touchlab.kermit.Logger
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -38,7 +39,10 @@ internal fun parseTableOfContentsOrders(
         fun processTocItem(item: JsonObject, categoryPath: List<String> = emptyList()) {
             val title = item["title"]?.jsonPrimitive?.contentOrNull
             val heTitle = item["heTitle"]?.jsonPrimitive?.contentOrNull
+            // Use order if available, otherwise fall back to base_text_order (for commentaries)
             val order = item["order"]?.jsonPrimitive?.intOrNull
+                ?: item["base_text_order"]?.jsonPrimitive?.intOrNull
+                ?: item["base_text_order"]?.jsonPrimitive?.doubleOrNull?.toInt()
             if (title != null && order != null) {
                 bookOrders[title] = order
             }

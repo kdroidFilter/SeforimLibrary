@@ -12,6 +12,7 @@ interface TextIndexWriter : AutoCloseable {
      * @param bookId The book id
      * @param bookTitle The book title (for display)
      * @param categoryId The category id of the book
+     * @param ancestorCategoryIds List of ancestor category IDs (including categoryId itself) for filtering
      * @param lineId The line id
      * @param lineIndex The 0-based line index within the book
      * @param normalizedText Normalized text to index in the primary field (typically StandardAnalyzer)
@@ -24,6 +25,7 @@ interface TextIndexWriter : AutoCloseable {
         bookId: Long,
         bookTitle: String,
         categoryId: Long,
+        ancestorCategoryIds: List<Long> = emptyList(),
         lineId: Long,
         lineIndex: Int,
         normalizedText: String,
@@ -43,6 +45,14 @@ interface TextIndexWriter : AutoCloseable {
         displayTitle: String,
         term: String
     )
+
+    /**
+     * Removes the line document whose stored `line_id` matches [lineId].
+     * Default no-op for non-line stores. Used by the delta-update client
+     * to keep Lucene in lockstep with `seforim.db` when the patch deletes
+     * a line.
+     */
+    fun deleteLineById(lineId: Long) { /* default no-op */ }
 
     /**
      * Flush and commit pending writes.

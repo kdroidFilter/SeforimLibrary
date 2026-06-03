@@ -8,6 +8,20 @@ internal fun trimTrailingSeparators(value: String): String =
 // Pre-computed gematria lookup table for common values
 private val gematriaCache = ConcurrentHashMap<Int, String>()
 
+// Hot-path regex constants: these were being recompiled on every CSV row in
+// the Sefaria links phase (~7.5 M rows × 2-3 calls/row = tens of millions of
+// recompilations). JFR 2026-05-13 showed normalizeCitation + canonicalBase
+// near the top of the post-optimisation hot list.
+private val WHITESPACE_REGEX = "\\s+".toRegex()
+private val COLON_VERSE_TAIL_REGEX = Regex(":\\d+[ab]?(?:-\\d+[ab]?)?$")
+private val TRAILING_SPACES_NUMBER_REGEX = Regex(" +(\\d+[ab]?)$")
+
+// Memoize canonicalCitation: the same source strings ("Genesis 1:1",
+// "Berakhot 2a", …) get canonicalised millions of times across the links
+// phase. Bounded so a pathological corpus can't blow up the heap.
+private const val CANONICAL_CACHE_MAX = 500_000
+private val canonicalCitationCache = ConcurrentHashMap<String, String>()
+
 internal fun toGematria(num: Int): String {
     if (num <= 0) return num.toString()
 
@@ -133,10 +147,19 @@ internal fun parseCsvLine(line: String): List<String> {
 }
 
 internal fun normalizeCitation(raw: String): String =
-    raw.trim().trim('"', '\'').replace("\\s+".toRegex(), " ")
+    raw.trim().trim('"', '\'').replace(WHITESPACE_REGEX, " ")
 
-internal fun canonicalCitation(raw: String): String =
-    normalizeCitation(raw).replace(",", "").lowercase()
+internal fun canonicalCitation(raw: String): String {
+    // Fast cache hit on the typical "same citation seen N times" pattern.
+    canonicalCitationCache[raw]?.let { return it }
+    val computed = normalizeCitation(raw).replace(",", "").lowercase()
+    // Bound the cache: drop everything if it crosses the cap. Simpler than
+    // an LRU and good enough since the corpus has a bounded set of unique
+    // citations (~hundreds of thousands).
+    if (canonicalCitationCache.size > CANONICAL_CACHE_MAX) canonicalCitationCache.clear()
+    canonicalCitationCache[raw] = computed
+    return computed
+}
 
 internal fun canonicalTail(raw: String): String {
     val canonical = canonicalCitation(raw)
@@ -165,9 +188,9 @@ internal fun stripBookAlias(canonical: String, aliases: Set<String>): String {
 
 internal fun canonicalBase(citation: String): String {
     val normalized = canonicalCitation(citation)
-    val stripAfterColon = normalized.replace(Regex(":\\d+[ab]?(?:-\\d+[ab]?)?$"), "")
+    val stripAfterColon = normalized.replace(COLON_VERSE_TAIL_REGEX, "")
     return stripAfterColon
-        .replace(Regex(" +(\\d+[ab]?)$"), " $1")
+        .replace(TRAILING_SPACES_NUMBER_REGEX, " $1")
         .trim()
 }
 

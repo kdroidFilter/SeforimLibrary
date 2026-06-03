@@ -63,8 +63,8 @@ private suspend fun buildCatalogTree(repository: SeforimRepository, logger: Logg
 
     val rootCategories = repository.getRootCategories().sortedBy { it.order }
     var totalCategories = 0
-    val roots = rootCategories.map { root ->
-        buildCatalogCategoryRecursive(root, booksByCategory, repository).also {
+    val roots = rootCategories.mapNotNull { root ->
+        buildCatalogCategoryRecursive(root, booksByCategory, repository)?.also {
             totalCategories += countCategories(it)
         }
     }
@@ -83,7 +83,7 @@ private suspend fun buildCatalogCategoryRecursive(
     category: Category,
     booksByCategory: Map<Long, List<Book>>,
     repository: SeforimRepository
-): CatalogCategory {
+): CatalogCategory? {
     val books = booksByCategory[category.id]
         ?.map { book ->
             CatalogBook(
@@ -107,7 +107,12 @@ private suspend fun buildCatalogCategoryRecursive(
 
     val subcategories = repository.getCategoryChildren(category.id)
         .sortedBy { it.order }
-        .map { child -> buildCatalogCategoryRecursive(child, booksByCategory, repository) }
+        .mapNotNull { child -> buildCatalogCategoryRecursive(child, booksByCategory, repository) }
+
+    // Skip empty categories (no books and no non-empty subcategories)
+    if (books.isEmpty() && subcategories.isEmpty()) {
+        return null
+    }
 
     return CatalogCategory(
         id = category.id,

@@ -1,12 +1,20 @@
 package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
+import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings
 import io.github.kdroidfilter.seforimlibrary.core.models.AltTocEntry
 import io.github.kdroidfilter.seforimlibrary.core.models.AltTocStructure
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 
 internal class SefariaAltTocBuilder(
-    private val repository: SeforimRepository
+    private val repository: SeforimRepository,
+    @Suppress("unused") private val bindings: IdAllocatorBindings,
 ) {
+    // NOTE: alt_toc_entry ids are still auto-allocated here. Their natural-key
+    // wiring (DELTA_UPDATE_PLAN.md §3.3, `(structure_id, ancestor_path)`)
+    // requires threading a deterministic path through the recursive traversal
+    // (createContainerEntry / traverseAltNode / addEntry). Deferred to Phase 1.5
+    // — alt-toc rows are rebuilt wholesale per book so unstable ids cost an
+    // extra DELETE+INSERT batch but don't affect cross-book stability.
     suspend fun buildAltTocStructuresForBook(
         payload: BookPayload,
         bookId: Long,
@@ -18,7 +26,13 @@ internal class SefariaAltTocBuilder(
 
         var hasGeneratedAltStructures = false
 
-        val isTalmudTractate = payload.categoriesHe.any { it.contains("תלמוד") }
+        // Only Bavli tractates should suppress alt-struct child enumeration —
+        // their main schema already renders daf-by-daf, so enumerating refs
+        // under the alt-struct produces duplicates. Yerushalmi uses a
+        // chapter×halakhah×segment main schema and Venice/Vilna alt-structs
+        // that MUST be expanded to produce daf (column) headings.
+        val isYerushalmi = payload.categoriesHe.any { it.contains("ירושלמי") }
+        val isTalmudTractate = payload.categoriesHe.any { it.contains("תלמוד") } && !isYerushalmi
         val isShulchanArukhCode = payload.categoriesHe.any { it.contains("שולחן ערוך") }
         val isTurCode = payload.categoriesHe.any { it.contains("טור") }
 
@@ -62,7 +76,7 @@ internal class SefariaAltTocBuilder(
 
         payload.altStructures.forEach { structure ->
             val isPsalms30DayCycle = structure.key == "30 Day Cycle"
-            val structureId = repository.upsertAltTocStructure(
+            val structureId = bindings.upsertAltTocStructureStable(
                 AltTocStructure(
                     bookId = bookId,
                     key = structure.key,
@@ -78,7 +92,7 @@ internal class SefariaAltTocBuilder(
 
             fun parseDafIndex(address: String?): Int? {
                 if (address.isNullOrBlank()) return null
-                val match = Regex("(\\d+)([ab])?", RegexOption.IGNORE_CASE).find(address.trim())
+                val match = DAF_INDEX_REGEX.find(address.trim())
                 val (pageStr, amudRaw) = match?.destructured ?: return null
                 val page = pageStr.toIntOrNull() ?: return null
                 val amud = amudRaw.lowercase()
@@ -128,8 +142,8 @@ internal class SefariaAltTocBuilder(
                     val variants = linkedSetOf(key).apply {
                         if (key.contains('.')) {
                             add(key.replace('.', ' '))
-                            add(key.replace(Regex("\\.(\\d+)")) { match -> ":${match.groupValues[1]}" })
-                            add(key.replace(Regex("\\.(\\d+)")) { match -> " ${match.groupValues[1]}" })
+                            add(key.replace(DOTTED_INDEX_REGEX) { match -> ":${match.groupValues[1]}" })
+                            add(key.replace(DOTTED_INDEX_REGEX) { match -> " ${match.groupValues[1]}" })
                             add(key.replace(".", ""))
                         }
                     }.filter { it.isNotBlank() }
@@ -224,22 +238,7 @@ internal class SefariaAltTocBuilder(
                 return null to null
             }
 
-            fun mapBaseToHebrew(base: String?): String? {
-                if (base.isNullOrBlank()) return null
-                val norm = base.lowercase()
-                return when {
-                    "aliyah" in norm -> "עליה"
-                    "daf" in norm -> "דף"
-                    "chapter" in norm -> "פרק"
-                    "perek" in norm -> "פרק"
-                    "siman" in norm -> "סימן"
-                    "section" in norm -> "סימן"
-                    "klal" in norm -> "כלל"
-                    "psalm" in norm || "psalms" in norm -> "מזמור"
-                    "day" in norm -> "יום"
-                    else -> base
-                }
-            }
+            fun mapBaseToHebrew(base: String?): String? = mapSectionNameToHebrew(base)
 
             fun buildChildLabel(base: String?, idx: Int, addressValue: Int?, addressType: String?): String {
                 val numericValue = (addressValue ?: (idx + 1)).coerceAtLeast(1)
@@ -320,7 +319,11 @@ internal class SefariaAltTocBuilder(
                     AltTocEntry(
                         structureId = structureId,
                         parentId = parentId,
-                        textId = null,
+                        // Pre-resolve via IdAllocator so the tocText row gets
+                        // inserted at the allocator-assigned id; otherwise the
+                        // repo's getOrCreateTocText falls back to auto-increment
+                        // and the delta producer's stable-id invariant breaks.
+                        textId = bindings.upsertTocText(text),
                         text = text,
                         level = level,
                         lineId = lineId,
@@ -354,7 +357,9 @@ internal class SefariaAltTocBuilder(
                             AltTocEntry(
                                 structureId = structureId,
                                 parentId = tocId,
-                                textId = null,
+                                // Same allocator-routing as above so child labels
+                                // get the stable id reserved by the allocator.
+                                textId = bindings.upsertTocText(label),
                                 text = label,
                                 level = level + 1,
                                 lineId = childLineId,
@@ -390,7 +395,11 @@ internal class SefariaAltTocBuilder(
                     AltTocEntry(
                         structureId = structureId,
                         parentId = parentId,
-                        textId = null,
+                        // Pre-resolve via IdAllocator so the tocText row gets
+                        // inserted at the allocator-assigned id; otherwise the
+                        // repo's getOrCreateTocText falls back to auto-increment
+                        // and the delta producer's stable-id invariant breaks.
+                        textId = bindings.upsertTocText(text),
                         text = text,
                         level = level,
                         lineId = null,
@@ -435,7 +444,9 @@ internal class SefariaAltTocBuilder(
                             AltTocEntry(
                                 structureId = structureId,
                                 parentId = currentParent,
-                                textId = null,
+                                // Same allocator-routing as above so child labels
+                                // get the stable id reserved by the allocator.
+                                textId = bindings.upsertTocText(label),
                                 text = label,
                                 level = level,
                                 lineId = childLineId,
@@ -514,5 +525,13 @@ internal class SefariaAltTocBuilder(
             }
         }
         return hasGeneratedAltStructures
+    }
+
+    companion object {
+        // Lift these out of the hot loop — regex compile is non-trivial and
+        // these were being created per call to parseDafIndex / per key
+        // replace (called millions of times for the alt-TOC builder).
+        private val DAF_INDEX_REGEX = Regex("(\\d+)([ab])?", RegexOption.IGNORE_CASE)
+        private val DOTTED_INDEX_REGEX = Regex("\\.(\\d+)")
     }
 }

@@ -6,6 +6,10 @@ SELECT * FROM book ORDER BY orderIndex, title;
 selectById:
 SELECT * FROM book WHERE id = ?;
 
+-- Lightweight lookup used when denormalizing book.orderIndex onto link rows at insert time.
+selectOrderIndexById:
+SELECT orderIndex FROM book WHERE id = ?;
+
 selectByCategoryId:
 SELECT * FROM book WHERE categoryId = ? ORDER BY orderIndex, title;
 
@@ -32,7 +36,7 @@ selectByAuthor:
 SELECT b.* FROM book b
 JOIN book_author ba ON b.id = ba.bookId
 JOIN author a ON ba.authorId = a.id
-WHERE a.name LIKE ? 
+WHERE a.name LIKE ?
 ORDER BY b.orderIndex, b.title;
 
 -- Base-books helpers
@@ -40,12 +44,15 @@ selectBaseIds:
 SELECT id FROM book WHERE isBaseBook = 1 ORDER BY orderIndex, title;
 
 insert:
-INSERT INTO book (categoryId, sourceId, title, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook, hasSourceConnection, hasAltStructures, hasTeamim, hasNekudot)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO book (categoryId, sourceId, title, heRef, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook, hasSourceConnection, hasAltStructures, hasTeamim, hasNekudot)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT INTO book (id, categoryId, sourceId, title, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook, hasSourceConnection, hasAltStructures, hasTeamim, hasNekudot)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR IGNORE INTO book (id, categoryId, sourceId, title, heRef, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook, hasSourceConnection, hasAltStructures, hasTeamim, hasNekudot)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectByHeRef:
+SELECT * FROM book WHERE heRef = ? LIMIT 1;
 
 updateTotalLines:
 UPDATE book SET totalLines = ? WHERE id = ?;
@@ -67,7 +74,7 @@ UPDATE book SET categoryId = ? WHERE id = ?;
 
 -- Update connection flags on book
 updateConnectionFlags:
-UPDATE book SET 
+UPDATE book SET
     hasTargumConnection = ?,
     hasReferenceConnection = ?,
     hasSourceConnection = ?,

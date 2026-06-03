@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
 import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings
 import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
 import io.github.kdroidfilter.seforimlibrary.core.models.Link
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
@@ -14,6 +15,7 @@ import java.nio.file.Path
 
 internal class SefariaLinksImporter(
     private val repository: SeforimRepository,
+    private val bindings: IdAllocatorBindings,
     private val logger: Logger
 ) {
     suspend fun processLinksInParallel(
@@ -25,6 +27,10 @@ internal class SefariaLinksImporter(
         bookMetaById: Map<Long, BookMeta>,
         headingLineIds: Set<Long> = emptySet()
     ) = coroutineScope {
+        // Pre-register all connection types we'll use so their ids are stable
+        // (so `link.connectionTypeId` is reproducible across builds).
+        ConnectionType.values().forEach { bindings.upsertConnectionType(it.name) }
+
         val csvFiles = Files.list(linksDir)
             .filter { it.fileName.toString().endsWith(".csv") }
             .toList()
@@ -105,38 +111,114 @@ internal class SefariaLinksImporter(
                 val toRefs = resolveRefs(c2, refsByCanonical, refsByBase)
                 if (fromRefs.isEmpty() || toRefs.isEmpty()) continue
 
+                // Hoisted: `conn` is constant across the inner pair loop, no
+                // reason to re-parse it for every (from, to) combination.
+                val csvConnectionType = ConnectionType.fromString(conn)
+                // `Conection Type` is blank for ~36% of CSV rows. We try to
+                // recover those via schema metadata inside the inner loop —
+                // the inference is per-pair because the bookId depends on the
+                // resolved line.
+                val connIsBlank = conn.isBlank() ||
+                    conn.equals("none", ignoreCase = true)
+
                 for (from in fromRefs) {
                     for (to in toRefs) {
-                        val srcLine = lineKeyToId[from.path to (from.lineIndex - 1)] ?: continue
-                        val tgtLine = lineKeyToId[to.path to (to.lineIndex - 1)] ?: continue
+                        val srcLineIndex = from.lineIndex - 1
+                        val tgtLineIndex = to.lineIndex - 1
+                        val srcLine = lineKeyToId[from.path to srcLineIndex] ?: continue
+                        val tgtLine = lineKeyToId[to.path to tgtLineIndex] ?: continue
                         // Skip links where source or target is a heading line
                         if (srcLine in headingLineIds || tgtLine in headingLineIds) continue
-                        val baseConnectionType = ConnectionType.fromString(conn)
-                        val (forwardType, reverseType) = resolveDirectionalConnectionTypes(
+                        val srcBookId = lineBookId(srcLine, lineIdToBookId)
+                        val tgtBookId = lineBookId(tgtLine, lineIdToBookId)
+                        // Upgrade blank/none Conection Type to a schema-derived
+                        // type when one side explicitly declares the other as
+                        // its base text. Without this, ~1.5M legitimate
+                        // commentary/targum links (e.g. Abarbanel → Tanakh
+                        // verse it expounds) silently land in OTHER and are
+                        // excluded from the SOURCE view.
+                        val baseConnectionType = if (connIsBlank) {
+                            inferConnectionTypeFromSchema(
+                                srcBookId = srcBookId,
+                                tgtBookId = tgtBookId,
+                                srcMeta = bookMetaById[srcBookId],
+                                tgtMeta = bookMetaById[tgtBookId],
+                            ) ?: csvConnectionType
+                        } else {
+                            csvConnectionType
+                        }
+                        // Drop self-commentary / self-targum links. Sefaria ships a handful
+                        // of links that point back to the same book (e.g. Genesis → Genesis
+                        // tagged as COMMENTARY), which makes the book appear as a
+                        // commentator on itself in the reader's "מפרשים" panel
+                        // (Zayit issue #300). Cross-references (OTHER / REFERENCE) are
+                        // legitimate inside a single book and are kept.
+                        if (srcBookId == tgtBookId &&
+                            (baseConnectionType == ConnectionType.COMMENTARY ||
+                                baseConnectionType == ConnectionType.TARGUM)
+                        ) {
+                            continue
+                        }
+                        // Normalize direction: one row per CSV link, stored in the
+                        // canonical base→dependant direction when applicable. SOURCE
+                        // is never persisted — it is synthesized at read time from
+                        // links where the line appears as `targetLineId`.
+                        val (forwardType, _) = resolveDirectionalConnectionTypes(
                             baseType = baseConnectionType,
-                            sourceBookId = lineBookId(srcLine, lineIdToBookId),
-                            targetBookId = lineBookId(tgtLine, lineIdToBookId),
+                            sourceBookId = srcBookId,
+                            targetBookId = tgtBookId,
                             bookMetaById = bookMetaById
                         )
 
-                        // Send links to channel
-                        linkChannel.send(
-                            Link(
-                                sourceBookId = lineBookId(srcLine, lineIdToBookId),
-                                targetBookId = lineBookId(tgtLine, lineIdToBookId),
-                                sourceLineId = srcLine,
-                                targetLineId = tgtLine,
-                                connectionType = forwardType
-                            )
-                        )
+                        val (storedSrcBook, storedTgtBook, storedSrcLine, storedTgtLine,
+                            storedTgtLineIndex, storedType) =
+                            if (forwardType == ConnectionType.SOURCE) {
+                                // CSV had the dependant book as Citation 1; swap so
+                                // the stored row goes base→dependant with the
+                                // semantic type (COMMENTARY / TARGUM / …).
+                                StoredLink(
+                                    srcBookId = tgtBookId,
+                                    tgtBookId = srcBookId,
+                                    srcLineId = tgtLine,
+                                    tgtLineId = srcLine,
+                                    tgtLineIndex = srcLineIndex,
+                                    connectionType = baseConnectionType
+                                )
+                            } else {
+                                StoredLink(
+                                    srcBookId = srcBookId,
+                                    tgtBookId = tgtBookId,
+                                    srcLineId = srcLine,
+                                    tgtLineId = tgtLine,
+                                    tgtLineIndex = tgtLineIndex,
+                                    connectionType = forwardType
+                                )
+                            }
+
+                        val typeId = bindings.upsertConnectionType(storedType.name)
+
+                        // Flag: was this orientation chosen because the target's
+                        // schema **explicitly declares** the source as a base text?
+                        // Only true for Sefaria-declared `base_text_titles` matches
+                        // — NOT for density chaining, primary-base inference, or
+                        // priorityRank fallback. Used by the SOURCE virtual view
+                        // to boost Sefaria-confirmed bases above lateral citations
+                        // (e.g. Mishnah Avot at #1 for Nachalat Avot, even though
+                        // Tehillim has 4× more citations).
+                        val storedTgtMeta = bookMetaById[storedTgtBook]
+                        val isDeclaredBase = storedTgtMeta != null &&
+                            storedSrcBook in storedTgtMeta.sefariaDeclaredBaseTextBookIds
 
                         linkChannel.send(
                             Link(
-                                sourceBookId = lineBookId(tgtLine, lineIdToBookId),
-                                targetBookId = lineBookId(srcLine, lineIdToBookId),
-                                sourceLineId = tgtLine,
-                                targetLineId = srcLine,
-                                connectionType = reverseType
+                                id = bindings.allocator.linkId(storedSrcLine, storedTgtLine, typeId),
+                                sourceBookId = storedSrcBook,
+                                targetBookId = storedTgtBook,
+                                sourceLineId = storedSrcLine,
+                                targetLineId = storedTgtLine,
+                                targetLineIndex = storedTgtLineIndex,
+                                connectionType = storedType,
+                                isDeclaredBase = isDeclaredBase,
                             )
                         )
                     }
@@ -144,6 +226,15 @@ internal class SefariaLinksImporter(
             }
         }
     }
+
+    private data class StoredLink(
+        val srcBookId: Long,
+        val tgtBookId: Long,
+        val srcLineId: Long,
+        val tgtLineId: Long,
+        val tgtLineIndex: Int,
+        val connectionType: ConnectionType,
+    )
 
     private fun lineBookId(lineId: Long, lineIdToBookId: Map<Long, Long>): Long =
         lineIdToBookId[lineId] ?: 0
@@ -161,6 +252,112 @@ internal class SefariaLinksImporter(
             sourceMeta = bookMetaById[sourceBookId],
             targetMeta = bookMetaById[targetBookId]
         )
+    }
+
+    /**
+     * Demote dependant-typed links whose source and target books live in
+     * incompatible corpora.
+     *
+     * Sefaria categorises every book under a top-level corpus
+     * (`תנ״ך` / `תלמוד` / `משנה` / `הלכה` / `חסידות` / `קבלה` / `מוסר` /
+     * `מחשבת ישראל` / …). That categorisation IS Sefaria's authoritative
+     * statement of what a book is "anchored on". A link tagged COMMENTARY
+     * between two books whose anchored corpora don't overlap is structurally
+     * inconsistent — the CSV row is treating a cross-corpus citation as a
+     * dependant relationship.
+     *
+     * Concrete examples this catches:
+     *  - תורה תמימה (anchored on תנ״ך) ↔ ברכות (anchored on תלמוד):
+     *    425 CSV COMMENTARY rows because Tora Temima's footnotes cite the
+     *    Berakhot sugya. Tora Temima is a Torah commentary, not a Talmud
+     *    commentary, so on the Berakhot reader page it's editorial noise.
+     *  - אגרות צפון (anchored on מחשבת ישראל) ↔ בראשית (תנ״ך):
+     *    1 stray COMMENTARY row out of 13 — Sefaria CSV typo. Igrot Tzafon
+     *    is an independent treatise on Jewish thought, not a Tanakh
+     *    commentary.
+     *  - בית יוסף (הלכה) ↔ ברכות (תלמוד): Beit Yosef commentates on Tur, not
+     *    on Talmud directly.
+     *
+     * Cross-corpus dependant signals that ARE legitimate:
+     *  - חסידות / קבלה / מילונים: cross-cutting corpora that legitimately
+     *    commentate across Tanakh / Talmud / Halakha. Mishna ↔ Talmud is
+     *    also a single editorial cluster.
+     *
+     * Otzaria-sourced books (sourceId != 1) bypass this rule entirely —
+     * they're imported through a separate pipeline whose links are curated
+     * per-book (e.g. Chevruta-Talmud via [generateHavroutaLinks]).
+     *
+     * Demoted links land in RELATED so the connection panel still shows
+     * them as cross-references but the commentator panel
+     * (`ct.name IN COMMENTARY/SUPER_COMMENTARY/…`) excludes them.
+     */
+    suspend fun demoteCrossCorpusDependantLinks() {
+        val dependantTypes = listOf(
+            "COMMENTARY", "SUPER_COMMENTARY", "TARGUM", "MIDRASH", "PARSHANUT",
+        ).joinToString(",") { "'$it'" }
+        // Build a temp table (bookId, corpusKey) for every book — corpusKey
+        // is the top-level Sefaria-category title the book transitively
+        // descends from (NULL for books whose chain doesn't reach a known
+        // corpus root).
+        // NB: a regular table, not TEMP. executeRawQuery runs each statement
+        // through the SQLDelight JdbcSqliteDriver, which on a file-backed DB may
+        // serve a different pooled connection per call. TEMP tables are
+        // connection-scoped, so the CREATE and the later UPDATE…JOIN _book_corpus
+        // could land on different connections — yielding "no such table:
+        // _book_corpus". A plain table is visible across connections; the
+        // DROP IF EXISTS guards on both ends keep it out of the shipped DB.
+        repository.executeRawQuery("DROP TABLE IF EXISTS _book_corpus")
+        repository.executeRawQuery(
+            "CREATE TABLE _book_corpus (bookId INTEGER PRIMARY KEY NOT NULL, corpus TEXT) WITHOUT ROWID"
+        )
+        // category_closure(ancestorId, descendantId) lets us tag each book
+        // by checking whether any of its category ancestors matches a known
+        // corpus root. CASE picks the most-specific matching corpus name.
+        repository.executeRawQuery(
+            """
+            INSERT INTO _book_corpus (bookId, corpus)
+            SELECT b.id, MIN(c.title) AS corpus
+            FROM book b
+            JOIN category_closure cc ON cc.descendantId = b.categoryId
+            JOIN category c ON c.id = cc.ancestorId
+            WHERE c.title IN ('תנ״ך','תלמוד','משנה','משניות','הלכה','חסידות','קבלה','מדרש','מוסר','ספרי מוסר','מחשבת ישראל')
+            GROUP BY b.id
+            """.trimIndent()
+        )
+        // Cross-cutting target corpora — commentators in these corpora
+        // legitimately span Tanakh/Talmud/Halakha and must NOT be demoted.
+        // 'מדרש' is anchored on Tanakh; everything else strict is on its
+        // own corpus.
+        val crossCutting = listOf("חסידות", "קבלה").joinToString(",") { "'$it'" }
+        // Allowed pairs of (source corpus, target corpus) when corpora differ:
+        //   - same corpus (handled by NOT IN)
+        //   - target in cross-cutting set
+        //   - {משנה ↔ תלמוד} cluster
+        //   - {משניות ↔ תלמוד} cluster
+        //   - {מדרש → תנ״ך}: a Midrash commentates on a Tanakh book, so
+        //     Tanakh-source → Midrash-target is the canonical direction.
+        repository.executeRawQuery(
+            """
+            UPDATE link SET connectionTypeId = (SELECT id FROM connection_type WHERE name='RELATED' LIMIT 1)
+            WHERE isDeclaredBase = 0
+              AND connectionTypeId IN (SELECT id FROM connection_type WHERE name IN ($dependantTypes))
+              AND EXISTS (
+                SELECT 1
+                FROM book sb JOIN book tb
+                  ON sb.id = link.sourceBookId AND tb.id = link.targetBookId
+                JOIN _book_corpus sc ON sc.bookId = sb.id
+                JOIN _book_corpus tc ON tc.bookId = tb.id
+                WHERE sb.sourceId = 1 AND tb.sourceId = 1
+                  AND sc.corpus IS NOT NULL AND tc.corpus IS NOT NULL
+                  AND sc.corpus != tc.corpus
+                  AND tc.corpus NOT IN ($crossCutting)
+                  AND NOT (sc.corpus IN ('תלמוד') AND tc.corpus IN ('משנה','משניות'))
+                  AND NOT (sc.corpus IN ('משנה','משניות') AND tc.corpus IN ('תלמוד'))
+                  AND NOT (sc.corpus = 'תנ״ך' AND tc.corpus = 'מדרש')
+              )
+            """.trimIndent()
+        )
+        repository.executeRawQuery("DROP TABLE IF EXISTS _book_corpus")
     }
 
     suspend fun updateBookHasLinks() {
@@ -211,12 +408,110 @@ internal class SefariaLinksImporter(
 
         setConnFlag("TARGUM", "hasTargumConnection")
         setConnFlag("REFERENCE", "hasReferenceConnection")
-        setConnFlag("SOURCE", "hasSourceConnection", includeTargets = false, excludeSelfLinks = true)
         setConnFlag("COMMENTARY", "hasCommentaryConnection")
         setConnFlag("OTHER", "hasOtherConnection")
+
+        // hasSourceConnection: virtual flag — set when this book is the *target*
+        // (dependant side) of any stored *oriented* dependant link. Only types
+        // whose direction has clear base→dep semantics are considered; lateral
+        // types (QUOTATION, MISHNAH_IN_TALMUD, MESORAT_HASHAS, RELATED) are NOT
+        // sources — Talmud quoting Mishna does not make Talmud a "source" of
+        // Mishna. EIN_MISHPAT is included: it is the canonical halakhic-index
+        // pointer from a Talmud sugya to the matching halakhah in Mishneh
+        // Torah / Shulchan Arukh / Tur (the code derives FROM the Talmud).
+        // Keep this list in sync with the mirror SOURCE queries in LinkQueries.sq.
+        val dependantTypes = listOf(
+            "COMMENTARY", "SUPER_COMMENTARY", "TARGUM", "MIDRASH",
+            "PARSHANUT", "DIBUR_HAMATCHIL", "EIN_MISHPAT",
+        ).joinToString(",") { "'$it'" }
+        repository.executeRawQuery(
+            "UPDATE book SET hasSourceConnection=1 WHERE id IN (" +
+                "SELECT DISTINCT l.targetBookId FROM link l " +
+                "JOIN connection_type ct ON ct.id = l.connectionTypeId " +
+                "WHERE ct.name IN ($dependantTypes) AND l.sourceBookId != l.targetBookId" +
+                ")"
+        )
     }
 }
 
+/**
+ * Types whose direction has a semantic base→dependant orientation. For these,
+ * we normalize the stored direction so that the base book is always on the
+ * `source` side and the dependant book on the `target` side.
+ *
+ * Symmetric / lateral types (REFERENCE, OTHER, RELATED, QUOTATION,
+ * MESORAT_HASHAS, MISHNAH_IN_TALMUD) keep Sefaria's `Citation 1 → Citation 2`
+ * direction verbatim — they don't have a clear "base/commentary" semantics.
+ */
+private fun Dependence.toConnectionType(): ConnectionType = when (this) {
+    Dependence.COMMENTARY -> ConnectionType.COMMENTARY
+    Dependence.TARGUM -> ConnectionType.TARGUM
+    Dependence.MIDRASH -> ConnectionType.MIDRASH
+    // Sub-Commentary / Guides / etc. — collapsed to COMMENTARY for the
+    // purposes of the SOURCE view (they're all oriented dependants).
+    Dependence.OTHER_DEPENDANT -> ConnectionType.COMMENTARY
+}
+
+/**
+ * When the CSV's `Conection Type` is empty, decide the link's type from
+ * schema metadata. Returns the dependant side's connection type if exactly
+ * one side declares the other as its base text; null otherwise (link stays
+ * OTHER, the caller's fallback).
+ */
+internal fun inferConnectionTypeFromSchema(
+    srcBookId: Long,
+    tgtBookId: Long,
+    srcMeta: BookMeta?,
+    tgtMeta: BookMeta?,
+): ConnectionType? {
+    val targetDependsOnSource = tgtMeta != null && srcBookId in tgtMeta.baseTextBookIds
+    val sourceDependsOnTarget = srcMeta != null && tgtBookId in srcMeta.baseTextBookIds
+    return when {
+        targetDependsOnSource && !sourceDependsOnTarget ->
+            tgtMeta.dependence?.toConnectionType() ?: ConnectionType.COMMENTARY
+        sourceDependsOnTarget && !targetDependsOnSource ->
+            srcMeta.dependence?.toConnectionType() ?: ConnectionType.COMMENTARY
+        else -> null
+    }
+}
+
+private val ORIENTED_DEPENDANT_TYPES = setOf(
+    ConnectionType.COMMENTARY,
+    ConnectionType.SUPER_COMMENTARY,
+    ConnectionType.TARGUM,
+    ConnectionType.MIDRASH,
+    ConnectionType.PARSHANUT,
+    ConnectionType.DIBUR_HAMATCHIL,
+    // Ein Mishpat / Ner Mitzvah is the standard halakhic-index layer on the
+    // Talmud folio that anchors each sugya to the matching halakhah in
+    // Mishneh Torah / Tur / Shulchan Arukh / Sefer Mitzvot Gadol. Sefaria
+    // ships these as `ein mishpat / ner mitsvah` Conection Type. The CSV
+    // typically lists the halakhic code first (e.g. `Mishneh Torah, Sabbath
+    // 1:1 → Shabbat 2a`). We treat them as oriented so the priorityRank
+    // fallback swaps the row into Talmud→code direction (Talmud sits much
+    // earlier in the priority list than MT/SA/Tur), which makes the Talmud
+    // tractate appear in the code's SOURCE virtual view.
+    ConnectionType.EIN_MISHPAT,
+)
+
+/**
+ * Resolves which side of an oriented-dependant link is the base text and which
+ * is the dependant. The output pair is (sourceConnectionType, targetConnectionType)
+ * where `SOURCE` marks the base-text side — i.e. the side we'd later flip onto
+ * the `target` column when storing the canonical base→dependant row.
+ *
+ * Signals, by descending strength:
+ *   1. **Schema `base_text_titles`** — explicit declaration that book A depends
+ *      on book B. This is Sefaria's own metadata and is right by construction.
+ *   2. **Schema `dependence`** — one side is flagged as dependant and the other
+ *      isn't, so the non-dependant side is the base.
+ *   3. **`isBaseBook` curated flag** — kept for books that lack schema info
+ *      but appear in our priority list.
+ *   4. **`priorityRank`** — last-resort heuristic when both sides are equivalent
+ *      under all signals above.
+ *
+ * When no signal fires, the CSV direction is kept as-is.
+ */
 internal fun resolveDirectionalConnectionTypesForMeta(
     baseType: ConnectionType,
     sourceBookId: Long,
@@ -224,52 +519,71 @@ internal fun resolveDirectionalConnectionTypesForMeta(
     sourceMeta: BookMeta?,
     targetMeta: BookMeta?
 ): Pair<ConnectionType, ConnectionType> {
-    if (baseType != ConnectionType.COMMENTARY && baseType != ConnectionType.TARGUM) {
+    if (baseType !in ORIENTED_DEPENDANT_TYPES) {
         return baseType to baseType
     }
 
     if (sourceMeta == null || targetMeta == null) {
         return baseType to baseType
     }
-    if (!sourceMeta.isBaseBook && !targetMeta.isBaseBook) {
-        return baseType to baseType
+
+    // (1) Strongest signal: explicit base_text_titles declaration.
+    val targetDependsOnSource = sourceBookId in targetMeta.baseTextBookIds
+    val sourceDependsOnTarget = targetBookId in sourceMeta.baseTextBookIds
+    if (targetDependsOnSource && !sourceDependsOnTarget) {
+        return baseType to ConnectionType.SOURCE
+    }
+    if (sourceDependsOnTarget && !targetDependsOnSource) {
+        return ConnectionType.SOURCE to baseType
     }
 
-    fun typesFor(sourceIsSecondary: Boolean): Pair<ConnectionType, ConnectionType> {
-        return when (baseType) {
-            ConnectionType.COMMENTARY ->
-                if (sourceIsSecondary) {
-                    ConnectionType.SOURCE to ConnectionType.COMMENTARY
-                } else {
-                    ConnectionType.COMMENTARY to ConnectionType.SOURCE
-                }
-
-            ConnectionType.TARGUM ->
-                if (sourceIsSecondary) {
-                    ConnectionType.SOURCE to ConnectionType.TARGUM
-                } else {
-                    ConnectionType.TARGUM to ConnectionType.SOURCE
-                }
-
-            else -> baseType to baseType
-        }
+    // (2) Schema `dependence` asymmetry — one side is dependant, the other isn't.
+    val sourceIsDependant = sourceMeta.dependence != null
+    val targetIsDependant = targetMeta.dependence != null
+    if (!sourceIsDependant && targetIsDependant) {
+        return baseType to ConnectionType.SOURCE
+    }
+    if (sourceIsDependant && !targetIsDependant) {
+        return ConnectionType.SOURCE to baseType
     }
 
+    // (3) Curated isBaseBook flag.
     if (sourceMeta.isBaseBook && !targetMeta.isBaseBook) {
-        return typesFor(sourceIsSecondary = false)
+        return baseType to ConnectionType.SOURCE
     }
     if (!sourceMeta.isBaseBook && targetMeta.isBaseBook) {
-        return typesFor(sourceIsSecondary = true)
+        return ConnectionType.SOURCE to baseType
     }
 
+    // (4) priorityRank (lower = more primary).
     val sourceRank = sourceMeta.priorityRank
     val targetRank = targetMeta.priorityRank
-    if (sourceRank != null || targetRank != null) {
-        if (sourceRank == null) return typesFor(sourceIsSecondary = true)
-        if (targetRank == null) return typesFor(sourceIsSecondary = false)
-        if (sourceRank < targetRank) return typesFor(sourceIsSecondary = false)
-        if (targetRank < sourceRank) return typesFor(sourceIsSecondary = true)
+    if (sourceRank != null && targetRank != null) {
+        if (sourceRank < targetRank) return baseType to ConnectionType.SOURCE
+        if (targetRank < sourceRank) return ConnectionType.SOURCE to baseType
     }
 
-    return baseType to baseType
+    // (5) No directional signal succeeded — neither schema declares the
+    // other, dependence flags agree, isBaseBook flags agree, priorityRank
+    // is inconclusive or unavailable on both sides. The CSV's oriented
+    // type was provided without any structural backing, so it likely
+    // reflects a lateral citation, not a base→dep relation.
+    //
+    // Concrete examples this catches:
+    //   • Both-dependant: Bartenura on Torah ↔ Rashi on Genesis. Sefaria
+    //     ships both with `dependence: Commentary`. Neither lists the
+    //     other in `base_text_titles`. Density chaining excluded the
+    //     pair (ratio 0.69 < 0.8). Bartenura is a direct Torah commentary
+    //     that cites Rashi, not a super-commentary on Rashi.
+    //   • Both-primary, neither in priority list: Sod Yesharim ↔ Zohar.
+    //     Both have `dependence: null` and are not in the curated priority
+    //     list. The CSV labels the cross-citation `commentary`, but
+    //     neither work depends on the other in any structural sense —
+    //     Sod Yesharim is a Chassidic work by R. Gershon Leiner that
+    //     cites Zohar.
+    //
+    // Downgrading the type to OTHER keeps the link visible as a
+    // cross-reference (it still shows in the connections panel) without
+    // polluting either side's SOURCE virtual view.
+    return ConnectionType.OTHER to ConnectionType.OTHER
 }

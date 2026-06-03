@@ -5,8 +5,12 @@ import app.cash.sqldelight.db.SqlCursor
 import app.cash.sqldelight.db.QueryResult
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
+import io.github.kdroidfilter.seforimlibrary.common.db.SEFORIM_DB_PAGE_SIZE_PRAGMA
+import io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import kotlinx.coroutines.runBlocking
+import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.Paths
 
 /**
@@ -34,6 +38,10 @@ fun main(args: Array<String>) = runBlocking {
 
     val jdbcUrl = if (useMemoryDb) "jdbc:sqlite::memory:" else "jdbc:sqlite:$dbPath"
     val driver = JdbcSqliteDriver(url = jdbcUrl)
+    // This phase does the final VACUUM INTO of the Otzaria chain, so the in-memory DB
+    // must use 16 KiB pages before its schema is created (in SeforimRepository.init),
+    // otherwise the persisted file would revert to SQLite's 4 KiB default.
+    driver.execute(null, SEFORIM_DB_PAGE_SIZE_PRAGMA, 0)
     val repository = SeforimRepository(dbPath, driver)
 
     try {
@@ -77,13 +85,31 @@ fun main(args: Array<String>) = runBlocking {
             }
         }
 
+        val buildStatePath: Path = run {
+            val explicit = System.getProperty("buildStatePath") ?: System.getenv("BUILD_STATE_PATH")
+            if (explicit != null) Paths.get(explicit) else Paths.get("$persistDbPath.buildstate")
+        }
+        val prev = buildStatePath.takeIf { Files.exists(it) }
+        val allocator = InMemoryIdAllocator.load(prev, Logger.withTag("IdAllocator"))
+
         val generator = DatabaseGenerator(
             sourceDirectory = Paths.get(sourceDir),
             repository = repository,
             acronymDbPath = null,
-            filterSourcesForLinks = false
+            filterSourcesForLinks = false,
+            allocator = allocator,
         )
         generator.generateLinksOnly()
+        runCatching {
+            allocator.snapshotTo(
+                target = buildStatePath,
+                extraMeta = mapOf(
+                    "generator" to "otzariasqlite/generateLinks",
+                    "generated_at" to java.time.Instant.now().toString(),
+                ),
+            )
+        }.onFailure { logger.w(it) { "Failed to write build_state to $buildStatePath" } }
+        Unit
         if (useMemoryDb) {
             // Persist in-memory DB to disk using VACUUM INTO (target must not exist)
             runCatching {

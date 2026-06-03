@@ -3,6 +3,8 @@ package io.github.kdroidfilter.seforimlibrary.otzariasqlite
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
+import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings
+import io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator
 import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
 import io.github.kdroidfilter.seforimlibrary.core.models.Link
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
@@ -11,6 +13,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.nio.file.Path
 import java.nio.file.Paths
 
 /**
@@ -39,6 +42,17 @@ fun main(args: Array<String>) = runBlocking {
         ?: System.getenv("OTZARIA_SOURCE_DIR")
         ?: OtzariaFetcher.ensureLocalSource(logger).toString()
 
+    // ─── IdAllocator (delta-update support) ────────────────────────────────────
+    val buildStatePath: Path = run {
+        val explicit = System.getProperty("buildStatePath") ?: System.getenv("BUILD_STATE_PATH")
+        if (explicit != null) Paths.get(explicit) else Paths.get("$dbPath.buildstate")
+    }
+    val prev = buildStatePath.takeIf { java.nio.file.Files.exists(it) }
+    val allocator = InMemoryIdAllocator.load(prev, Logger.withTag("IdAllocator"))
+    val bindings = IdAllocatorBindings(allocator, repository)
+    // Pre-register every connection type so link ids resolve deterministically.
+    ConnectionType.values().forEach { bindings.upsertConnectionType(it.name) }
+
     try {
         // Performance optimizations
         logger.i { "Setting PRAGMA for bulk operations..." }
@@ -47,15 +61,15 @@ fun main(args: Array<String>) = runBlocking {
         repository.executeRawQuery("PRAGMA journal_mode = OFF")
 
         logger.i { "Starting Havrouta-Talmud link generation..." }
-        val talmudLinksCreated = generateHavroutaLinks(repository, logger)
+        val talmudLinksCreated = generateHavroutaLinks(repository, bindings, logger)
         logger.i { "Havrouta-Talmud link generation completed. Created $talmudLinksCreated links." }
 
         logger.i { "Starting Havrouta-Hearot link generation from Otzaria files..." }
-        val hearotLinksCreated = generateHavroutaHearotLinks(repository, logger, sourceDir)
+        val hearotLinksCreated = generateHavroutaHearotLinks(repository, bindings, logger, sourceDir)
         logger.i { "Havrouta-Hearot link generation completed. Created $hearotLinksCreated links." }
 
         logger.i { "Creating transitive Talmud-Hearot links..." }
-        val transitiveLinksCreated = generateTalmudHearotTransitiveLinks(repository, logger)
+        val transitiveLinksCreated = generateTalmudHearotTransitiveLinks(repository, bindings, logger)
         logger.i { "Transitive Talmud-Hearot link generation completed. Created $transitiveLinksCreated links." }
 
         logger.i { "Setting Hearot as default commentators for Havrouta books..." }
@@ -68,6 +82,18 @@ fun main(args: Array<String>) = runBlocking {
         repository.executeRawQuery("PRAGMA foreign_keys = ON")
         repository.executeRawQuery("PRAGMA synchronous = NORMAL")
         repository.executeRawQuery("PRAGMA journal_mode = WAL")
+
+        // Persist build_state so subsequent runs preserve link ids.
+        runCatching {
+            allocator.snapshotTo(
+                target = buildStatePath,
+                extraMeta = mapOf(
+                    "generator" to "havroutalinks",
+                    "generated_at" to java.time.Instant.now().toString(),
+                ),
+            )
+        }.onFailure { logger.w(it) { "Failed to write build_state to $buildStatePath" } }
+        Unit
     } catch (e: Exception) {
         logger.e(e) { "Error generating Havrouta links" }
         throw e
@@ -144,8 +170,10 @@ private fun isSectionHeader(content: String): Boolean {
  */
 private suspend fun generateHavroutaLinks(
     repository: SeforimRepository,
+    bindings: IdAllocatorBindings,
     logger: Logger
 ): Int {
+    val ctCommentary = bindings.upsertConnectionType(ConnectionType.COMMENTARY.name)
     // Find all Havrouta books
     val havroutaBooks = repository.getAllBooks().filter { it.title.startsWith("חברותא על ") }
     logger.i { "Found ${havroutaBooks.size} Havrouta books" }
@@ -182,6 +210,8 @@ private suspend fun generateHavroutaLinks(
 
         val linksForBook = processBookPair(
             repository = repository,
+            bindings = bindings,
+            ctCommentary = ctCommentary,
             havroutaBookId = havroutaBook.id,
             talmudBookId = talmudBook.id,
             havroutaTotalLines = havroutaBook.totalLines,
@@ -204,6 +234,8 @@ private suspend fun generateHavroutaLinks(
  */
 private suspend fun processBookPair(
     repository: SeforimRepository,
+    bindings: IdAllocatorBindings,
+    ctCommentary: Long,
     havroutaBookId: Long,
     talmudBookId: Long,
     havroutaTotalLines: Int,
@@ -269,25 +301,19 @@ private suspend fun processBookPair(
 
         val talmudLineId = talmudLineIdByIndex[matchingLineIndex] ?: continue
 
-        // Create link: Talmud -> Havrouta (Talmud has Havrouta as commentary)
+        // Single canonical direction Talmud → Havrouta (base → commentary).
+        // The reverse SOURCE view is synthesized at read time by the repository.
         linkBatch.add(Link(
+            id = bindings.allocator.linkId(talmudLineId, havroutaLine.id, ctCommentary),
             sourceBookId = talmudBookId,
             targetBookId = havroutaBookId,
             sourceLineId = talmudLineId,
             targetLineId = havroutaLine.id,
+            targetLineIndex = havroutaLine.lineIndex,
             connectionType = ConnectionType.COMMENTARY
         ))
 
-        // Create reverse link: Havrouta -> Talmud (Havrouta's source is Talmud)
-        linkBatch.add(Link(
-            sourceBookId = havroutaBookId,
-            targetBookId = talmudBookId,
-            sourceLineId = havroutaLine.id,
-            targetLineId = talmudLineId,
-            connectionType = ConnectionType.SOURCE
-        ))
-
-        linksCreated += 2
+        linksCreated += 1
 
         // Batch insert
         if (linkBatch.size >= 1000) {
@@ -474,9 +500,11 @@ private val json = Json {
  */
 private suspend fun generateHavroutaHearotLinks(
     repository: SeforimRepository,
+    bindings: IdAllocatorBindings,
     logger: Logger,
     sourceDir: String
 ): Int {
+    val ctCommentary = bindings.upsertConnectionType(ConnectionType.COMMENTARY.name)
     val linksDir = File(sourceDir, "links")
     if (!linksDir.exists()) {
         logger.w { "Links directory not found: ${linksDir.absolutePath}" }
@@ -567,22 +595,16 @@ private suspend fun generateHavroutaHearotLinks(
                 continue
             }
 
-            // Create link: Havrouta -> Hearot (COMMENTARY)
+            // Single canonical direction Havrouta → Hearot (base → commentary).
+            // SOURCE is synthesized at read time.
             allLinks.add(Link(
+                id = bindings.allocator.linkId(sourceLineId, targetLineId, ctCommentary),
                 sourceBookId = havroutaBook.id,
                 targetBookId = targetBook.id,
                 sourceLineId = sourceLineId,
                 targetLineId = targetLineId,
+                targetLineIndex = targetLineIndex,
                 connectionType = ConnectionType.COMMENTARY
-            ))
-
-            // Create reverse link: Hearot -> Havrouta (SOURCE)
-            allLinks.add(Link(
-                sourceBookId = targetBook.id,
-                targetBookId = havroutaBook.id,
-                sourceLineId = targetLineId,
-                targetLineId = sourceLineId,
-                connectionType = ConnectionType.SOURCE
             ))
         }
     }
@@ -640,8 +662,13 @@ private suspend fun setHearotAsDefaultCommentators(
  */
 private suspend fun generateTalmudHearotTransitiveLinks(
     repository: SeforimRepository,
+    @Suppress("UNUSED_PARAMETER") bindings: IdAllocatorBindings,
     logger: Logger
 ): Int {
+    // NOTE: transitive links are emitted via a single bulk SQL INSERT and use
+    // auto-allocated ids. Stabilising them via the allocator would require
+    // post-fixing each new row — deferred to Phase 4 because these links are
+    // pure derivatives (recomputable from primary links each build).
     val allBooks = repository.getAllBooks()
     val talmudBooks = allBooks.filter { book ->
         book.sourceId == 1L &&
@@ -669,15 +696,18 @@ private suspend fun generateTalmudHearotTransitiveLinks(
     logger.i { "Creating transitive Talmud->Hearot links via SQL..." }
 
     val insertSql = """
-        INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, connectionTypeId)
+        INSERT INTO link (sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, targetBookOrderIndex, connectionTypeId)
         SELECT DISTINCT
             l1.sourceBookId,
             l2.targetBookId,
             l1.sourceLineId,
             l2.targetLineId,
+            l2.targetLineIndex,
+            bt.orderIndex,
             ct.id
         FROM link l1
         JOIN link l2 ON l1.targetLineId = l2.sourceLineId
+        JOIN book bt ON bt.id = l2.targetBookId
         JOIN connection_type ct ON ct.name = 'COMMENTARY'
         JOIN connection_type ct1 ON l1.connectionTypeId = ct1.id AND ct1.name = 'COMMENTARY'
         JOIN connection_type ct2 ON l2.connectionTypeId = ct2.id AND ct2.name = 'COMMENTARY'

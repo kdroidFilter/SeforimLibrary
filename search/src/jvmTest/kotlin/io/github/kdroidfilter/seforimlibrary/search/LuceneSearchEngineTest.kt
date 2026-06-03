@@ -1,5 +1,6 @@
 package io.github.kdroidfilter.seforimlibrary.search
 
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -152,7 +153,7 @@ class LuceneSearchEngineTest {
             val session = engine.openSession("שלום", 5)
             assertNotNull(session)
 
-            val page = session.nextPage(10)
+            val page = runBlocking { session.nextPage(10) }
             assertNotNull(page)
             assertTrue(page.hits.isNotEmpty())
             assertTrue(page.totalHits > 0)
@@ -175,27 +176,29 @@ class LuceneSearchEngineTest {
             val session = engine.openSession("טקסט", 5)
             assertNotNull(session)
 
-            // First page
-            val page1 = session.nextPage(10)
-            assertNotNull(page1)
-            assertEquals(10, page1.hits.size)
-            assertFalse(page1.isLastPage)
+            runBlocking {
+                // First page
+                val page1 = session.nextPage(10)
+                assertNotNull(page1)
+                assertEquals(10, page1.hits.size)
+                assertFalse(page1.isLastPage)
 
-            // Second page
-            val page2 = session.nextPage(10)
-            assertNotNull(page2)
-            assertEquals(10, page2.hits.size)
-            assertFalse(page2.isLastPage)
+                // Second page
+                val page2 = session.nextPage(10)
+                assertNotNull(page2)
+                assertEquals(10, page2.hits.size)
+                assertFalse(page2.isLastPage)
 
-            // Third page (last, should have 5 items)
-            val page3 = session.nextPage(10)
-            assertNotNull(page3)
-            assertEquals(5, page3.hits.size)
-            assertTrue(page3.isLastPage)
+                // Third page (last, should have 5 items)
+                val page3 = session.nextPage(10)
+                assertNotNull(page3)
+                assertEquals(5, page3.hits.size)
+                assertTrue(page3.isLastPage)
 
-            // No more pages
-            val page4 = session.nextPage(10)
-            assertNull(page4)
+                // No more pages
+                val page4 = session.nextPage(10)
+                assertNull(page4)
+            }
 
             session.close()
             engine.close()
@@ -294,7 +297,7 @@ class LuceneSearchEngineTest {
             val session = engine.openSession("טקסט", 5, bookFilter = 1L)
             assertNotNull(session)
 
-            val page = session.nextPage(100)
+            val page = runBlocking { session.nextPage(100) }
             assertNotNull(page)
 
             // All results should be from book 1
@@ -317,7 +320,7 @@ class LuceneSearchEngineTest {
             val session = engine.openSession("טקסט", 5, bookIds = listOf(1L, 2L))
             assertNotNull(session)
 
-            val page = session.nextPage(100)
+            val page = runBlocking { session.nextPage(100) }
             assertNotNull(page)
 
             // All results should be from books 1 or 2
@@ -342,7 +345,7 @@ class LuceneSearchEngineTest {
             val session = engine.openSession("שלום", 5)
             assertNotNull(session)
 
-            val page = session.nextPage(10)
+            val page = runBlocking { session.nextPage(10) }
             assertNotNull(page)
             assertTrue(page.hits.isNotEmpty())
 

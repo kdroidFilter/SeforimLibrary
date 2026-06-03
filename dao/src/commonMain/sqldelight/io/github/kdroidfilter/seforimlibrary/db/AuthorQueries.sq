@@ -24,6 +24,9 @@ insertAndGetId:
 INSERT OR IGNORE INTO author (name)
 VALUES (?);
 
+insertWithId:
+INSERT OR IGNORE INTO author (id, name) VALUES (?, ?);
+
 selectIdByName:
 SELECT id FROM author WHERE name = ? LIMIT 1;
 

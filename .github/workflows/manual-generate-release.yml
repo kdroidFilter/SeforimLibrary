@@ -1,83 +1,301 @@
-name: Manual Generate + Release
+name: Manual Generate + Pre-Release
+
+# End-to-end build pipeline: builds seforim.db from the latest Sefaria +
+# Otzaria sources, packages a split bundle, and publishes the lot as a
+# GitHub pre-release.
+#
+# From the second release onwards, the workflow produces a logarithmic
+# fan of delta patches against previous pre-releases at fixed offsets
+# {1, 2, 4, 8, 16}. A client on any version k within those offsets can
+# fetch a *direct* patch; clients further back chain through the
+# available anchors. The full bundle remains the fallback.
+#
+# Anchors auto-discovered from prior pre-release assets — no manual
+# operator input needed. db_version is derived as max(prior versions)+1.
 
 on:
   workflow_dispatch:
+    inputs:
+      prerelease:
+        description: |
+          Publish as a GitHub pre-release (true, default) or a final
+          release (false). Pre-releases stay out of clients that watch
+          /releases/latest; flip to false when the pipeline is stable
+          enough for end users.
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: write
 
 jobs:
   build-and-release:
-    name: Run generator tasks and publish release
+    name: Build seforim.db + bundle + delta fan, publish pre-release
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Logarithmic anchor offsets — covers ~16 versions back with 5 patches.
+      # Older clients chain through the anchors; the full bundle is the
+      # ultimate fallback.
+      PATCH_OFFSETS: "1 2 4 8 16"
 
     steps:
-      - name: Checkout
+      - name: Checkout SeforimLibrary
         uses: actions/checkout@v4
         with:
-            submodules: true
+          submodules: recursive
 
-      - name: Set up Java 21
-        uses: actions/setup-java@v4
+      - name: Free disk space on runner
+        uses: jlumbroso/free-disk-space@main
         with:
-          distribution: temurin
-          java-version: '21'
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: false
+
+      - name: Bridle daemon heaps + generator forks for the 16 GB runner
+        run: |
+          mkdir -p ~/.gradle
+          cat >> ~/.gradle/gradle.properties <<EOF
+          org.gradle.jvmargs=-Xmx3g
+          kotlin.compiler.execution.strategy=in-process
+          generatorHeap=8g
+          EOF
+
+      - name: Install JBR 25
+        run: |
+          curl -L -o jbr.tar.gz "https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk-25.0.1-linux-x64-b268.52.tar.gz"
+          mkdir -p "$RUNNER_TEMP/jbr"
+          tar -xzf jbr.tar.gz -C "$RUNNER_TEMP/jbr"
+          JBR_DIR=$(find "$RUNNER_TEMP/jbr" -mindepth 1 -maxdepth 1 -type d -name "jbr*" -o -name "jbrsdk*" | head -n 1)
+          echo "JAVA_HOME=$JBR_DIR" >> "$GITHUB_ENV"
+          echo "$JBR_DIR/bin" >> "$GITHUB_PATH"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Gradle version
-        run: ./gradlew --version
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
 
-      - name: Compute tag name (UTC) for release info
-        id: release_meta
-        shell: bash
-        run: |
-          TAG=$(date -u +"%Y%m%d%H%M%S")
-          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Computed release tag: ${TAG}"
+      - name: Install zstd + sqlite + jq
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zstd sqlite3 jq
 
-      - name: Generate Seforim Database
-        run: ./gradlew generateSeforimDb -PreleaseName=${{ steps.release_meta.outputs.release_tag }} --no-daemon --stacktrace
-
-      - name: Package Seforim Bundle
-        run: ./gradlew packageSeforimBundle --no-daemon --stacktrace
-
-      - name: List split parts
+      # ─── Discover prior releases + decide db_version ───────────────────────
+      # Tags are `v<dbVersion>-<utcTimestamp>` so version discovery is just
+      # a regex on the tag list — no per-release asset fetch needed.
+      # The version chain ignores pre vs final: a final release can seed/diff
+      # against a pre-release predecessor and vice-versa.
+      - name: Auto-discover prior releases
+        id: discover
         run: |
           set -euo pipefail
-          echo "Looking for split parts..."
+          gh release list --limit 100 --json tagName,isPrerelease,createdAt,name \
+            > all-releases.json
+          : > prior-versions.tsv  # cols: db_version<TAB>release_tag
+          while IFS= read -r tag; do
+            VER=$(echo "$tag" | grep -oE '^v[0-9]+-' | tr -d 'v-' || true)
+            [ -n "$VER" ] && echo -e "${VER}\t${tag}" >> prior-versions.tsv
+          done < <(jq -r '.[].tagName' all-releases.json)
+          sort -k1,1nr -o prior-versions.tsv prior-versions.tsv
+          echo "Prior releases (db_version → tag):"
+          cat prior-versions.tsv || true
+
+          if [ ! -s prior-versions.tsv ]; then
+            echo "No prior release found — this is the first release."
+            echo "db_version=1" >> "$GITHUB_OUTPUT"
+            echo "has_prev=false" >> "$GITHUB_OUTPUT"
+          else
+            LAST_VER=$(head -n1 prior-versions.tsv | cut -f1)
+            NEXT_VER=$((LAST_VER + 1))
+            LAST_TAG=$(head -n1 prior-versions.tsv | cut -f2)
+            echo "Most recent: db_version=$LAST_VER tag=$LAST_TAG → this build: db_version=$NEXT_VER"
+            echo "db_version=$NEXT_VER" >> "$GITHUB_OUTPUT"
+            echo "has_prev=true" >> "$GITHUB_OUTPUT"
+            echo "seed_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute release tag (v<dbVersion>-<timestamp>)
+        id: release_meta
+        run: |
+          STAMP=$(date -u +"%Y%m%d%H%M%S")
+          TAG="v${{ steps.discover.outputs.db_version }}-${STAMP}"
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${TAG}"
+
+      - name: Seed allocator from offset-1 release
+        if: steps.discover.outputs.has_prev == 'true'
+        run: |
+          set -euo pipefail
+          SEED_TAG="${{ steps.discover.outputs.seed_tag }}"
+          echo "Seeding allocator from release '$SEED_TAG'"
+          mkdir -p build prev-dbs
+          gh release download "$SEED_TAG" \
+            --pattern 'seforim.db.buildstate' \
+            --dir build
+          # Buildstate goes where generateSeforimDb expects it.
+          ls -lh build/seforim.db.buildstate
+
+      # ─── Build seforim.db (full pipeline) ──────────────────────────────────
+      # -PinMemoryDb=false: the Lucene index step otherwise copies the entire
+      # ~7 GB seforim.db into a SQLite mode=memory database to speed up reads.
+      # On the 16 GB runner that native footprint plus the 8 GB generator heap
+      # blows past physical RAM and the kernel OOM-kills the job (surfacing as
+      # "The operation was canceled"). Reading the DB from disk keeps the peak
+      # bounded; the indexing stays well within budget.
+      - name: Generate Seforim Database
+        run: |
+          ./gradlew generateSeforimDb \
+            -PreleaseName=${{ steps.release_meta.outputs.release_tag }} \
+            -PdbVersion=${{ steps.discover.outputs.db_version }} \
+            -PinMemoryDb=false \
+            --no-daemon --stacktrace
+
+      - name: Package Seforim Bundle (split tar.zst)
+        run: ./gradlew packageSeforimBundle --no-daemon --stacktrace
+
+      - name: List bundle parts
+        run: |
+          set -euo pipefail
           PARTS=(generator/packaging/build/package/seforim_bundle.tar.zst.part*)
           if [ ${#PARTS[@]} -eq 0 ] || [ "${PARTS[0]}" = "generator/packaging/build/package/seforim_bundle.tar.zst.part*" ]; then
-            echo "No split parts found. Did packageArtifacts run and split the bundle?" >&2
+            echo "No bundle parts produced." >&2
             exit 1
           fi
-          if [ ${#PARTS[@]} -ne 2 ]; then
-            echo "Expected 2 split parts, found ${#PARTS[@]}" >&2
-            ls -lh generator/packaging/build/package/ || true
-            exit 1
-          fi
-          echo "Found ${#PARTS[@]} part file(s):"
           ls -lh "${PARTS[@]}"
 
-      - name: Create GitHub Release and upload assets
+      # ─── Produce log-fan of patches: offsets {1, 2, 4, 8, 16} ──────────────
+      # The prev DB is reconstituted from the bundle's split parts (GitHub
+      # caps single assets at 2 GiB, so we never ship the unsplit 7 GB DB
+      # directly). Each iteration cats + extracts, runs the producer, then
+      # frees everything so disk peak stays bounded.
+      - name: Produce + verify patch fan
+        if: steps.discover.outputs.has_prev == 'true'
+        run: |
+          set -euo pipefail
+          THIS_VER=${{ steps.discover.outputs.db_version }}
+          mkdir -p patches prev-dbs
+          for OFFSET in $PATCH_OFFSETS; do
+            TARGET_VER=$((THIS_VER - OFFSET))
+            if [ "$TARGET_VER" -lt 1 ]; then
+              echo "offset $OFFSET would target version $TARGET_VER (<1) — skip"
+              continue
+            fi
+            TAG=$(awk -F'\t' -v v="$TARGET_VER" '$1==v{print $2; exit}' prior-versions.tsv || true)
+            if [ -z "$TAG" ]; then
+              echo "No prior release at db_version=$TARGET_VER (offset $OFFSET) — skip"
+              continue
+            fi
+            echo "=== Producing patch v${TARGET_VER} → v${THIS_VER} (offset $OFFSET, tag=$TAG) ==="
+            rm -rf prev-dbs/*
+            mkdir -p prev-dbs/extract
+            gh release download "$TAG" \
+              --pattern 'seforim_bundle.tar.zst.part*' \
+              --dir prev-dbs
+            cat prev-dbs/seforim_bundle.tar.zst.part* > prev-dbs/seforim_bundle.tar.zst
+            rm -f prev-dbs/seforim_bundle.tar.zst.part*
+            tar --use-compress-program=unzstd -xf prev-dbs/seforim_bundle.tar.zst -C prev-dbs/extract
+            rm -f prev-dbs/seforim_bundle.tar.zst
+            PREV_DB=$(find prev-dbs/extract -name seforim.db -type f | head -n1)
+            test -s "$PREV_DB" || { echo "::error::seforim.db not found in bundle of $TAG"; exit 1; }
+
+            ./gradlew :generator-common:producePatchAndVerify \
+              -PprevDb=$PWD/$PREV_DB \
+              -PnewDb=$PWD/build/seforim.db \
+              -Pout=$PWD/patches/patch-v${TARGET_VER}-v${THIS_VER}.db \
+              -PcatalogPb=$PWD/build/catalog.pb \
+              -PfromVersion=$TARGET_VER -PtoVersion=$THIS_VER \
+              --no-daemon --stacktrace
+
+            # Free disk for the next iteration — only the .zst + manifest
+            # need to ship; the .db was the verify ground-truth.
+            rm -rf prev-dbs
+            rm -f "patches/patch-v${TARGET_VER}-v${THIS_VER}.db" \
+                  "patches/verify-patch-v${TARGET_VER}-v${THIS_VER}.db"
+            df -h /
+          done
+          echo "=== Final patch artefacts ==="
+          ls -lh patches/ || true
+
+      # ─── Stage release assets ──────────────────────────────────────────────
+      - name: Stage release assets
+        run: |
+          set -euo pipefail
+          STAGE=release-staging
+          mkdir -p "$STAGE"
+          # Bundle parts (each under 2 GiB) — canonical source of the DB.
+          # Future releases recompose the prev DB from these parts.
+          cp generator/packaging/build/package/seforim_bundle.tar.zst.part* "$STAGE/"
+          cp build/seforim.db.buildstate "$STAGE/"
+          cp build/catalog.pb "$STAGE/"
+          # Patch fan (zero or more files; only present from release #2 on).
+          if compgen -G "patches/patch-*.db.zst" > /dev/null; then
+            cp patches/patch-*.db.zst "$STAGE/"
+            cp patches/patch-*.db.zst.manifest.json "$STAGE/"
+          fi
+          echo "Staged assets:"
+          ls -lh "$STAGE/"
+          # Sanity: every asset must fit GitHub's 2 GiB per-asset cap.
+          MAX=2147483647
+          OVER=$(find "$STAGE" -maxdepth 1 -type f -size +${MAX}c)
+          if [ -n "$OVER" ]; then
+            echo "::error::Asset(s) exceed GitHub's 2 GiB single-file limit:"
+            ls -lh $OVER
+            exit 1
+          fi
+
+      - name: Create GitHub pre-release and upload assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_meta.outputs.release_tag }}
           name: ${{ steps.release_meta.outputs.release_tag }}
           draft: false
-          prerelease: false
-          files: |
-            generator/packaging/build/package/seforim_bundle.tar.zst.part*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: ${{ inputs.prerelease }}
+          files: release-staging/*
 
-      - name: Trigger release manifest update
+      # Regenerate release-manifest.json inline. We can't dispatch the
+      # separate update-release-manifest workflow from here (GITHUB_TOKEN
+      # is blocked from triggering other workflows to prevent recursion),
+      # but we *can* push a commit on master — and update-release-manifest
+      # already fires on `push: branches: [master]` as a fallback. Doing
+      # it inline gives us atomicity (manifest reflects the release we
+      # just published before this run finishes).
+      - name: Refresh release-manifest.json on master
         run: |
-          sleep 10  # Wait for release to be fully published
-          gh workflow run update-release-manifest.yml
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          set -euo pipefail
+          # `gh release view` (no args) → the "Latest" tagged release. With
+          # only pre-releases the call fails; in that case the manifest's
+          # `latest` field stays null.
+          if LATEST_JSON=$(gh release view --json tagName,name,publishedAt,assets 2>/dev/null); then
+            LATEST_ARG=(--argjson latest "$LATEST_JSON")
+          else
+            LATEST_ARG=(--argjson latest null)
+          fi
+          ALL_RELEASES=$(gh release list --json tagName,name,publishedAt --limit 100)
+          GENERATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          jq -n \
+            --arg generatedAt "$GENERATED_AT" \
+            "${LATEST_ARG[@]}" \
+            --argjson releases "$ALL_RELEASES" \
+            '{generatedAt: $generatedAt, latest: $latest, releases: $releases}' \
+            > release-manifest.json
+          echo "release-manifest.json:"
+          cat release-manifest.json
+
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add release-manifest.json
+          if git diff --staged --quiet; then
+            echo "Manifest unchanged — nothing to commit."
+          else
+            git commit -m "Update release manifest [skip ci]"
+            # Rebase onto remote master in case any concurrent push landed
+            # between the start of this job and now.
+            git pull --rebase origin master
+            git push origin HEAD:master
+          fi

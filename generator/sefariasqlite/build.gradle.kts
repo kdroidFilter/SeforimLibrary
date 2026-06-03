@@ -3,6 +3,13 @@ plugins {
     alias(libs.plugins.kotlinx.serialization)
 }
 
+// Generator forked-JVM heap. Honors -PgeneratorHeap=… (CI lowers it on 16 GB runners).
+// Default 10g matches local workstation use; CI sets 5g via the workflow.
+val generatorHeap: String = (project.findProperty("generatorHeap") as String?)
+    ?: System.getenv("SEFORIM_GENERATOR_HEAP")
+    ?: "10g"
+
+
 kotlin {
     jvmToolchain(libs.versions.jvmToolchain.get().toInt())
 
@@ -22,6 +29,7 @@ kotlin {
         }
 
         jvmMain.dependencies {
+            implementation(project(":generator-common"))
             implementation(libs.sqlDelight.driver.sqlite)
             implementation(libs.commons.compress)
             implementation(libs.zstd)
@@ -60,8 +68,33 @@ tasks.register<JavaExec>("generateSefariaSqlite") {
 
     // Optional JVM tuning (similar to generator)
     jvmArgs = listOf(
-        "-Xmx8g",
+        "-Xmx$generatorHeap",
         "-XX:+UseG1GC",
         "-XX:MaxGCPauseMillis=200"
     )
+}
+
+// Post-processing step to rename categories after all generation is complete
+// Usage:
+//   ./gradlew :sefariasqlite:renameCategories
+//   ./gradlew :sefariasqlite:renameCategories -PseforimDb=/path/to/seforim.db
+tasks.register<JavaExec>("renameCategories") {
+    group = "application"
+    description = "Rename 'פירושים מודרניים' categories to 'מחברי זמננו' after generation."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.sefariasqlite.RenameCategoriesPostProcessKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    // Pass DB path if provided
+    if (project.hasProperty("seforimDb")) {
+        systemProperty("seforimDb", project.property("seforimDb") as String)
+    } else if (System.getenv("SEFORIM_DB") != null) {
+        systemProperty("seforimDb", System.getenv("SEFORIM_DB"))
+    } else {
+        val defaultDbPath = rootProject.layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+        systemProperty("seforimDb", defaultDbPath)
+    }
+
+    jvmArgs = listOf("-Xmx256m")
 }
