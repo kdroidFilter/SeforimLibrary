@@ -51,7 +51,10 @@ internal data class BookPayload(
     val refEntries: List<RefEntry>,
     val headings: List<Heading>,
     val authors: List<String>,
+    // Long description (Sefaria heDesc) → book.heDesc
     val description: String?,
+    // Short one-line summary (Sefaria heShortDesc) → book.heShortDesc
+    val heShortDesc: String?,
     val pubDates: List<PubDate>,
     val altStructures: List<AltStructurePayload>,
     // Schema metadata used for link orientation. baseTextTitleKeys holds the
