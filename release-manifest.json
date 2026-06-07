@@ -1,39 +1,67 @@
 {
-  "generatedAt": "2026-06-03T13:24:25Z",
+  "generatedAt": "2026-06-07T20:50:26Z",
   "latest": {
     "assets": [
       {
-        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/340592924",
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/435221738",
         "contentType": "application/octet-stream",
-        "createdAt": "2026-01-14T20:43:44Z",
-        "digest": "sha256:0e93416ddec79e3265f4215cfc8e1cf0632432edd8e492dd409baa0e6baf7689",
-        "downloadCount": 2838,
-        "id": "RA_kwDOPFZ3eM4UTQkc",
+        "createdAt": "2026-06-01T11:50:23Z",
+        "digest": "sha256:679ac0ab32ddfbcadd9aaa668f45ae63441dceb6cfe850ad3e02fc591e392948",
+        "downloadCount": 1,
+        "id": "RA_kwDOPFZ3eM4Z8PTq",
+        "label": "",
+        "name": "catalog.pb",
+        "size": 669539,
+        "state": "uploaded",
+        "updatedAt": "2026-06-01T11:50:24Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v1-20260601094341/catalog.pb"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/435221737",
+        "contentType": "application/octet-stream",
+        "createdAt": "2026-06-01T11:50:23Z",
+        "digest": "sha256:6fdd05b6a5c8cbb675184bf488f6c4de0a21b985d9ede7f13b0677e667fdf1c1",
+        "downloadCount": 0,
+        "id": "RA_kwDOPFZ3eM4Z8PTp",
+        "label": "",
+        "name": "seforim.db.buildstate",
+        "size": 933068800,
+        "state": "uploaded",
+        "updatedAt": "2026-06-01T11:51:00Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v1-20260601094341/seforim.db.buildstate"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/435221740",
+        "contentType": "application/octet-stream",
+        "createdAt": "2026-06-01T11:50:23Z",
+        "digest": "sha256:cfa4b07ca92dc46436b68f60963b2c75700bdb472d2030fd94d82bceb9abce57",
+        "downloadCount": 326,
+        "id": "RA_kwDOPFZ3eM4Z8PTs",
         "label": "",
         "name": "seforim_bundle.tar.zst.part01",
         "size": 2040109465,
         "state": "uploaded",
-        "updatedAt": "2026-01-14T20:46:52Z",
-        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/20260114122617/seforim_bundle.tar.zst.part01"
+        "updatedAt": "2026-06-01T11:51:41Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v1-20260601094341/seforim_bundle.tar.zst.part01"
       },
       {
-        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/340594173",
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/435221742",
         "contentType": "application/octet-stream",
-        "createdAt": "2026-01-14T20:46:52Z",
-        "digest": "sha256:48242548899177f944226dc7f83c5c6d2326702b18881ab3799cc6a27b4099f0",
-        "downloadCount": 1757,
-        "id": "RA_kwDOPFZ3eM4UTQ39",
+        "createdAt": "2026-06-01T11:50:24Z",
+        "digest": "sha256:56f5d9cba85d3d4558976e98f41ae149678318927af746e59d43e53ab9857291",
+        "downloadCount": 223,
+        "id": "RA_kwDOPFZ3eM4Z8PTu",
         "label": "",
         "name": "seforim_bundle.tar.zst.part02",
-        "size": 964051608,
+        "size": 1691337533,
         "state": "uploaded",
-        "updatedAt": "2026-01-14T20:48:27Z",
-        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/20260114122617/seforim_bundle.tar.zst.part02"
+        "updatedAt": "2026-06-01T11:51:28Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v1-20260601094341/seforim_bundle.tar.zst.part02"
       }
     ],
-    "name": "20260114122617",
-    "publishedAt": "2026-01-15T05:41:46Z",
-    "tagName": "20260114122617"
+    "name": "v1-20260601094341",
+    "publishedAt": "2026-06-01T11:50:22Z",
+    "tagName": "v1-20260601094341"
   },
   "releases": [
     {
