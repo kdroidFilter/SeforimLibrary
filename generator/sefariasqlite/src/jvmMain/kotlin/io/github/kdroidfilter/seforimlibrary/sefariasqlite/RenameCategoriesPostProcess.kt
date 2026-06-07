@@ -95,7 +95,7 @@ fun main(args: Array<String>) {
 
             var totalRenamed = 0
             var totalMerged = 0
-            val categoryResult = runSection("Category renames", categoryRenames, logger) { rule ->
+            runSection("Category renames", categoryRenames, logger) { rule ->
                 val result = renameOrMergeCategory(conn, rule, logger)
                 when (result) {
                     is RenameResult.Renamed -> totalRenamed += result.count
@@ -107,18 +107,16 @@ fun main(args: Array<String>) {
                 result.rows()
             }
 
-            val bookRenameResult = runSection("Book renames", bookRenames, logger) { (oldTitle, newTitle) ->
+            val booksRenamed = runSection("Book renames", bookRenames, logger) { (oldTitle, newTitle) ->
                 renameBookTitle(conn, oldTitle, newTitle, logger)
             }
 
-            val moveResult = runSection("Book moves", bookMoves, logger) { move -> applyBookMove(conn, move, logger) }
+            val booksMoved = runSection("Book moves", bookMoves, logger) { move -> applyBookMove(conn, move, logger) }
 
             conn.commit()
             logger.i {
-                "Post-process done: categories renamed=$totalRenamed merged=$totalMerged " +
-                    "(failures=${categoryResult.failures}); books renamed=${bookRenameResult.applied} " +
-                    "(failures=${bookRenameResult.failures}); books moved=${moveResult.applied} " +
-                    "(failures=${moveResult.failures})"
+                "Post-process done: categories renamed=$totalRenamed merged=$totalMerged; " +
+                    "books renamed=$booksRenamed; books moved=$booksMoved"
             }
         }
     } catch (e: Exception) {
@@ -217,15 +215,13 @@ private fun parseBookMoves(lines: List<String>, logger: Logger): List<BookMove> 
         .also { logger.i { "Loaded ${it.size} book move rule(s)" } }
 }
 
-private data class SectionResult(val applied: Int, val failures: Int)
-
-private fun <T> runSection(name: String, items: List<T>, logger: Logger, apply: (T) -> Int): SectionResult {
+private fun <T> runSection(name: String, items: List<T>, logger: Logger, apply: (T) -> Int): Int {
     var applied = 0
     for (item in items) {
         applied += apply(item)
     }
-    logger.i { "$name: applied=$applied failures=0" }
-    return SectionResult(applied, failures = 0)
+    logger.i { "$name: applied=$applied" }
+    return applied
 }
 
 private sealed class RenameResult {
