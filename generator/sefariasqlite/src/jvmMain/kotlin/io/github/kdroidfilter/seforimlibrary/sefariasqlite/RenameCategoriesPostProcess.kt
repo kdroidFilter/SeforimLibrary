@@ -2,12 +2,15 @@ package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
-import java.net.URI
-import java.net.URLEncoder
+import io.github.kdroidfilter.seforimlibrary.common.OptimizedHttpClient
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Paths
 import java.sql.Connection
 import java.sql.DriverManager
+import java.util.zip.ZipInputStream
 import kotlin.io.path.exists
 import kotlin.system.exitProcess
 
@@ -21,9 +24,9 @@ import kotlin.system.exitProcess
  *  - ספרים.csv       `old,new` — book title renames (exact match)
  *  - Moving files.csv `name,sourcePath,destPath` (simple CSV; embedded newlines in quoted fields are not supported)
  *
- * The release zip does not include ForDB/, so the CSVs are fetched directly
- * from raw.githubusercontent.com at task start. Download failures are
- * fatal because silently skipping these rules can produce an invalid DB delta.
+ * Rules are fetched from the fixed `fordb-latest` GitHub release asset.
+ * Download failures are fatal because silently skipping these rules can produce
+ * an invalid DB delta.
  *
  * Category renames handle two cases:
  * 1. Simple rename: When no target category exists under the same parent
@@ -43,19 +46,16 @@ import kotlin.system.exitProcess
  * Env alternatives:
  *   SEFORIM_DB
  */
-internal const val FOR_DB_BASE = "https://raw.githubusercontent.com/Otzaria/otzaria-library/main/ForDB"
+private const val FOR_DB_RELEASE_API =
+    "https://api.github.com/repos/Otzaria/otzaria-library/releases/tags/fordb-latest"
+private const val FOR_DB_ARCHIVE_NAME = "fordb_latest.zip"
+private const val FOR_DB_USER_AGENT = "SeforimLibrary-ForDBFetcher/1.0"
 internal val FOR_DB_CSV_FILES = mapOf(
     "categoryRenames" to "תיקיות.csv",
     "bookRenames" to "ספרים.csv",
     "bookMoves" to "Moving files.csv",
     "generations" to "סדר הדורות.csv",
 )
-private val CATEGORY_RENAMES_URL = forDbUrl(FOR_DB_CSV_FILES.getValue("categoryRenames"))
-private val BOOK_RENAMES_URL = forDbUrl(FOR_DB_CSV_FILES.getValue("bookRenames"))
-private val BOOK_MOVES_URL = forDbUrl(FOR_DB_CSV_FILES.getValue("bookMoves"))
-
-internal fun forDbUrl(fileName: String): String =
-    "$FOR_DB_BASE/" + URLEncoder.encode(fileName, StandardCharsets.UTF_8.name()).replace("+", "%20")
 
 fun main(args: Array<String>) {
     Logger.setMinSeverity(Severity.Info)
@@ -76,9 +76,12 @@ fun main(args: Array<String>) {
 
     // Rules downloaded from otzaria-library/ForDB/ at startup.
     // תיקיות.csv and ספרים.csv have no header; Moving files.csv has one.
-    val categoryRenames: List<Pair<String, String>> = parsePairs(downloadRequiredCsv(CATEGORY_RENAMES_URL, logger))
-    val bookRenames: List<Pair<String, String>> = parsePairs(downloadRequiredCsv(BOOK_RENAMES_URL, logger))
-    val bookMoves: List<BookMove> = parseBookMoves(downloadRequiredCsv(BOOK_MOVES_URL, logger), logger)
+    val categoryRenames: List<Pair<String, String>> =
+        parsePairs(downloadRequiredForDbCsv(FOR_DB_CSV_FILES.getValue("categoryRenames"), logger))
+    val bookRenames: List<Pair<String, String>> =
+        parsePairs(downloadRequiredForDbCsv(FOR_DB_CSV_FILES.getValue("bookRenames"), logger))
+    val bookMoves: List<BookMove> =
+        parseBookMoves(downloadRequiredForDbCsv(FOR_DB_CSV_FILES.getValue("bookMoves"), logger), logger)
 
     try {
         DriverManager.getConnection("jdbc:sqlite:$dbPath").use { conn ->
@@ -373,30 +376,71 @@ private fun resolveCategoryPath(conn: Connection, path: String): Long? {
     return parentId
 }
 
-/**
- * Downloads a CSV and returns its lines (UTF-8, BOM stripped from line 0 if present).
- * Returns an empty list on failure (logs a warning); the corresponding section
- * then becomes a no-op and the rest of the run proceeds.
- */
-internal fun downloadCsv(url: String, logger: Logger): List<String> = try {
-    readCsvLines(url)
-} catch (e: Exception) {
-    logger.w(e) { "Failed to download $url; skipping section" }
-    emptyList()
-}
-
-internal fun downloadRequiredCsv(url: String, logger: Logger): List<String> = try {
-    readCsvLines(url)
-} catch (e: Exception) {
-    logger.e(e) { "Failed to download required CSV $url; aborting" }
-    throw IllegalStateException("Failed to download required CSV: $url", e)
-}
-
-private fun readCsvLines(url: String): List<String> {
-    val conn = URI(url).toURL().openConnection().apply {
-        connectTimeout = 10_000
-        readTimeout = 30_000
-    }
-    val lines = conn.getInputStream().use { it.reader(StandardCharsets.UTF_8).readLines() }
+internal fun downloadRequiredForDbCsv(fileName: String, logger: Logger): List<String> {
+    val lines = forDbReleaseCsvs(logger).getValue(fileName)
     return if (lines.isEmpty()) lines else listOf(lines.first().removePrefix("\uFEFF")) + lines.drop(1)
+}
+
+private var cachedForDbCsvs: Map<String, List<String>>? = null
+
+private fun forDbReleaseCsvs(logger: Logger): Map<String, List<String>> {
+    cachedForDbCsvs?.let { return it }
+
+    val archiveUrl = forDbReleaseArchiveUrl(logger)
+    logger.i { "Downloading ForDB release archive from $archiveUrl" }
+    val csvs = try {
+        OptimizedHttpClient.downloadStream(
+            url = archiveUrl,
+            userAgent = FOR_DB_USER_AGENT,
+            logger = logger
+        ).stream.use { stream ->
+            readForDbZip(stream)
+        }
+    } catch (e: Exception) {
+        logger.e(e) { "Failed to download or read required ForDB release archive; aborting" }
+        throw IllegalStateException("Failed to load required ForDB release archive", e)
+    }
+
+    val missing = FOR_DB_CSV_FILES.values.filterNot { it in csvs }
+    check(missing.isEmpty()) {
+        "ForDB release archive is missing required file(s): ${missing.joinToString()}"
+    }
+
+    cachedForDbCsvs = csvs
+    return csvs
+}
+
+private fun forDbReleaseArchiveUrl(logger: Logger): String {
+    val body = OptimizedHttpClient.fetchJson(FOR_DB_RELEASE_API, FOR_DB_USER_AGENT, logger)
+    val archiveNamePattern = Regex.escape(FOR_DB_ARCHIVE_NAME)
+    return Regex(""""browser_download_url"\s*:\s*"([^"]*/$archiveNamePattern)"""")
+        .find(body)
+        ?.groupValues
+        ?.get(1)
+        ?: throw IllegalStateException("No $FOR_DB_ARCHIVE_NAME asset found in fordb-latest release")
+}
+
+private fun readForDbZip(stream: InputStream): Map<String, List<String>> {
+    val csvs = mutableMapOf<String, List<String>>()
+    ZipInputStream(stream).use { zip ->
+        var entry = zip.nextEntry
+        while (entry != null) {
+            if (!entry.isDirectory) {
+                val normalizedName = entry.name.replace('\\', '/')
+                if (normalizedName.startsWith("ForDB/")) {
+                    val fileName = normalizedName.removePrefix("ForDB/")
+                    if ('/' !in fileName && fileName.endsWith(".csv")) {
+                        val bytes = ByteArrayOutputStream()
+                        zip.copyTo(bytes)
+                        csvs[fileName] = ByteArrayInputStream(bytes.toByteArray())
+                            .bufferedReader(StandardCharsets.UTF_8)
+                            .readLines()
+                    }
+                }
+            }
+            zip.closeEntry()
+            entry = zip.nextEntry
+        }
+    }
+    return csvs
 }

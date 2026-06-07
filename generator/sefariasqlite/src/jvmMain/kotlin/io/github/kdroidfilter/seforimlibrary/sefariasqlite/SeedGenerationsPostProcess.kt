@@ -27,7 +27,7 @@ import kotlin.system.exitProcess
  * Env alternatives:
  *   SEFORIM_DB
  */
-private val GENERATIONS_URL = forDbUrl(FOR_DB_CSV_FILES.getValue("generations"))
+private val GENERATIONS_FILE = FOR_DB_CSV_FILES.getValue("generations")
 
 fun main(args: Array<String>) {
     Logger.setMinSeverity(Severity.Info)
@@ -46,7 +46,7 @@ fun main(args: Array<String>) {
 
     logger.i { "Seeding generations in $dbPath" }
 
-    val rows = parseGenerations(downloadRequiredCsv(GENERATIONS_URL, logger), logger)
+    val rows = parseGenerations(downloadRequiredForDbCsv(GENERATIONS_FILE, logger), logger)
 
     try {
         DriverManager.getConnection("jdbc:sqlite:$dbPath").use { conn ->
