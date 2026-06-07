@@ -10,7 +10,7 @@ import kotlin.system.exitProcess
 
 /**
  * Seeds the `generation` table and links books to their generation, driven by
- * otzaria-library/ForDB/סדר הדורות.csv (`שם ספר,קבוצת דור` with header).
+ * otzaria-library/ForDB/generations.csv (`שם ספר,קבוצת דור` with header).
  *
  * Runs AFTER appendOtzaria so both Sefaria- and Otzaria-stage books are
  * considered. Linking is purely by book title — no transitive author-level
@@ -53,13 +53,12 @@ fun main(args: Array<String>) {
             conn.autoCommit = false
 
             val result = try {
-                val res = applyGenerations(conn, rows, logger)
-                conn.commit()
-                res
+                applyGenerations(conn, rows, logger).also {
+                    conn.commit()
+                }
             } catch (e: Exception) {
                 runCatching { conn.rollback() }.onFailure { logger.w(it) { "Rollback failed" } }
-                logger.w(e) { "Generation seeding failed; skipping section" }
-                GenerationApplyResult(0, 0, rows.size)
+                throw e
             }
 
             logger.i {
@@ -68,24 +67,30 @@ fun main(args: Array<String>) {
             }
         }
     } catch (e: Exception) {
-        logger.e(e) { "Failed to open or commit DB; aborting" }
+        logger.e(e) { "Failed to seed generations; aborting" }
         exitProcess(1)
     }
 }
 
 /**
- * `שם ספר,קבוצת דור` rows. Drops the header row if its first field contains
- * "שם ספר"; otherwise treats every row as data (with a warning) so a
- * header-less upload doesn't silently lose row 0.
+ * `שם ספר,קבוצת דור` rows. Requires the header row, ignores blank rows with a
+ * visible warning, and fails on malformed non-blank data rows.
  */
 private fun parseGenerations(lines: List<String>, logger: Logger): List<Pair<String, String>> {
-    if (lines.isEmpty()) return emptyList()
-    val isHeader = "שם ספר" in lines.first()
-    val body = if (isHeader) lines.drop(1) else {
-        logger.w { "סדר הדורות.csv: no header detected; treating first row as data" }
-        lines
+    val sourceName = GENERATIONS_FILE
+    val blankRows = lines.count { parseForDbCsvLine(it).all { field -> field.trim().isEmpty() } }
+    if (blankRows > 0) {
+        logger.w { "$sourceName: ignoring $blankRows blank row(s)" }
     }
-    return parsePairs(body)
+    val nonBlank = lines.filter { it.isNotBlank() }
+    require(nonBlank.isNotEmpty()) { "$sourceName is empty" }
+    require("שם ספר" in nonBlank.first()) { "$sourceName must start with a שם ספר header" }
+    val duplicateHeader = nonBlank.drop(1).indexOfFirst { "שם ספר" in parseForDbCsvLine(it).firstOrNull().orEmpty() }
+    require(duplicateHeader < 0) {
+        "$sourceName contains a duplicate header at non-blank row ${duplicateHeader + 2}"
+    }
+    return parseRequiredCsvRows(nonBlank.drop(1), sourceName, minFields = 2)
+        .map { f -> f[0] to f[1] }
 }
 
 private data class GenerationApplyResult(
@@ -96,10 +101,9 @@ private data class GenerationApplyResult(
 
 /**
  * Seeds the `generation` table with distinct names and links each book to its
- * generation via `book_generation`. Loads books once into in-memory maps so
- * the three-tier matching (exact / punct-strip / TRIM) is O(1) per CSV row
- * instead of full table scans on REPLACE/TRIM expressions. INSERT OR IGNORE
- * keeps re-runs idempotent.
+ * generation via `book_generation`. Matching is exact by book title; data
+ * mismatches fail the task so the CSV can be corrected instead of guessed.
+ * INSERT OR IGNORE keeps re-runs idempotent.
  */
 private fun applyGenerations(
     conn: Connection,
@@ -130,18 +134,15 @@ private fun applyGenerations(
         }
     }
     val exactMap = books.groupBy({ it.second }, { it.first })
-    val strippedMap = books.groupBy({ stripTitlePunct(it.second) }, { it.first })
-    val trimmedMap = books.groupBy({ it.second.trim() }, { it.first })
 
     var linksCreated = 0
-    var unmatched = 0
+    val unmatchedTitles = mutableListOf<String>()
     conn.prepareStatement("INSERT OR IGNORE INTO book_generation(bookId, generationId) VALUES (?, ?)").use { linkStmt ->
         for ((bookTitle, genName) in rows) {
             val genId = nameToId[genName] ?: continue
-            val bookId = findBookIdForGeneration(exactMap, strippedMap, trimmedMap, bookTitle, logger)
+            val bookId = findBookIdForGeneration(exactMap, bookTitle, logger)
             if (bookId == null) {
-                unmatched++
-                logger.d { "Generation link: book '$bookTitle' not found; skipping" }
+                unmatchedTitles += bookTitle
                 continue
             }
             linkStmt.setLong(1, bookId)
@@ -149,32 +150,27 @@ private fun applyGenerations(
             linksCreated += linkStmt.executeUpdate()
         }
     }
-    return GenerationApplyResult(generationsCreated, linksCreated, unmatched)
+    require(unmatchedTitles.isEmpty()) {
+        "Generation CSV has ${unmatchedTitles.size} unmatched book title(s): " +
+            unmatchedTitles.take(20).joinToString()
+    }
+    return GenerationApplyResult(generationsCreated, linksCreated, 0)
 }
 
-// Three-tier fallback: exact, then TRIM (for DB titles imported with stray
-// leading/trailing whitespace from upstream sources), then punctuation-strip
-// (for CSVs that use the bare form like רדק vs רד״ק). TRIM before punct-strip
-// so a title like "רדק " resolves to the unique "רדק" entry rather than
-// hitting the broader punct-strip tier which matches both "רדק" and "רד״ק".
-// `book.title` is not UNIQUE in the schema, so any tier can return >1 — log
-// and skip rather than arbitrarily picking one.
+// `book.title` is not UNIQUE in the schema, so even an exact match can return
+// more than one row. Fail rather than arbitrarily picking one.
 private fun findBookIdForGeneration(
     exactMap: Map<String, List<Long>>,
-    strippedMap: Map<String, List<Long>>,
-    trimmedMap: Map<String, List<Long>>,
     title: String,
     logger: Logger,
 ): Long? {
     exactMap[title]?.let { return pickOne(it, title, "exact", logger) }
-    trimmedMap[title.trim()]?.let { return pickOne(it, title, "TRIM", logger) }
-    strippedMap[stripTitlePunct(title)]?.let { return pickOne(it, title, "punct-strip", logger) }
     return null
 }
 
 private fun pickOne(matches: List<Long>, title: String, tier: String, logger: Logger): Long? =
     if (matches.size == 1) matches.single()
     else {
-        logger.w { "Generation link: '$title' has multiple $tier matches; skipping" }
-        null
+        logger.e { "Generation link: '$title' has multiple $tier matches" }
+        error("Generation link '$title' has ${matches.size} $tier matches")
     }

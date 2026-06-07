@@ -3,6 +3,10 @@ package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
 import io.github.kdroidfilter.seforimlibrary.common.OptimizedHttpClient
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -20,9 +24,9 @@ import kotlin.system.exitProcess
  * Otzaria, so naming is unified before additional books are added.
  *
  * Rules are downloaded from otzaria-library/ForDB/ on GitHub (UTF-8):
- *  - תיקיות.csv      `old,new` — category renames (exact match, prefix fallback)
- *  - ספרים.csv       `old,new` — book title renames (exact match)
- *  - Moving files.csv `name,sourcePath,destPath` (simple CSV; embedded newlines in quoted fields are not supported)
+ *  - category_renames.csv `old,new` — category renames (exact match, explicit prefix rules)
+ *  - book_renames.csv     `old,new` — book title renames (exact match)
+ *  - book_moves.csv       `name,sourcePath,destPath` (simple CSV; embedded newlines in quoted fields are not supported)
  *
  * Rules are fetched from the fixed `fordb-latest` GitHub release asset.
  * Download failures are fatal because silently skipping these rules can produce
@@ -32,13 +36,12 @@ import kotlin.system.exitProcess
  * 1. Simple rename: When no target category exists under the same parent
  * 2. Merge: When a target category already exists, books are moved and source is deleted
  *
- * Book moves require the destination category path to already exist; missing
- * destinations are skipped with a warning (no auto-creation).
+ * Book moves require the source and destination category paths to already exist;
+ * missing paths fail the task (no auto-creation).
  *
  * Order of operations: category renames → book renames → book moves. Paths in
- * Moving files.csv must therefore reference the POST-rename category names.
- * If a move references a pre-rename destPath, resolveCategoryPath returns null
- * and the move is silently skipped with a "destination not found" warning.
+ * book_moves.csv must therefore reference the POST-rename category names.
+ * If a move references a pre-rename destPath, the task fails with a clear error.
  *
  * Usage:
  *   ./gradlew -p SeforimLibrary :sefariasqlite:renameCategories -PseforimDb=/path/to/seforim.db
@@ -51,10 +54,10 @@ private const val FOR_DB_RELEASE_API =
 private const val FOR_DB_ARCHIVE_NAME = "fordb_latest.zip"
 private const val FOR_DB_USER_AGENT = "SeforimLibrary-ForDBFetcher/1.0"
 internal val FOR_DB_CSV_FILES = mapOf(
-    "categoryRenames" to "תיקיות.csv",
-    "bookRenames" to "ספרים.csv",
-    "bookMoves" to "Moving files.csv",
-    "generations" to "סדר הדורות.csv",
+    "categoryRenames" to "category_renames.csv",
+    "bookRenames" to "book_renames.csv",
+    "bookMoves" to "book_moves.csv",
+    "generations" to "generations.csv",
 )
 
 fun main(args: Array<String>) {
@@ -75,11 +78,14 @@ fun main(args: Array<String>) {
     logger.i { "Renaming/merging categories in $dbPath" }
 
     // Rules downloaded from otzaria-library/ForDB/ at startup.
-    // תיקיות.csv and ספרים.csv have no header; Moving files.csv has one.
-    val categoryRenames: List<Pair<String, String>> =
-        parsePairs(downloadRequiredForDbCsv(FOR_DB_CSV_FILES.getValue("categoryRenames"), logger))
+    // category_renames.csv and book_renames.csv have no header; book_moves.csv has one.
+    val categoryRenames: List<CategoryRename> =
+        parseCategoryRenames(downloadRequiredForDbCsv(FOR_DB_CSV_FILES.getValue("categoryRenames"), logger))
     val bookRenames: List<Pair<String, String>> =
-        parsePairs(downloadRequiredForDbCsv(FOR_DB_CSV_FILES.getValue("bookRenames"), logger))
+        parsePairs(
+            downloadRequiredForDbCsv(FOR_DB_CSV_FILES.getValue("bookRenames"), logger),
+            FOR_DB_CSV_FILES.getValue("bookRenames")
+        )
     val bookMoves: List<BookMove> =
         parseBookMoves(downloadRequiredForDbCsv(FOR_DB_CSV_FILES.getValue("bookMoves"), logger), logger)
 
@@ -89,12 +95,14 @@ fun main(args: Array<String>) {
 
             var totalRenamed = 0
             var totalMerged = 0
-            val categoryResult = runSection("Category renames", categoryRenames, logger) { (oldName, newName) ->
-                val result = renameOrMergeCategory(conn, oldName, newName, logger)
+            val categoryResult = runSection("Category renames", categoryRenames, logger) { rule ->
+                val result = renameOrMergeCategory(conn, rule, logger)
                 when (result) {
                     is RenameResult.Renamed -> totalRenamed += result.count
                     is RenameResult.Merged -> totalMerged += result.booksMoved
-                    is RenameResult.NotFound -> logger.w { "Category rename: '$oldName' not found; skipping" }
+                    is RenameResult.NotFound -> logger.i {
+                        "Category rename: '${rule.oldName}' not found; no rows changed"
+                    }
                 }
                 result.rows()
             }
@@ -103,9 +111,7 @@ fun main(args: Array<String>) {
                 renameBookTitle(conn, oldTitle, newTitle, logger)
             }
 
-            val moveResult = runSection("Book moves", bookMoves, logger) { move ->
-                if (applyBookMove(conn, move, logger)) 1 else 0
-            }
+            val moveResult = runSection("Book moves", bookMoves, logger) { move -> applyBookMove(conn, move, logger) }
 
             conn.commit()
             logger.i {
@@ -121,49 +127,105 @@ fun main(args: Array<String>) {
     }
 }
 
-/** `old,new` rows — skips blanks and malformed lines. */
-internal fun parsePairs(lines: List<String>): List<Pair<String, String>> = lines.mapNotNull { line ->
-    val f = parseCsvLine(line).map { it.trim() }
-    if (f.size >= 2 && f[0].isNotEmpty() && f[1].isNotEmpty()) f[0] to f[1] else null
+/** `old,new` rows — ignores blank rows and fails on malformed non-blank rows. */
+internal fun parsePairs(lines: List<String>, sourceName: String = "pairs CSV"): List<Pair<String, String>> =
+    parseRequiredCsvRows(lines, sourceName, minFields = 2).map { f -> f[0] to f[1] }
+
+private enum class CategoryMatchMode { Exact, Prefix }
+
+private data class CategoryRename(
+    val oldName: String,
+    val newName: String,
+    val matchMode: CategoryMatchMode,
+)
+
+private val EXPLICIT_CATEGORY_PREFIX_RULES = setOf(
+    "ראשונים על",
+    "אחרונים על",
+    "פירושים מודרניים",
+)
+
+private fun parseCategoryRenames(lines: List<String>): List<CategoryRename> =
+    parseRequiredCsvRows(lines, FOR_DB_CSV_FILES.getValue("categoryRenames"), minFields = 2).map { f ->
+        val matchMode = if (f[0] in EXPLICIT_CATEGORY_PREFIX_RULES) {
+            CategoryMatchMode.Prefix
+        } else {
+            CategoryMatchMode.Exact
+        }
+        CategoryRename(oldName = f[0], newName = f[1], matchMode = matchMode)
+    }.distinct()
+
+internal fun parseRequiredCsvRows(lines: List<String>, sourceName: String, minFields: Int): List<List<String>> =
+    lines.mapIndexedNotNull { index, line ->
+        val fields = parseForDbCsvLine(line).map { it.trim() }
+        if (fields.all { it.isEmpty() }) return@mapIndexedNotNull null
+        require(fields.size >= minFields && fields.take(minFields).all { it.isNotEmpty() }) {
+            "$sourceName row ${index + 1} is malformed: $line"
+        }
+        fields
+    }
+
+internal fun parseForDbCsvLine(line: String): List<String> {
+    val result = mutableListOf<String>()
+    val sb = StringBuilder()
+    var inQuotes = false
+    var i = 0
+    while (i < line.length) {
+        val c = line[i]
+        if (inQuotes) {
+            if (c == '"') {
+                if (i + 1 < line.length && line[i + 1] == '"') {
+                    sb.append('"')
+                    i++
+                } else {
+                    inQuotes = false
+                }
+            } else {
+                sb.append(c)
+            }
+        } else {
+            when (c) {
+                '"' -> if (sb.isEmpty()) inQuotes = true else sb.append(c)
+                ',' -> {
+                    result += sb.toString()
+                    sb.setLength(0)
+                }
+                else -> sb.append(c)
+            }
+        }
+        i++
+    }
+    result += sb.toString()
+    return result
 }
 
 /**
  * `name,Source path,Destination path` rows. Drops the header row if present;
  * detection requires both `source path` and `destination path` tokens so a
  * stray book title containing the word "path" can't be mistaken for a header.
- * If the first line doesn't look like a header, treats it as data and logs a
- * warning so a header-less upload doesn't silently lose row 0.
+ * Missing or malformed headers fail the task so release data issues are not
+ * hidden.
  */
 private fun parseBookMoves(lines: List<String>, logger: Logger): List<BookMove> {
     val firstLower = lines.firstOrNull()?.lowercase()
     val isHeader = firstLower != null && "source path" in firstLower && "destination path" in firstLower
-    val body = if (isHeader) {
-        lines.drop(1)
-    } else {
-        if (lines.isNotEmpty()) logger.w { "Moving files.csv: no header detected; treating first row as data" }
-        lines
+    require(isHeader) {
+        "${FOR_DB_CSV_FILES.getValue("bookMoves")} must start with a header containing Source path and Destination path"
     }
-    return body.mapNotNull { line ->
-        val f = parseCsvLine(line).map { it.trim() }
-        if (f.size >= 3 && f[0].isNotEmpty() && f[2].isNotEmpty()) BookMove(f[0], f[1], f[2]) else null
-    }
+    return parseRequiredCsvRows(lines.drop(1), FOR_DB_CSV_FILES.getValue("bookMoves"), minFields = 3)
+        .map { f -> BookMove(f[0], f[1], f[2]) }
+        .also { logger.i { "Loaded ${it.size} book move rule(s)" } }
 }
 
 private data class SectionResult(val applied: Int, val failures: Int)
 
 private fun <T> runSection(name: String, items: List<T>, logger: Logger, apply: (T) -> Int): SectionResult {
     var applied = 0
-    var failures = 0
     for (item in items) {
-        try {
-            applied += apply(item)
-        } catch (e: Exception) {
-            failures++
-            logger.w(e) { "$name failed for '$item'; skipping" }
-        }
+        applied += apply(item)
     }
-    logger.i { "$name: applied=$applied failures=$failures" }
-    return SectionResult(applied, failures)
+    logger.i { "$name: applied=$applied failures=0" }
+    return SectionResult(applied, failures = 0)
 }
 
 private sealed class RenameResult {
@@ -185,12 +247,12 @@ private sealed class RenameResult {
  */
 private fun renameOrMergeCategory(
     conn: Connection,
-    oldName: String,
-    newName: String,
+    rule: CategoryRename,
     logger: Logger
 ): RenameResult {
-    // Find all source categories with oldName (exact match, falling back to prefix)
-    val sourceCats = findSourceCategories(conn, oldName)
+    val oldName = rule.oldName
+    val newName = rule.newName
+    val sourceCats = findSourceCategories(conn, rule)
 
     if (sourceCats.isEmpty()) {
         return RenameResult.NotFound
@@ -270,12 +332,10 @@ private fun deleteCategory(conn: Connection, categoryId: Long) {
 }
 
 /**
- * Exact match first; only if nothing matches exactly, fall back to prefix match.
- * This preserves the safer "literal" interpretation for the common case while
- * still allowing rules like "ראשונים על" to sweep "ראשונים על התלמוד",
- * "ראשונים על המשנה", etc.
+ * Category prefix rules are intentionally limited to [EXPLICIT_CATEGORY_PREFIX_RULES].
+ * All other rows are exact-match only.
  */
-private fun findSourceCategories(conn: Connection, pattern: String): List<Pair<Long, Long?>> {
+private fun findSourceCategories(conn: Connection, rule: CategoryRename): List<Pair<Long, Long?>> {
     fun query(sql: String, param: String): List<Pair<Long, Long?>> {
         val rows = mutableListOf<Pair<Long, Long?>>()
         conn.prepareStatement(sql).use { stmt ->
@@ -290,43 +350,61 @@ private fun findSourceCategories(conn: Connection, pattern: String): List<Pair<L
         return rows
     }
 
-    val exact = query("SELECT id, parentId FROM category WHERE title = ?", pattern)
-    if (exact.isNotEmpty()) return exact
-
-    val likePattern = pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-    return query("SELECT id, parentId FROM category WHERE title LIKE ? ESCAPE '\\'", likePattern)
+    return when (rule.matchMode) {
+        CategoryMatchMode.Exact ->
+            query("SELECT id, parentId FROM category WHERE title = ?", rule.oldName)
+        CategoryMatchMode.Prefix -> {
+            val likePattern = rule.oldName.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            query("SELECT id, parentId FROM category WHERE title LIKE ? ESCAPE '\\'", likePattern)
+        }
+    }
 }
-
-// Upstream rename CSV uses bare-acronym keys (e.g. רדק) while Sefaria stores
-// the punctuated form (רד״ק / רד"ק). Compare with quotes/geresh stripped on
-// both sides; the new title is still written exactly as the CSV provides it.
-internal fun stripTitlePunct(s: String): String =
-    s.replace("\"", "").replace("״", "").replace("'", "").replace("׳", "")
-
-internal const val STRIP_TITLE_PUNCT_SQL =
-    "REPLACE(REPLACE(REPLACE(REPLACE(title, '\"', ''), '״', ''), '''', ''), '׳', '')"
 
 private fun renameBookTitle(conn: Connection, oldTitle: String, newTitle: String, logger: Logger): Int {
-    val sql = "UPDATE book SET title = ? WHERE $STRIP_TITLE_PUNCT_SQL = ?"
-    val n = conn.prepareStatement(sql).use { stmt ->
+    val ids = findBookIdsByTitle(conn, oldTitle)
+    if (ids.isEmpty()) {
+        val alreadyRenamed = findBookIdsByTitle(conn, newTitle)
+        if (alreadyRenamed.isNotEmpty()) {
+            logger.i { "Book rename '$oldTitle' -> '$newTitle' already applied (${alreadyRenamed.size} row(s))" }
+            return 0
+        }
+        logger.w { "Book rename: '$oldTitle' not found; no rows changed" }
+        return 0
+    }
+    require(ids.size == 1) {
+        "Book rename '$oldTitle' -> '$newTitle' matched ${ids.size} books"
+    }
+    val n = conn.prepareStatement("UPDATE book SET title = ? WHERE id = ?").use { stmt ->
         stmt.setString(1, newTitle)
-        stmt.setString(2, stripTitlePunct(oldTitle))
+        stmt.setLong(2, ids.single())
         stmt.executeUpdate()
     }
-    if (n > 0) logger.i { "Renamed book '$oldTitle' -> '$newTitle' ($n rows)" }
-    else logger.w { "Book rename: '$oldTitle' not found; skipping" }
+    logger.i { "Renamed book '$oldTitle' -> '$newTitle' ($n rows)" }
     return n
 }
+
+private fun findBookIdsByTitle(conn: Connection, title: String): List<Long> =
+    conn.prepareStatement("SELECT id FROM book WHERE title = ?").use { stmt ->
+        stmt.setString(1, title)
+        stmt.executeQuery().use { rs ->
+            buildList {
+                while (rs.next()) add(rs.getLong(1))
+            }
+        }
+    }
 
 private data class BookMove(val name: String, val sourcePath: String, val destPath: String)
 
 /**
- * Resolves destPath against the existing category tree and updates the matching
- * book's categoryId. Missing destinations are skipped (no auto-creation).
- * Disambiguates by source path when multiple books share a title; an empty
- * sourcePath is only safe when the title is globally unique.
+ * Resolves sourcePath/destPath against the existing category tree and updates
+ * the matching book's categoryId. Missing paths or ambiguous books fail the task.
  */
-private fun applyBookMove(conn: Connection, move: BookMove, logger: Logger): Boolean {
+private fun applyBookMove(conn: Connection, move: BookMove, logger: Logger): Int {
+    val sourceCatId = resolveCategoryPath(conn, move.sourcePath)
+        ?: error("Book move source '${move.sourcePath}' not found for '${move.name}'")
+    val destCatId = resolveCategoryPath(conn, move.destPath)
+        ?: error("Book move destination '${move.destPath}' not found for '${move.name}'")
+
     val candidates = mutableListOf<Pair<Long, Long>>() // (bookId, categoryId)
     conn.prepareStatement("SELECT id, categoryId FROM book WHERE title = ?").use { stmt ->
         stmt.setString(1, move.name)
@@ -334,27 +412,17 @@ private fun applyBookMove(conn: Connection, move: BookMove, logger: Logger): Boo
             while (rs.next()) candidates.add(rs.getLong(1) to rs.getLong(2))
         }
     }
-    if (candidates.isEmpty()) {
-        logger.w { "Book move: '${move.name}' not found; skipping" }
-        return false
-    }
+    require(candidates.isNotEmpty()) { "Book move: '${move.name}' not found" }
 
-    val sourceCatId = resolveCategoryPath(conn, move.sourcePath)
-    val bookId = when {
-        candidates.size == 1 -> candidates.single().first
-        sourceCatId != null -> candidates.firstOrNull { it.second == sourceCatId }?.first
-        else -> null
+    candidates.singleOrNull { it.second == destCatId }?.let { (bookId, _) ->
+        logger.i { "Book move '${move.name}' already applied (id=$bookId, dest=${move.destPath})" }
+        return 0
     }
-    if (bookId == null) {
-        logger.w { "Book move: '${move.name}' has ${candidates.size} candidates; source '${move.sourcePath}' did not disambiguate; skipping" }
-        return false
+    val sourceMatches = candidates.filter { it.second == sourceCatId }
+    require(sourceMatches.size == 1) {
+        "Book move '${move.name}' has ${candidates.size} candidate(s); source '${move.sourcePath}' matched ${sourceMatches.size}"
     }
-
-    val destCatId = resolveCategoryPath(conn, move.destPath)
-    if (destCatId == null) {
-        logger.w { "Book move: destination '${move.destPath}' not found; skipping" }
-        return false
-    }
+    val bookId = sourceMatches.single().first
 
     conn.prepareStatement("UPDATE book SET categoryId = ? WHERE id = ?").use { stmt ->
         stmt.setLong(1, destCatId)
@@ -362,7 +430,7 @@ private fun applyBookMove(conn: Connection, move: BookMove, logger: Logger): Boo
         stmt.executeUpdate()
     }
     logger.i { "Moved book '${move.name}' (id=$bookId) -> '${move.destPath}' (catId=$destCatId)" }
-    return true
+    return 1
 }
 
 /** Walks `a/b/c` from category roots; returns null on the first missing segment. */
@@ -377,8 +445,7 @@ private fun resolveCategoryPath(conn: Connection, path: String): Long? {
 }
 
 internal fun downloadRequiredForDbCsv(fileName: String, logger: Logger): List<String> {
-    val lines = forDbReleaseCsvs(logger).getValue(fileName)
-    return if (lines.isEmpty()) lines else listOf(lines.first().removePrefix("\uFEFF")) + lines.drop(1)
+    return forDbReleaseCsvs(logger).getValue(fileName)
 }
 
 private var cachedForDbCsvs: Map<String, List<String>>? = null
@@ -412,12 +479,11 @@ private fun forDbReleaseCsvs(logger: Logger): Map<String, List<String>> {
 
 private fun forDbReleaseArchiveUrl(logger: Logger): String {
     val body = OptimizedHttpClient.fetchJson(FOR_DB_RELEASE_API, FOR_DB_USER_AGENT, logger)
-    val archiveNamePattern = Regex.escape(FOR_DB_ARCHIVE_NAME)
-    return Regex(""""browser_download_url"\s*:\s*"([^"]*/$archiveNamePattern)"""")
-        .find(body)
-        ?.groupValues
-        ?.get(1)
-        ?: throw IllegalStateException("No $FOR_DB_ARCHIVE_NAME asset found in fordb-latest release")
+    val assets = Json.parseToJsonElement(body).jsonObject.getValue("assets").jsonArray
+    val asset = assets.firstOrNull {
+        it.jsonObject["name"]?.jsonPrimitive?.content == FOR_DB_ARCHIVE_NAME
+    } ?: throw IllegalStateException("No $FOR_DB_ARCHIVE_NAME asset found in fordb-latest release")
+    return asset.jsonObject.getValue("url").jsonPrimitive.content
 }
 
 private fun readForDbZip(stream: InputStream): Map<String, List<String>> {
