@@ -265,4 +265,119 @@ class SefariaLinksImporterTest {
         assertEquals(ConnectionType.SOURCE, forward)
         assertEquals(ConnectionType.COMMENTARY, reverse)
     }
+
+    // ───── inferBlankConnectionType (structural-home gate) ─────
+
+    // Real-world bug: Magen Avraham 302:6 has a blank-typed CSV link to
+    // Shulchan Arukh, Orach Chayim 323:6 — it merely cites siman 323 while living
+    // in siman 302. The schema inference would call it COMMENTARY (MA depends on
+    // SA), making MA 302:6 surface under SA 323:6 in the מפרשים panel. The
+    // top-level mismatch (302 ≠ 323) must demote it to REFERENCE.
+    @Test
+    fun blankCrossSimanReferenceIsDemotedToReference() {
+        val saMeta = BookMeta(isBaseBook = true, categoryLevel = 0, priorityRank = 0)
+        val maMeta = BookMeta(
+            isBaseBook = false, categoryLevel = 2, priorityRank = null,
+            dependence = Dependence.COMMENTARY, baseTextBookIds = setOf(10L),
+        )
+
+        val result = inferBlankConnectionType(
+            srcBookId = 20L, tgtBookId = 10L,
+            srcMeta = maMeta, tgtMeta = saMeta,
+            srcRef = "Magen Avraham 302:6",
+            tgtRef = "Shulchan Arukh, Orach Chayim 323:6",
+        )
+
+        assertEquals(ConnectionType.REFERENCE, result)
+    }
+
+    // Same siman → genuine home commentary, kept as COMMENTARY. (MA's ס"ק
+    // numbering need not equal SA's se'if numbering, so only the top level matches.)
+    @Test
+    fun blankSameSimanCommentaryIsKept() {
+        val saMeta = BookMeta(isBaseBook = true, categoryLevel = 0, priorityRank = 0)
+        val maMeta = BookMeta(
+            isBaseBook = false, categoryLevel = 2, priorityRank = null,
+            dependence = Dependence.COMMENTARY, baseTextBookIds = setOf(10L),
+        )
+
+        val result = inferBlankConnectionType(
+            srcBookId = 20L, tgtBookId = 10L,
+            srcMeta = maMeta, tgtMeta = saMeta,
+            srcRef = "Magen Avraham 323:8",
+            tgtRef = "Shulchan Arukh, Orach Chayim 323:6",
+        )
+
+        assertEquals(ConnectionType.COMMENTARY, result)
+    }
+
+    // The ~1.5M blank-typed-but-genuine class (e.g. Abarbanel → the verse it
+    // expounds) must stay COMMENTARY — the dependant's top-level index matches.
+    @Test
+    fun blankHomeCommentaryWithTargetDependantIsKept() {
+        val genesisMeta = BookMeta(isBaseBook = true, categoryLevel = 0, priorityRank = 0)
+        val rashiMeta = BookMeta(
+            isBaseBook = false, categoryLevel = 2, priorityRank = null,
+            dependence = Dependence.COMMENTARY, baseTextBookIds = setOf(10L),
+        )
+
+        // src = base (Genesis 1:1), tgt = dependant commenting on it.
+        val result = inferBlankConnectionType(
+            srcBookId = 10L, tgtBookId = 20L,
+            srcMeta = genesisMeta, tgtMeta = rashiMeta,
+            srcRef = "Genesis 1:1",
+            tgtRef = "Rashi on Genesis 1:1:1",
+        )
+
+        assertEquals(ConnectionType.COMMENTARY, result)
+    }
+
+    // Daf-style refs have no parseable numeric top level, so the gate never fires
+    // — protects Talmud commentaries from being wrongly demoted.
+    @Test
+    fun blankDafStyleRefIsNotDemoted() {
+        val talmudMeta = BookMeta(isBaseBook = true, categoryLevel = 0, priorityRank = 0)
+        val tosafotMeta = BookMeta(
+            isBaseBook = false, categoryLevel = 2, priorityRank = null,
+            dependence = Dependence.COMMENTARY, baseTextBookIds = setOf(10L),
+        )
+
+        val result = inferBlankConnectionType(
+            srcBookId = 10L, tgtBookId = 20L,
+            srcMeta = talmudMeta, tgtMeta = tosafotMeta,
+            srcRef = "Shabbat 4b:3",
+            tgtRef = "Tosafot on Shabbat 2a:1:1",
+        )
+
+        assertEquals(ConnectionType.COMMENTARY, result)
+    }
+
+    // No base/dependant relationship → null (caller keeps the CSV fallback, OTHER).
+    @Test
+    fun blankWithNoDependenceReturnsNull() {
+        val a = BookMeta(isBaseBook = true, categoryLevel = 0, priorityRank = 1)
+        val b = BookMeta(isBaseBook = true, categoryLevel = 0, priorityRank = 2)
+
+        val result = inferBlankConnectionType(
+            srcBookId = 10L, tgtBookId = 20L,
+            srcMeta = a, tgtMeta = b,
+            srcRef = "Genesis 1:1",
+            tgtRef = "Exodus 2:2",
+        )
+
+        assertNull(result)
+    }
+
+    // ───── topLevelStructuralIndex ─────
+
+    @Test
+    fun topLevelStructuralIndexParsing() {
+        assertEquals(302, topLevelStructuralIndex("Magen Avraham 302:6"))
+        assertEquals(323, topLevelStructuralIndex("Shulchan Arukh, Orach Chayim 323:6"))
+        assertEquals(1, topLevelStructuralIndex("Rashi on Genesis 1:1:1"))
+        assertEquals(5, topLevelStructuralIndex("II Kings 5:3"))
+        assertNull(topLevelStructuralIndex("Shabbat 2a"))
+        assertNull(topLevelStructuralIndex("Shabbat 2a:5"))
+        assertNull(topLevelStructuralIndex("Genesis"))
+    }
 }

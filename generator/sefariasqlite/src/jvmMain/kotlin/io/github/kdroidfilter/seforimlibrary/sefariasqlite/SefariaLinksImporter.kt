@@ -136,13 +136,18 @@ internal class SefariaLinksImporter(
                         // its base text. Without this, ~1.5M legitimate
                         // commentary/targum links (e.g. Abarbanel → Tanakh
                         // verse it expounds) silently land in OTHER and are
-                        // excluded from the SOURCE view.
+                        // excluded from the SOURCE view. The promotion is gated
+                        // by a structural-home check (see [inferBlankConnectionType])
+                        // so blank-typed cross-references don't masquerade as
+                        // commentary in the reader's מפרשים panel.
                         val baseConnectionType = if (connIsBlank) {
-                            inferConnectionTypeFromSchema(
+                            inferBlankConnectionType(
                                 srcBookId = srcBookId,
                                 tgtBookId = tgtBookId,
                                 srcMeta = bookMetaById[srcBookId],
                                 tgtMeta = bookMetaById[tgtBookId],
+                                srcRef = c1,
+                                tgtRef = c2,
                             ) ?: csvConnectionType
                         } else {
                             csvConnectionType
@@ -474,6 +479,65 @@ internal fun inferConnectionTypeFromSchema(
         else -> null
     }
 }
+
+/**
+ * Blank `Conection Type` recovery, gated by a structural-home check.
+ *
+ * [inferConnectionTypeFromSchema] promotes any blank-typed link to the dependant
+ * side's oriented type (e.g. COMMENTARY) whenever one book declares the other as a
+ * base text. That is right for a commentary segment that actually expounds the base
+ * segment it points at (Abarbanel → the verse it comments on), but wrong for a lateral
+ * cross-reference: `Magen Avraham 302:6` links to `Shulchan Arukh, Orach Chayim 323:6`
+ * only because it cites siman 323, even though it lives in siman 302. Promoting those
+ * to COMMENTARY makes the commentator panel surface comments from unrelated simanim.
+ *
+ * Genuine commentary links are explicitly typed `commentary` in Sefaria and never reach
+ * this path — only blank-typed links do. So we keep the oriented promotion only when the
+ * dependant segment's top-level structural address (siman / perek) matches the base
+ * segment it points at; otherwise the link is a [ConnectionType.REFERENCE]. Refs without
+ * a parseable numeric top level (whole-book citations, daf-style `2a`) are left as
+ * inferred — the gate only fires on a confident mismatch.
+ */
+internal fun inferBlankConnectionType(
+    srcBookId: Long,
+    tgtBookId: Long,
+    srcMeta: BookMeta?,
+    tgtMeta: BookMeta?,
+    srcRef: String,
+    tgtRef: String,
+): ConnectionType? {
+    val inferred = inferConnectionTypeFromSchema(srcBookId, tgtBookId, srcMeta, tgtMeta)
+        ?: return null
+    if (inferred !in ORIENTED_DEPENDANT_TYPES) return inferred
+
+    // Which side is the dependant (commentary) and which is the base it expounds?
+    // `srcRef`/`tgtRef` are Citation 1/2, matching the src/tgt book ids respectively.
+    val targetDependsOnSource = tgtMeta != null && srcBookId in tgtMeta.baseTextBookIds
+    val dependantRef = if (targetDependsOnSource) tgtRef else srcRef
+    val baseRef = if (targetDependsOnSource) srcRef else tgtRef
+
+    val dependantTop = topLevelStructuralIndex(dependantRef)
+    val baseTop = topLevelStructuralIndex(baseRef)
+    return if (dependantTop != null && baseTop != null && dependantTop != baseTop) {
+        ConnectionType.REFERENCE
+    } else {
+        inferred
+    }
+}
+
+/**
+ * Leading (top-level) numeric index of a Sefaria reference — the top component of its
+ * trailing address run, parsed from the end so textual title parts are skipped.
+ * `Magen Avraham 302:6` → 302; `Shulchan Arukh, Orach Chayim 323:6` → 323;
+ * `Rashi on Genesis 1:1:1` → 1. Returns null when the top component is not purely
+ * numeric — whole-book refs (`Genesis`) and daf-style refs (`Shabbat 2a`) — so such
+ * links are never demoted by the structural gate.
+ */
+internal fun topLevelStructuralIndex(ref: String): Int? =
+    ref.trim()
+        .substringAfterLast(' ') // address portion, e.g. "302:6" / "2a:5"
+        .substringBefore(':') // top-level component, e.g. "302" / "2a"
+        .toIntOrNull()
 
 private val ORIENTED_DEPENDANT_TYPES = setOf(
     ConnectionType.COMMENTARY,
