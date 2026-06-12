@@ -153,11 +153,13 @@ private fun parseCategoryRenames(lines: List<String>): List<CategoryRename> =
         CategoryRename(oldName = f[0], newName = f[1], matchMode = matchMode)
     }.distinct()
 
+// Fields are kept verbatim (no trim) so rules can exact-match DB values that
+// carry edge spaces.
 internal fun parseRequiredCsvRows(lines: List<String>, sourceName: String, minFields: Int): List<List<String>> =
     lines.mapIndexedNotNull { index, line ->
-        val fields = parseForDbCsvLine(line).map { it.trim() }
-        if (fields.all { it.isEmpty() }) return@mapIndexedNotNull null
-        require(fields.size >= minFields && fields.take(minFields).all { it.isNotEmpty() }) {
+        val fields = parseForDbCsvLine(line)
+        if (fields.all { it.isBlank() }) return@mapIndexedNotNull null
+        require(fields.size >= minFields && fields.take(minFields).none { it.isBlank() }) {
             "$sourceName row ${index + 1} is malformed: $line"
         }
         fields
