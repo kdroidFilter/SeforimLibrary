@@ -407,7 +407,124 @@ class LuceneSearchEngineTest {
         }
     }
 
+    // --- Exact phrase (quoted) tests ---
+
+    @Test
+    fun `quoted query matches only the exact ordered adjacent phrase`() {
+        val tempDir = createTempIndexDir()
+        try {
+            createIndexWithPhrases(tempDir)
+            val engine = LuceneSearchEngine(tempDir)
+
+            val session = engine.openSession("\"מלך דוד\"", 5)
+            assertNotNull(session)
+            // line 1 ("מלך דוד") and line 5 ("ירושלים מלך דוד עיר") contain the exact phrase.
+            // line 2 ("דוד מלך", reversed) and line 3 ("מלך גדול דוד", gap) must be excluded.
+            assertEquals(setOf(1L, 5L), collectLineIds(session))
+
+            engine.close()
+        } finally {
+            deleteDirectory(tempDir)
+        }
+    }
+
+    @Test
+    fun `unquoted query matches every doc containing the words in any order`() {
+        val tempDir = createTempIndexDir()
+        try {
+            createIndexWithPhrases(tempDir)
+            val engine = LuceneSearchEngine(tempDir)
+
+            val session = engine.openSession("מלך דוד", 5)
+            assertNotNull(session)
+            // Without quotes the order/adjacency is relaxed: lines 1, 2, 3 and 5 all qualify.
+            assertEquals(setOf(1L, 2L, 3L, 5L), collectLineIds(session))
+
+            engine.close()
+        } finally {
+            deleteDirectory(tempDir)
+        }
+    }
+
+    @Test
+    fun `mixed free word plus quoted phrase requires both`() {
+        val tempDir = createTempIndexDir()
+        try {
+            createIndexWithPhrases(tempDir)
+            val engine = LuceneSearchEngine(tempDir)
+
+            val session = engine.openSession("ירושלים \"מלך דוד\"", 5)
+            assertNotNull(session)
+            // Only line 5 has both the free word "ירושלים" and the exact phrase "מלך דוד".
+            assertEquals(setOf(5L), collectLineIds(session))
+
+            engine.close()
+        } finally {
+            deleteDirectory(tempDir)
+        }
+    }
+
+    @Test
+    fun `gershayim-quoted query behaves like an exact phrase`() {
+        val tempDir = createTempIndexDir()
+        try {
+            createIndexWithPhrases(tempDir)
+            val engine = LuceneSearchEngine(tempDir)
+
+            // Same phrase as the ASCII test but delimited with Hebrew gershayim (U+05F4).
+            val session = engine.openSession("״מלך דוד״", 5)
+            assertNotNull(session)
+            assertEquals(setOf(1L, 5L), collectLineIds(session))
+
+            engine.close()
+        } finally {
+            deleteDirectory(tempDir)
+        }
+    }
+
     // --- Helper methods ---
+
+    private fun collectLineIds(session: SearchSession): Set<Long> = runBlocking {
+        val ids = mutableSetOf<Long>()
+        while (true) {
+            val page = session.nextPage(50) ?: break
+            page.hits.forEach { ids.add(it.lineId) }
+            if (page.isLastPage) break
+        }
+        session.close()
+        ids
+    }
+
+    private fun createIndexWithPhrases(indexDir: Path) {
+        FSDirectory.open(indexDir).use { dir ->
+            val config = IndexWriterConfig(StandardAnalyzer())
+            IndexWriter(dir, config).use { writer ->
+                val rows = listOf(
+                    1L to "מלך דוד",
+                    2L to "דוד מלך",
+                    3L to "מלך גדול דוד",
+                    4L to "שלום עולם",
+                    5L to "ירושלים מלך דוד עיר",
+                )
+                rows.forEach { (lineId, text) ->
+                    val doc = Document().apply {
+                        add(StringField("type", "line", Field.Store.YES))
+                        add(StoredField("book_id", 1))
+                        add(IntPoint("book_id", 1))
+                        add(StoredField("book_title", "ספר בדיקה"))
+                        add(StoredField("line_id", lineId))
+                        add(IntPoint("line_id", lineId.toInt()))
+                        add(StoredField("line_index", (lineId - 1).toInt()))
+                        add(TextField("text", HebrewTextUtils.normalizeHebrew(text), Field.Store.NO))
+                        add(StoredField("text_raw", text))
+                        add(StoredField("is_base_book", 1))
+                        add(StoredField("order_index", 1))
+                    }
+                    writer.addDocument(doc)
+                }
+            }
+        }
+    }
 
     private fun createTempIndexDir(): Path {
         return Files.createTempDirectory("lucene_test_index")

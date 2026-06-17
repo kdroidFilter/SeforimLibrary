@@ -196,22 +196,36 @@ class LuceneSearchEngine(
     }
 
     override fun buildSnippet(rawText: String, query: String, near: Int): String {
-        val norm = HebrewTextUtils.normalizeHebrew(query)
-        if (norm.isBlank()) return Jsoup.clean(rawText, Safelist.none())
+        val parsed = SearchQueryParser.parse(query)
+        val norm = HebrewTextUtils.normalizeHebrew(parsed.freeText)
+        val exactPhrasesNorm = parsed.exactPhrases
+            .map { HebrewTextUtils.normalizeHebrew(it) }
+            .filter { it.isNotBlank() }
+        if (norm.isBlank() && exactPhrasesNorm.isEmpty()) return Jsoup.clean(rawText, Safelist.none())
         val rawClean = Jsoup.clean(rawText, Safelist.none())
         val analyzedStd = (analyzeToTerms(stdAnalyzer, norm) ?: emptyList())
         val hasHashem = query.contains("ה׳") || query.contains("ה'")
         val hashemTerms = if (hasHashem) loadHashemHighlightTerms() else emptyList()
+        // Verbatim tokens from the quoted phrases must be highlighted too (no expansion).
+        val exactPhraseTokens = exactPhrasesNorm.flatMap { analyzeToTerms(stdAnalyzer, it) ?: emptyList() }
         val highlightTerms = filterTermsForHighlight(
-            analyzedStd + buildNgramTerms(analyzedStd, gram = 4) + hashemTerms
+            analyzedStd + buildNgramTerms(analyzedStd, gram = 4) + hashemTerms + exactPhraseTokens
         )
-        val anchorTerms = buildAnchorTerms(norm, highlightTerms)
+        val anchorBasis = (sequenceOf(norm) + exactPhrasesNorm.asSequence())
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+        val anchorTerms = buildAnchorTerms(anchorBasis, highlightTerms)
         return buildSnippetInternal(rawClean, anchorTerms, highlightTerms)
     }
 
     override fun buildHighlightTerms(query: String): List<String> {
-        val norm = HebrewTextUtils.normalizeHebrew(query)
-        if (norm.isBlank()) return emptyList()
+        val parsed = SearchQueryParser.parse(query)
+        val norm = HebrewTextUtils.normalizeHebrew(parsed.freeText)
+        // Verbatim tokens from the quoted phrases, highlighted without dictionary expansion.
+        val exactPhraseTokens = parsed.exactPhrases
+            .flatMap { analyzeToTerms(stdAnalyzer, HebrewTextUtils.normalizeHebrew(it)) ?: emptyList() }
+
+        if (norm.isBlank()) return filterTermsForHighlight(exactPhraseTokens)
 
         val analyzedRaw = analyzeToTerms(stdAnalyzer, norm) ?: emptyList()
         val hasHashem = query.contains("ה׳") || query.contains("ה'")
@@ -248,7 +262,7 @@ class LuceneSearchEngine(
         val ngramTerms = buildNgramTerms(analyzedStd, gram = 4)
         val hashemTerms = if (hasHashem) loadHashemHighlightTerms() else emptyList()
 
-        return filterTermsForHighlight(analyzedStd + expandedTerms + ngramTerms + hashemTerms)
+        return filterTermsForHighlight(analyzedStd + expandedTerms + ngramTerms + hashemTerms + exactPhraseTokens)
     }
 
     override fun close() {
@@ -386,8 +400,15 @@ class LuceneSearchEngine(
         lineIds: Collection<Long>?,
         baseBookOnly: Boolean = false
     ): SearchContext? {
-        val norm = HebrewTextUtils.normalizeHebrew(rawQuery)
-        if (norm.isBlank()) return null
+        // Split the raw query into exact phrases (wrapped in ASCII double quotes) and free text.
+        // Quoted segments are matched verbatim WITHOUT dictionary expansion (Google-style).
+        val parsed = SearchQueryParser.parse(rawQuery)
+        val norm = HebrewTextUtils.normalizeHebrew(parsed.freeText)
+        val exactPhrasesNorm = parsed.exactPhrases
+            .map { HebrewTextUtils.normalizeHebrew(it) }
+            .filter { it.isNotBlank() }
+
+        if (norm.isBlank() && exactPhrasesNorm.isEmpty()) return null
 
         val analyzedRaw = analyzeToTerms(stdAnalyzer, norm) ?: emptyList()
 
@@ -452,12 +473,15 @@ class LuceneSearchEngine(
         // mentions Hashem explicitly, also include dictionary-based variants of the
         // divine name from the lexical DB
         val hashemTerms = if (hasHashem) loadHashemHighlightTerms() else emptyList()
-        val highlightTerms = filterTermsForHighlight(analyzedStd + expandedTerms + ngramTerms + hashemTerms)
-        val anchorTerms = buildAnchorTerms(norm, highlightTerms)
-
-        val rankedQuery = buildExpandedQuery(norm, near, analyzedStd, tokenExpansions)
-        val mustAllTokensQuery: Query? = buildPresenceFilterForTokens(analyzedStd, near, tokenExpansions)
-        val phraseQuery: Query? = buildSynonymPhraseQuery(analyzedStd, tokenExpansions, near)
+        // Verbatim tokens from the quoted phrases must be highlighted too (no expansion).
+        val exactPhraseTokens = exactPhrasesNorm.flatMap { analyzeToTerms(stdAnalyzer, it) ?: emptyList() }
+        val highlightTerms = filterTermsForHighlight(
+            analyzedStd + expandedTerms + ngramTerms + hashemTerms + exactPhraseTokens
+        )
+        val anchorBasis = (sequenceOf(norm) + exactPhrasesNorm.asSequence())
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+        val anchorTerms = buildAnchorTerms(anchorBasis, highlightTerms)
 
         val builder = BooleanQuery.Builder()
         builder.add(TermQuery(Term("type", "line")), BooleanClause.Occur.FILTER)
@@ -473,18 +497,36 @@ class LuceneSearchEngine(
         if (lineIdsArray != null && lineIdsArray.isNotEmpty()) {
             builder.add(IntPoint.newSetQuery("line_id", *lineIdsArray), BooleanClause.Occur.FILTER)
         }
-        if (mustAllTokensQuery != null) {
-            builder.add(mustAllTokensQuery, BooleanClause.Occur.FILTER)
-            logger.d { "[DEBUG] Added mustAllTokensQuery as FILTER" }
+        // Quoted phrases: each must appear verbatim as an exact, in-order, adjacent phrase.
+        var exactClausesAdded = 0
+        for (phrase in exactPhrasesNorm) {
+            val exactQuery = buildExactPhraseQuery(phrase) ?: continue
+            builder.add(exactQuery, BooleanClause.Occur.MUST)
+            exactClausesAdded++
+            logger.d { "[DEBUG] Added exact-phrase MUST for: \"$phrase\"" }
         }
-        val analyzedCount = analyzedStd.size
-        if (phraseQuery != null && analyzedCount >= 2) {
-            val occur = if (near == 0) BooleanClause.Occur.MUST else BooleanClause.Occur.SHOULD
-            builder.add(phraseQuery, occur)
-            logger.d { "[DEBUG] Added phraseQuery with occur=$occur, near=$near" }
+
+        // A fully-quoted query that produced no usable phrase clause (e.g. just punctuation)
+        // must not fall through to a match-all query.
+        if (norm.isBlank() && exactClausesAdded == 0) return null
+
+        // Free (unquoted) text: dictionary-aware ranking + presence filtering.
+        if (norm.isNotBlank()) {
+            val rankedQuery = buildExpandedQuery(norm, near, analyzedStd, tokenExpansions)
+            val mustAllTokensQuery: Query? = buildPresenceFilterForTokens(analyzedStd, near, tokenExpansions)
+            val phraseQuery: Query? = buildSynonymPhraseQuery(analyzedStd, tokenExpansions, near)
+            if (mustAllTokensQuery != null) {
+                builder.add(mustAllTokensQuery, BooleanClause.Occur.FILTER)
+                logger.d { "[DEBUG] Added mustAllTokensQuery as FILTER" }
+            }
+            if (phraseQuery != null && analyzedStd.size >= 2) {
+                val occur = if (near == 0) BooleanClause.Occur.MUST else BooleanClause.Occur.SHOULD
+                builder.add(phraseQuery, occur)
+                logger.d { "[DEBUG] Added phraseQuery with occur=$occur, near=$near" }
+            }
+            builder.add(rankedQuery, BooleanClause.Occur.SHOULD)
+            logger.d { "[DEBUG] Added rankedQuery as SHOULD" }
         }
-        builder.add(rankedQuery, BooleanClause.Occur.SHOULD)
-        logger.d { "[DEBUG] Added rankedQuery as SHOULD" }
 
         val finalQuery = builder.build()
         logger.d { "[DEBUG] Final query: $finalQuery" }
@@ -669,6 +711,21 @@ class LuceneSearchEngine(
         if (phrase != null) return phrase
         val bool = qb.createBooleanQuery("text", norm, BooleanClause.Occur.MUST)
         return bool ?: BooleanQuery.Builder().build()
+    }
+
+    /**
+     * Builds a strict, verbatim phrase query for a quoted segment: terms must appear in the
+     * given order and be adjacent (slop = 0), with NO dictionary expansion, fuzzy matching or
+     * n-gram substring matching. A single-token segment becomes an exact [TermQuery].
+     *
+     * Nikud and final letters are still normalised (the segment is normalised by the caller and
+     * tokenised through [stdAnalyzer]) so that the phrase matches the indexed form.
+     */
+    private fun buildExactPhraseQuery(phraseNorm: String): Query? {
+        if (phraseNorm.isBlank()) return null
+        val qb = QueryBuilder(stdAnalyzer)
+        qb.createPhraseQuery("text", phraseNorm, 0)?.let { return it }
+        return qb.createBooleanQuery("text", phraseNorm, BooleanClause.Occur.MUST)
     }
 
     private fun buildMagicBoostQuery(expansions: List<MagicDictionaryIndex.Expansion>): Query? {
