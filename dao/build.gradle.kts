@@ -11,18 +11,31 @@ group = "io.github.kdroidfilter.seforimlibrary"
 
 
 kotlin {
+    // Re-apply the default hierarchy (ios/native/apple wiring); adding the manual androidJvmMain
+    // dependsOn edges below would otherwise disable it and orphan the iOS actuals.
+    applyDefaultHierarchyTemplate()
+
     jvmToolchain(libs.versions.jvmToolchain.get().toInt())
 
     androidLibrary {
-        namespace = "io.github.kdroidfilter.seforimlibrary"
-        compileSdk = 35
+        namespace = "io.github.kdroidfilter.seforimlibrary.dao"
+        compileSdk = 36
         minSdk = 21
     }
     jvm()
+    iosArm64()
+    iosSimulatorArm64()
 
     sourceSets {
+        // Shared JVM+Android source set: Android is JVM-based, so the java.util.concurrent.ConcurrentHashMap
+        // (newConcurrentMap) and System.getenv (Env) actuals live here once.
+        val androidJvmMain by creating { dependsOn(commonMain.get()) }
+        jvmMain.get().dependsOn(androidJvmMain)
+        androidMain.get().dependsOn(androidJvmMain)
+
         commonMain.dependencies {
             api(project(":core"))
+            implementation(libs.filekit.core)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlinx.serialization.json)
