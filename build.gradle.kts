@@ -115,6 +115,10 @@ tasks.register("publishRelease") {
     description = "generateSeforimDb + producePatchAndVerify (+ release_meta.json upsert)."
     dependsOn("generateSeforimDb")
     finalizedBy(":generator-common:producePatchAndVerify")
+    val prevReleaseDb = providers.gradleProperty("prevReleaseDb")
+    val buildStatePath = providers.systemProperty("buildStatePath")
+        .orElse(providers.environmentVariable("BUILD_STATE_PATH"))
+        .orElse(layout.buildDirectory.file("seforim.db.buildstate").map { it.asFile.absolutePath })
     // Operator footgun guard: if -PprevReleaseDb is set we're producing a
     // delta against a previous release, which requires the IdAllocator to
     // be seeded from that release's build_state. Without it, the allocator
@@ -122,15 +126,9 @@ tasks.register("publishRelease") {
     // would then emit a "delta" containing the entire corpus, useless as
     // an incremental patch. Fail fast with the path the operator forgot.
     doFirst {
-        val prev = project.findProperty("prevReleaseDb") as String?
+        val prev = prevReleaseDb.orNull
         if (prev != null) {
-            val explicit = System.getProperty("buildStatePath")
-                ?: System.getenv("BUILD_STATE_PATH")
-            val buildStateFile = if (explicit != null) {
-                file(explicit)
-            } else {
-                layout.buildDirectory.file("seforim.db.buildstate").get().asFile
-            }
+            val buildStateFile = java.io.File(buildStatePath.get())
             check(buildStateFile.exists()) {
                 "publishRelease: -PprevReleaseDb=$prev was set but " +
                     "$buildStateFile is missing. Copy the previous release's " +
@@ -147,16 +145,16 @@ project(":generator-common").tasks.matching { it.name == "producePatchAndVerify"
     // generateSeforimDb to exist in :generator-common.
     mustRunAfter(rootProject.tasks.named("generateSeforimDb"))
     // Map the umbrella task's -P props onto the CLI's gradle props.
-    val prev = project.findProperty("prevReleaseDb") as String?
-    val from = project.findProperty("fromVersion") as String?
-    val to = project.findProperty("toVersion") as String?
+    val prev = providers.gradleProperty("prevReleaseDb").orNull
+    val from = providers.gradleProperty("fromVersion").orNull
+    val to = providers.gradleProperty("toVersion").orNull
     if (prev != null && from != null && to != null) {
         val out = rootProject.layout.buildDirectory
             .file("patch-v${from}-v${to}.db").get().asFile.absolutePath
         val new = rootProject.layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
-        this.extensions.extraProperties.set("prevDb", prev)
-        this.extensions.extraProperties.set("newDb", new)
-        this.extensions.extraProperties.set("out", out)
+        (this as JavaExec).systemProperty("prevDb", prev)
+        (this as JavaExec).systemProperty("newDb", new)
+        (this as JavaExec).systemProperty("out", out)
     }
 }
 
