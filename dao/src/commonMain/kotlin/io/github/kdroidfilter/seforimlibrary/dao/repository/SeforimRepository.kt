@@ -44,7 +44,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
     // paying a SQLite prepare + connection round-trip for every breadcrumb/tree walk.
     // Profiling (see JFR 2026-04-23) showed 70 `sqlite3_prepare` calls in 20 s all
     // coming from `getCategory`. newConcurrentMap is a ConcurrentHashMap on JVM/Android;
-    // the iOS actual is a plain map (stub) until a concurrent iOS impl is wired in.
+    // the iOS actual is NSLock-backed.
     private val categoryCache = newConcurrentMap<Long, Category>()
 
     // book.orderIndex is denormalized onto each link row at insert time (targetBookOrderIndex)
