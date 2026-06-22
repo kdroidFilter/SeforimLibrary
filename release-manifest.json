@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-06-22T20:35:22Z",
+  "generatedAt": "2026-06-22T22:07:15Z",
   "latest": {
     "assets": [
       {
@@ -21,7 +21,7 @@
         "contentType": "application/zstd",
         "createdAt": "2026-04-16T10:26:18Z",
         "digest": "sha256:f99f8e2041abe7273c512a6cdd1d57ab356f2439285954b6da113760bdfe2dc9",
-        "downloadCount": 10286,
+        "downloadCount": 10303,
         "id": "RA_kwDOQ6kTXM4XtG1v",
         "label": "",
         "name": "seforim.db.zst",
