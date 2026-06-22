@@ -1,116 +1,45 @@
 {
-  "generatedAt": "2026-06-18T12:30:17Z",
+  "generatedAt": "2026-06-22T20:35:22Z",
   "latest": {
     "assets": [
       {
-        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/449999980",
-        "contentType": "application/octet-stream",
-        "createdAt": "2026-06-17T07:35:31Z",
-        "digest": "sha256:1f03be43f9444c991ac4f0f2ef1669cf1a4014f3a5decb404fea9713cb522e5e",
-        "downloadCount": 0,
-        "id": "RA_kwDOPFZ3eM4a0nRs",
-        "label": "",
-        "name": "catalog.pb",
-        "size": 671639,
-        "state": "uploaded",
-        "updatedAt": "2026-06-17T07:35:31Z",
-        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20260617051715/catalog.pb"
-      },
-      {
-        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/449999979",
-        "contentType": "application/octet-stream",
-        "createdAt": "2026-06-17T07:35:31Z",
-        "digest": "sha256:61cc7dc15db430989b560250490481590c7ae80f6dfe724b967f835e87ac0f58",
-        "downloadCount": 5,
-        "id": "RA_kwDOPFZ3eM4a0nRr",
-        "label": "",
-        "name": "patch-v1-v2.db.zst",
-        "size": 13425868,
-        "state": "uploaded",
-        "updatedAt": "2026-06-17T07:35:32Z",
-        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20260617051715/patch-v1-v2.db.zst"
-      },
-      {
-        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/449999975",
+        "apiUrl": "https://api.github.com/repos/Otzaria/SeforimLibrary/releases/assets/397700465",
         "contentType": "application/json",
-        "createdAt": "2026-06-17T07:35:31Z",
-        "digest": "sha256:480336d19a0b8c4365b648d4a633a555c33e932c7021b6ea7687981e0c08080a",
-        "downloadCount": 6,
-        "id": "RA_kwDOPFZ3eM4a0nRn",
+        "createdAt": "2026-04-16T10:26:18Z",
+        "digest": "sha256:9bbf17911551718bfe8ce541835da8c2952af1258ff1051cc388ba018c772b17",
+        "downloadCount": 22,
+        "id": "RA_kwDOQ6kTXM4XtG1x",
         "label": "",
-        "name": "patch-v1-v2.db.zst.manifest.json",
-        "size": 641,
+        "name": "seforim-manifest.json",
+        "size": 70,
         "state": "uploaded",
-        "updatedAt": "2026-06-17T07:35:31Z",
-        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20260617051715/patch-v1-v2.db.zst.manifest.json"
+        "updatedAt": "2026-04-16T10:26:18Z",
+        "url": "https://github.com/Otzaria/SeforimLibrary/releases/download/db-v1/seforim-manifest.json"
       },
       {
-        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/449999976",
-        "contentType": "application/octet-stream",
-        "createdAt": "2026-06-17T07:35:31Z",
-        "digest": "sha256:8cf5a5fc2382bb2da411ba2eea91d890f889a012fbe579134472def896c3109c",
-        "downloadCount": 1,
-        "id": "RA_kwDOPFZ3eM4a0nRo",
+        "apiUrl": "https://api.github.com/repos/Otzaria/SeforimLibrary/releases/assets/397700463",
+        "contentType": "application/zstd",
+        "createdAt": "2026-04-16T10:26:18Z",
+        "digest": "sha256:f99f8e2041abe7273c512a6cdd1d57ab356f2439285954b6da113760bdfe2dc9",
+        "downloadCount": 10286,
+        "id": "RA_kwDOQ6kTXM4XtG1v",
         "label": "",
-        "name": "seforim.db.buildstate",
-        "size": 940724224,
+        "name": "seforim.db.zst",
+        "size": 1080895219,
         "state": "uploaded",
-        "updatedAt": "2026-06-17T07:36:15Z",
-        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20260617051715/seforim.db.buildstate"
-      },
-      {
-        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/449999981",
-        "contentType": "application/octet-stream",
-        "createdAt": "2026-06-17T07:35:31Z",
-        "digest": "sha256:777aeca9feb5f80f03b5cee84922dfec3e4aa6e51c3430cf68b6409dabbd3af3",
-        "downloadCount": 52,
-        "id": "RA_kwDOPFZ3eM4a0nRt",
-        "label": "",
-        "name": "seforim_bundle.tar.zst.part01",
-        "size": 2040109465,
-        "state": "uploaded",
-        "updatedAt": "2026-06-17T07:37:08Z",
-        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20260617051715/seforim_bundle.tar.zst.part01"
-      },
-      {
-        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/449999977",
-        "contentType": "application/octet-stream",
-        "createdAt": "2026-06-17T07:35:31Z",
-        "digest": "sha256:99a7e032c15bf1b93a4aa340ba59a3af821adc38a67ee4a72a211b07110a3fae",
-        "downloadCount": 35,
-        "id": "RA_kwDOPFZ3eM4a0nRp",
-        "label": "",
-        "name": "seforim_bundle.tar.zst.part02",
-        "size": 1440094676,
-        "state": "uploaded",
-        "updatedAt": "2026-06-17T07:36:37Z",
-        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20260617051715/seforim_bundle.tar.zst.part02"
+        "updatedAt": "2026-04-16T10:27:11Z",
+        "url": "https://github.com/Otzaria/SeforimLibrary/releases/download/db-v1/seforim.db.zst"
       }
     ],
-    "name": "v2-20260617051715",
-    "publishedAt": "2026-06-17T07:35:29Z",
-    "tagName": "v2-20260617051715"
+    "name": "db-v1",
+    "publishedAt": "2026-04-16T10:27:12Z",
+    "tagName": "db-v1"
   },
   "releases": [
     {
-      "name": "v2-20260617051715",
-      "publishedAt": "2026-06-17T07:35:29Z",
-      "tagName": "v2-20260617051715"
-    },
-    {
-      "name": "v1-20260601094341",
-      "publishedAt": "2026-06-01T11:50:22Z",
-      "tagName": "v1-20260601094341"
-    },
-    {
-      "name": "20260114122617",
-      "publishedAt": "2026-01-15T05:41:46Z",
-      "tagName": "20260114122617"
-    },
-    {
-      "name": "20251116085948",
-      "publishedAt": "2025-11-16T09:34:24Z",
-      "tagName": "20251116085948"
+      "name": "db-v1",
+      "publishedAt": "2026-04-16T10:27:12Z",
+      "tagName": "db-v1"
     }
   ]
 }
