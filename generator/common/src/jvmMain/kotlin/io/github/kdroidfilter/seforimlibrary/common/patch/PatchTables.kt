@@ -36,6 +36,7 @@ internal val PATCH_TABLES_IN_FK_ORDER: List<PatchTable> = listOf(
     PatchTable("pub_date",           listOf("id"),       updatable = true),
     PatchTable("connection_type",    listOf("id"),       updatable = true),
     PatchTable("tocText",            listOf("id"),       updatable = true),
+    PatchTable("generation",         listOf("id"),       updatable = true),
 
     // Self-ref tree — categories. parentId FK is self → same table, OK.
     PatchTable("category",           listOf("id"),       updatable = true),
@@ -44,12 +45,13 @@ internal val PATCH_TABLES_IN_FK_ORDER: List<PatchTable> = listOf(
     // Book — depends on category + source.
     PatchTable("book",               listOf("id"),       updatable = true),
 
-    // Book-attribute junctions — depend on book + author/topic/pubPlace/pubDate.
-    PatchTable("book_author",        listOf("bookId", "authorId"),    updatable = false),
-    PatchTable("book_topic",         listOf("bookId", "topicId"),     updatable = false),
-    PatchTable("book_pub_place",     listOf("bookId", "pubPlaceId"),  updatable = false),
-    PatchTable("book_pub_date",      listOf("bookId", "pubDateId"),   updatable = false),
-    PatchTable("book_acronym",       listOf("bookId", "term"),        updatable = false),
+    // Book-attribute junctions — depend on book + author/topic/pubPlace/pubDate/generation.
+    PatchTable("book_author",        listOf("bookId", "authorId"),       updatable = false),
+    PatchTable("book_topic",         listOf("bookId", "topicId"),        updatable = false),
+    PatchTable("book_pub_place",     listOf("bookId", "pubPlaceId"),     updatable = false),
+    PatchTable("book_pub_date",      listOf("bookId", "pubDateId"),      updatable = false),
+    PatchTable("book_acronym",       listOf("bookId", "term"),           updatable = false),
+    PatchTable("book_generation",    listOf("bookId", "generationId"),   updatable = false),
 
     // TOC. tocEntry FK to line (lineId) and line FK to tocEntry (tocEntryId)
     // form a cycle, broken at apply time with PRAGMA defer_foreign_keys = ON.

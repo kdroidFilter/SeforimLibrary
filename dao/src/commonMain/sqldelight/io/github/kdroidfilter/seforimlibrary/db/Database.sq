@@ -28,6 +28,8 @@
 --     book_topic.topicId              -> topic(id)               ON DELETE CASCADE
 --     book_author.bookId              -> book(id)                ON DELETE CASCADE
 --     book_author.authorId            -> author(id)              ON DELETE CASCADE
+--     book_generation.bookId          -> book(id)                ON DELETE CASCADE
+--     book_generation.generationId    -> generation(id)          ON DELETE CASCADE
 --     line.bookId                     -> book(id)                ON DELETE CASCADE
 --     line.tocEntryId                 -> tocEntry(id)            ON DELETE SET NULL
 --     tocEntry.bookId                 -> book(id)                ON DELETE CASCADE
@@ -136,6 +138,8 @@ CREATE TABLE IF NOT EXISTS book (
     title TEXT NOT NULL,
     heRef TEXT,
     heShortDesc TEXT,
+    -- Full (long) description in Hebrew. heShortDesc holds the one-line summary.
+    heDesc TEXT,
     -- Optional raw notes attached to the base book (when a companion file 'הערות על <title>' exists)
     notesContent TEXT,
     orderIndex INTEGER NOT NULL DEFAULT 999,
@@ -206,6 +210,35 @@ CREATE TABLE IF NOT EXISTS book_author (
 
 CREATE INDEX IF NOT EXISTS idx_book_author_book ON book_author(bookId);
 CREATE INDEX IF NOT EXISTS idx_book_author_author ON book_author(authorId);
+
+-- Generation (era / period). Seeded from otzaria-library/ForDB/סדר הדורות.csv
+-- by the dedicated :sefariasqlite:seedGenerations task (runs after appendOtzaria
+-- so both Sefaria- and Otzaria-stage books are linkable). Registered in
+-- PatchTables / LogicalContentHasher so generation/book_generation changes ride
+-- the delta pipeline like any other table. Safe on client DBs that predate this
+-- table even though the delta applier does not run Schema.create: the app calls
+-- SeforimDb.Schema.create() at every repository init, and CREATE TABLE IF NOT
+-- EXISTS materialises the (empty) tables before any patch is applied, so the
+-- patch's INSERTs find a table to write into. IDs are SQLite rowids (not
+-- IdAllocator-stable) — only `name` is meaningful as an external key, but ids
+-- are deterministic across builds as long as the CSV and seeding code are
+-- unchanged, keeping the delta minimal.
+CREATE TABLE IF NOT EXISTS generation (
+    id INTEGER PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS book_generation (
+    bookId INTEGER NOT NULL,
+    generationId INTEGER NOT NULL,
+    PRIMARY KEY (bookId, generationId),
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
+    FOREIGN KEY (generationId) REFERENCES generation(id) ON DELETE CASCADE
+);
+
+-- Composite PK already indexes (bookId, generationId), which covers bookId
+-- leftmost-prefix lookups. Only generationId needs an explicit index.
+CREATE INDEX IF NOT EXISTS idx_book_generation_generation ON book_generation(generationId);
 
 -- Lines table
 CREATE TABLE IF NOT EXISTS line (

@@ -52,10 +52,10 @@ class PatchDbProducer(
             conn.autoCommit = false
             applyBaseDdl(conn)
             writeMetadata(conn, fromVersion, toVersion)
-            writeMigrations(conn, migrations)
-
             attach(conn, "prev", prevDb)
             attach(conn, "new", newDb)
+            val nextMigrationVersion = (migrations.maxOfOrNull { it.first } ?: 0) + 1
+            writeMigrations(conn, migrations + inferCreateTableMigrations(conn, nextMigrationVersion))
 
             // Materialise upsert_/delete_ tables based on the new DB's actual
             // schema. The producer is generic — every table in our config list
@@ -126,6 +126,53 @@ class PatchDbProducer(
         }
     }
 
+    private fun inferCreateTableMigrations(conn: Connection, firstVersion: Int): List<Pair<Int, String>> {
+        val out = ArrayList<Pair<Int, String>>()
+        var version = firstVersion
+        for (table in PATCH_TABLES_IN_FK_ORDER) {
+            if (!tableExists(conn, "new", table.name)) continue
+            if (tableExists(conn, "prev", table.name)) continue
+
+            readCreateSql(conn, "new", "table", table.name)?.let { sql ->
+                out += version++ to sql
+            }
+            readIndexSqlForTable(conn, "new", table.name).forEach { sql ->
+                out += version++ to sql
+            }
+        }
+        return out
+    }
+
+    private fun readCreateSql(conn: Connection, schemaAlias: String, type: String, name: String): String? {
+        conn.prepareStatement(
+            "SELECT sql FROM $schemaAlias.sqlite_master WHERE type=? AND name=? AND sql IS NOT NULL",
+        ).use { ps ->
+            ps.setString(1, type)
+            ps.setString(2, name)
+            ps.executeQuery().use { rs ->
+                return if (rs.next()) rs.getString(1) else null
+            }
+        }
+    }
+
+    private fun readIndexSqlForTable(conn: Connection, schemaAlias: String, table: String): List<String> {
+        val out = ArrayList<String>()
+        conn.prepareStatement(
+            """
+            SELECT sql
+            FROM $schemaAlias.sqlite_master
+            WHERE type='index' AND tbl_name=? AND sql IS NOT NULL
+            ORDER BY name
+            """.trimIndent(),
+        ).use { ps ->
+            ps.setString(1, table)
+            ps.executeQuery().use { rs ->
+                while (rs.next()) out += rs.getString(1)
+            }
+        }
+        return out
+    }
+
     private fun attach(conn: Connection, alias: String, path: Path) {
         conn.prepareStatement("ATTACH DATABASE ? AS $alias").use { ps ->
             ps.setString(1, path.toAbsolutePath().toString())
@@ -141,6 +188,14 @@ class PatchDbProducer(
         val cols = PatchDbSchema.readTableInfo(conn, "new", table.name).map { it.name }
         if (cols.isEmpty()) return 0
         val colsCsv = cols.joinToString(",") { "\"$it\"" }
+        if (!tableExists(conn, "prev", table.name)) {
+            val sql = """
+                INSERT INTO "upsert_${table.name}" ($colsCsv)
+                SELECT $colsCsv
+                FROM new."${table.name}"
+            """.trimIndent()
+            return conn.createStatement().use { it.executeUpdate(sql) }
+        }
         val joinCond = table.primaryKey.joinToString(" AND ") { "new.\"$it\" = prev.\"$it\"" }
         val nonPkCols = cols.filter { it !in table.primaryKey }
         // Use SQLite's `IS NOT` so NULL is treated as a distinct value from
@@ -193,6 +248,7 @@ class PatchDbProducer(
     private fun assertNoSecondaryUniqueCollisions(conn: Connection) {
         for (table in PATCH_TABLES_IN_FK_ORDER) {
             if (!tableExists(conn, "new", table.name)) continue
+            if (!tableExists(conn, "prev", table.name)) continue
             if (!tableExists(conn, "main", "upsert_${table.name}")) continue
             val pkCols = table.primaryKey
             if (pkCols.isEmpty()) continue

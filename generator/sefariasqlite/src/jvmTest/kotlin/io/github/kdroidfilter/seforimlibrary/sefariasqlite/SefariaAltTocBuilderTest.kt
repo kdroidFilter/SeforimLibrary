@@ -178,6 +178,7 @@ class SefariaAltTocBuilderTest {
             headings = emptyList(),
             authors = emptyList(),
             description = null,
+            heShortDesc = null,
             pubDates = emptyList(),
             altStructures = altStructures
         )

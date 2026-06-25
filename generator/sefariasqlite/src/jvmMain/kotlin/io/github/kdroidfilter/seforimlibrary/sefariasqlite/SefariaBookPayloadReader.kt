@@ -117,6 +117,7 @@ internal class SefariaBookPayloadReader(
                 authors = authors
             )
             val description = extractDescription(schemaJson, schemaObj)
+            val heShortDesc = extractShortDescription(schemaJson, schemaObj)
             val pubDates = extractPubDates(schemaJson, schemaObj)
             val altStructures = parseAltStructures(schemaJson)
             val dependence = extractDependence(schemaJson, schemaObj)
@@ -138,12 +139,13 @@ internal class SefariaBookPayloadReader(
             BookPayload(
                 heTitle = hebrewTitle,
                 enTitle = englishTitle,
-                categoriesHe = categories.map { sanitizeFolder(it) },
+                categoriesHe = flattenTalmudCategories(categories.map { sanitizeFolder(it) }),
                 lines = lines,
                 refEntries = refs,
                 headings = headings,
                 authors = authors,
                 description = description,
+                heShortDesc = heShortDesc,
                 pubDates = pubDates,
                 altStructures = altStructures,
                 dependence = dependence,
@@ -266,6 +268,17 @@ internal class SefariaBookPayloadReader(
             ?: schemaObj["description"]?.stringOrNull()
             ?: schemaJson["heDescription"]?.stringOrNull()
             ?: schemaObj["heDescription"]?.stringOrNull()
+    }
+
+    /**
+     * Sefaria's real one-line summary (`heShortDesc`), distinct from the long
+     * `heDesc` read by [extractDescription]. Kept separate so `book.heShortDesc`
+     * holds the summary and `book.heDesc` the full text — previously the long
+     * text was stored under `heShortDesc` and this field went unused.
+     */
+    private fun extractShortDescription(schemaJson: JsonObject, schemaObj: JsonObject): String? {
+        return schemaJson["heShortDesc"]?.stringOrNull()
+            ?: schemaObj["heShortDesc"]?.stringOrNull()
     }
 
     private fun extractPubDates(schemaJson: JsonObject, schemaObj: JsonObject): List<PubDate> {

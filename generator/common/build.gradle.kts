@@ -80,7 +80,7 @@ tasks.register<JavaExec>("producePatchAndVerify") {
     listOf(
         "releaseMeta", "fullBundleUrl", "fullBundleSha", "fullBundleSize",
         "manifestBaseUrl", "fromSchemaVersion", "toSchemaVersion",
-        "catalogPb",
+        "catalogPb", "zstdLevel",
     ).forEach { key ->
         project.findProperty(key)?.let { systemProperty(key, it as String) }
     }

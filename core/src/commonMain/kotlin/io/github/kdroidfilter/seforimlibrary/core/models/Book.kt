@@ -17,6 +17,7 @@ import kotlinx.serialization.Serializable
  * @property pubPlaces The list of publication places for this book
  * @property pubDates The list of publication dates for this book
  * @property heShortDesc A short description of the book in Hebrew
+ * @property heDesc The full (long) description of the book in Hebrew
  * @property order The display order of the book within its category
  * @property totalLines The total number of lines in the book
  * @property hasAltStructures Indicates if the book has alternative TOC structures (e.g., Parasha)
@@ -36,6 +37,7 @@ data class Book(
     val pubPlaces: List<PubPlace> = emptyList(),
     val pubDates: List<PubDate> = emptyList(),
     val heShortDesc: String? = null,
+    val heDesc: String? = null,
     // Optional notes content: when a companion file named "הערות על <title>" exists,
     // its content is attached here instead of being inserted as a separate book.
     val notesContent: String? = null,

@@ -38,6 +38,29 @@ class SefariaBookPayloadReaderTest {
         assertTrue(payload.lines.none { it == "<h4>סימן א</h4>" })
     }
 
+    @Test
+    fun separatesShortDescFromLongDesc() = runBlocking {
+        val tempDir = Files.createTempDirectory("seforim-test")
+        val schemaDir = Files.createDirectories(tempDir.resolve("schemas"))
+        val jsonDir = Files.createDirectories(tempDir.resolve("json"))
+        val bookDir = Files.createDirectories(jsonDir.resolve("Tur"))
+
+        Files.writeString(schemaDir.resolve("Tur.json"), schemaJson)
+        Files.writeString(bookDir.resolve("merged.json"), mergedJson)
+
+        val reader = SefariaBookPayloadReader(
+            Json { ignoreUnknownKeys = true; coerceInputValues = true },
+            Logger.withTag("SefariaBookPayloadReaderTest")
+        )
+        val schemaLookup = reader.buildSchemaLookup(schemaDir)
+        val payload = reader.readBooksInParallel(jsonDir, schemaDir, schemaLookup).single()
+
+        // heShortDesc must hold Sefaria's real one-line summary; the long heDesc
+        // text must land in `description` (→ book.heDesc), not under heShortDesc.
+        assertEquals("תקציר קצר של הספר", payload.heShortDesc)
+        assertEquals("תיאור ארוך ומפורט של הספר וכל ענייניו", payload.description)
+    }
+
     companion object {
         private val schemaJson = """
             {
@@ -46,6 +69,8 @@ class SefariaBookPayloadReaderTest {
               "schema": {
                 "title": "Tur",
                 "heTitle": "טור",
+                "heShortDesc": "תקציר קצר של הספר",
+                "heDesc": "תיאור ארוך ומפורט של הספר וכל ענייניו",
                 "nodes": [
                   {
                     "nodeType": "SchemaNode",

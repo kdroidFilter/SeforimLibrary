@@ -55,12 +55,16 @@ internal fun parseTableOfContentsOrders(
             val heCategory = item["heCategory"]?.jsonPrimitive?.contentOrNull
             if (order != null && categoryPath.isNotEmpty()) {
                 if (category != null) {
-                    val fullPath = (categoryPath + category).joinToString("/")
+                    val fullPath = flattenTalmudCategories(
+                        categoryPath.map { sanitizeFolder(it) } + sanitizeFolder(category)
+                    ).joinToString("/")
                     categoryOrders[fullPath] = order
                     categoryOrders[sanitizeFolder(fullPath)] = order
                 }
                 if (heCategory != null) {
-                    val fullPath = (categoryPath + heCategory).joinToString("/")
+                    val fullPath = flattenTalmudCategories(
+                        categoryPath.map { sanitizeFolder(it) } + sanitizeFolder(heCategory)
+                    ).joinToString("/")
                     categoryOrders[fullPath] = order
                     categoryOrders[sanitizeFolder(fullPath)] = order
                 }
@@ -108,7 +112,35 @@ internal fun parseTableOfContentsOrders(
 internal fun normalizePriorityEntry(raw: String): String {
     var entry = raw.trim().replace('\\', '/')
     if (entry.startsWith("/")) entry = entry.removePrefix("/")
-    return entry.split('/').filter { it.isNotBlank() }.joinToString("/") { sanitizeFolder(it) }
+    val parts = entry.split('/').filter { it.isNotBlank() }.map { sanitizeFolder(it) }
+    return flattenTalmudCategories(parts).joinToString("/")
+}
+
+internal fun flattenTalmudCategories(parts: List<String>): List<String> {
+    if (parts.isEmpty()) return parts
+    val flattened = ArrayList<String>(parts.size)
+    var idx = 0
+    while (idx < parts.size) {
+        val part = parts[idx]
+        if (part == "תלמוד" && idx + 1 < parts.size) {
+            val next = parts[idx + 1]
+            when (next) {
+                "בבלי" -> {
+                    flattened += "תלמוד בבלי"
+                    idx += 2
+                    continue
+                }
+                "ירושלמי" -> {
+                    flattened += "תלמוד ירושלמי"
+                    idx += 2
+                    continue
+                }
+            }
+        }
+        flattened += part
+        idx += 1
+    }
+    return flattened
 }
 
 internal fun normalizedBookPath(categories: List<String>, heTitle: String): String =
