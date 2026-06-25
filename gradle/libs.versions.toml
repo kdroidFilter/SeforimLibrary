@@ -5,6 +5,8 @@ kotlin = "2.3.20"
 agp = "8.12.3"
 jvmToolchain = "25"
 lucene = "10.4.0"
+onnxruntime = "1.20.0"
+djlHuggingface = "0.30.0"
 maven-publish = "0.36.0"
 kotlinx-coroutines = "1.10.2"
 kotlinx-serialization = "1.10.0"
@@ -34,6 +36,8 @@ lucene-highlighter = { module = "org.apache.lucene:lucene-highlighter", version.
 lucene-queryparser = { module = "org.apache.lucene:lucene-queryparser", version.ref = "lucene" }
 lucene-analysis-common = { module = "org.apache.lucene:lucene-analysis-common", version.ref = "lucene" }
 lucene-core = { module = "org.apache.lucene:lucene-core", version.ref = "lucene" }
+onnxruntime = { module = "com.microsoft.onnxruntime:onnxruntime", version.ref = "onnxruntime" }
+djl-huggingface-tokenizers = { module = "ai.djl.huggingface:tokenizers", version.ref = "djlHuggingface" }
 sqlDelight-driver-sqlite = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqlDelight" }
 sqlDelight-driver-android = { module = "app.cash.sqldelight:android-driver", version.ref = "sqlDelight" }
 sqlDelight-driver-native = { module = "app.cash.sqldelight:native-driver", version.ref = "sqlDelight" }

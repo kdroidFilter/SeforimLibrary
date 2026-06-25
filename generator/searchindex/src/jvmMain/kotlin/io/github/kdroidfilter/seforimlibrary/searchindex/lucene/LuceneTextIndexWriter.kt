@@ -6,6 +6,7 @@ import org.apache.lucene.analysis.standard.StandardAnalyzer
 import org.apache.lucene.document.Document
 import org.apache.lucene.document.Field
 import org.apache.lucene.document.IntPoint
+import org.apache.lucene.document.KnnFloatVectorField
 import org.apache.lucene.document.StoredField
 import org.apache.lucene.document.StringField
 import org.apache.lucene.document.TextField
@@ -24,12 +25,16 @@ class LuceneTextIndexWriter(
     indexDir: Path,
     analyzer: Analyzer = StandardAnalyzer(),
     private val indexHebrewField: Boolean = false,
-    private val indexPrimaryText: Boolean = true
+    private val indexPrimaryText: Boolean = true,
+    // Optional dense embeddings: if provided, each line doc also gets a
+    // KnnFloatVectorField("vec", COSINE) -> SINGLE index holding text + vectors.
+    private val vectorProvider: ((Long) -> FloatArray?)? = null,
 ) : TextIndexWriter {
     companion object Fields {
         const val FIELD_TYPE = "type"
         const val TYPE_LINE = "line"
         const val TYPE_BOOK_TITLE = "book_title"
+        const val FIELD_VEC = "vec"
 
         const val FIELD_BOOK_ID = "book_id"
         const val FIELD_CATEGORY_ID = "category_id"
@@ -106,6 +111,11 @@ class LuceneTextIndexWriter(
             // Index 4-gram tokens for substring search (per-field analyzer applies NGram filter)
             add(TextField(FIELD_TEXT_NG4, normalizedText, Field.Store.NO))
             // rawPlainText is no longer stored - snippet source is fetched from DB at query time
+
+            // Dense embedding (single fused index): attach the line's vector if available.
+            vectorProvider?.invoke(lineId)?.let { vec ->
+                add(KnnFloatVectorField(FIELD_VEC, vec, org.apache.lucene.index.VectorSimilarityFunction.COSINE))
+            }
         }
         writer.addDocument(doc)
     }

@@ -22,7 +22,10 @@ import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper
 import org.apache.lucene.analysis.ngram.NGramTokenFilter
 import org.jsoup.Jsoup
 import org.jsoup.safety.Safelist
+import java.io.DataInputStream
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -57,6 +60,12 @@ fun main() = runBlocking {
     val lookupDir: Path = if (dbPath.endsWith(".db")) Paths.get("$dbPath.lookup.lucene") else Paths.get("$dbPath.lookup")
     runCatching { Files.createDirectories(indexDir) }
     runCatching { Files.createDirectories(lookupDir) }
+
+    // Optional dense embeddings -> SINGLE fused index. -DvectorsBin points to a dir
+    // with ids.i64 + vecs.f32 + meta.txt (produced by embed_corpus_bin.py against this
+    // same DB). Each line then also gets a KnnFloatVectorField in the text index.
+    val vectorProvider: ((Long) -> FloatArray?)? =
+        System.getProperty("vectorsBin")?.let { loadVectorProvider(Paths.get(it), logger) }
 
     // Open repository (prefer in-memory for faster reads)
     val useMemoryDb = (System.getProperty("inMemoryDb") ?: "true") != "false"
@@ -115,7 +124,7 @@ fun main() = runBlocking {
         )
     )
 
-    LuceneTextIndexWriter(indexDir, analyzer = analyzer).use { writer ->
+    LuceneTextIndexWriter(indexDir, analyzer = analyzer, vectorProvider = vectorProvider).use { writer ->
         LuceneLookupIndexWriter(lookupDir, analyzer = analyzer).use { lookup ->
             val books = repo.getAllBooks()
             val indexThreads = (System.getProperty("indexThreads") ?: Runtime.getRuntime().availableProcessors().toString()).toInt().coerceAtLeast(1)
@@ -299,4 +308,30 @@ private fun normalizePostHtmlForIndex(text: String): String {
 private fun sanitizeAcronymTerm(raw: String): String {
     if (raw.isEmpty()) return ""
     return normalizePostHtmlForIndex(raw)
+}
+
+/**
+ * Loads dense embeddings produced by embed_corpus_bin.py (ids.i64 + vecs.f32 + meta.txt,
+ * little-endian) into RAM and returns a thread-safe lineId -> vector lookup, used by
+ * LuceneTextIndexWriter to attach a KnnFloatVectorField per line (single fused index).
+ */
+private fun loadVectorProvider(dir: Path, logger: co.touchlab.kermit.Logger): ((Long) -> FloatArray?) {
+    val meta = File(dir.toFile(), "meta.txt").readText().trim().split(" ")
+    val n = meta[0].toInt()
+    val dim = meta[1].toInt()
+    logger.i { "Loading $n dense vectors (dim $dim) from $dir for the fused index" }
+    val idsBuf = ByteBuffer.wrap(File(dir.toFile(), "ids.i64").readBytes()).order(ByteOrder.LITTLE_ENDIAN)
+    val rowOf = HashMap<Long, Int>(n * 2)
+    for (i in 0 until n) rowOf[idsBuf.long] = i
+    val vecs = FloatArray(n * dim)
+    DataInputStream(File(dir.toFile(), "vecs.f32").inputStream().buffered(1 shl 20)).use { din ->
+        val rec = ByteArray(dim * 4)
+        val bb = ByteBuffer.wrap(rec).order(ByteOrder.LITTLE_ENDIAN)
+        for (i in 0 until n) {
+            din.readFully(rec); bb.rewind()
+            for (j in 0 until dim) vecs[i * dim + j] = bb.float
+        }
+    }
+    logger.i { "Dense vectors loaded (${(n.toLong() * dim * 4L) / 1_000_000} MB in RAM)" }
+    return { lineId -> rowOf[lineId]?.let { row -> vecs.copyOfRange(row * dim, row * dim + dim) } }
 }

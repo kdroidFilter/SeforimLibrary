@@ -64,6 +64,12 @@ tasks.register<JavaExec>("buildLuceneIndexDefault") {
         systemProperty("inMemoryDb", "true")
     }
 
+    // Optional: -PvectorsBin=/path (dir with ids.i64+vecs.f32+meta.txt) → SINGLE
+    // fused index (text + dense KnnFloatVectorField per line).
+    (project.findProperty("vectorsBin") as String?)?.let { systemProperty("vectorsBin", it) }
+    // Optional: -PindexThreads=N to cap concurrent indexing threads (lower = less RAM).
+    (project.findProperty("indexThreads") as String?)?.let { systemProperty("indexThreads", it) }
+
     jvmArgs = listOf(
         "-Xmx$generatorHeap",
         "-XX:+UseG1GC",
@@ -72,4 +78,3 @@ tasks.register<JavaExec>("buildLuceneIndexDefault") {
         "--add-modules=jdk.incubator.vector"
     )
 }
-
