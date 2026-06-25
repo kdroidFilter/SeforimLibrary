@@ -1,8 +1,8 @@
 [versions]
 
-filekitCore = "0.13.0"
-kotlin = "2.3.20"
-agp = "8.12.3"
+filekitCore = "0.14.1"
+kotlin = "2.3.21"
+agp = "9.1.1"
 jvmToolchain = "25"
 lucene = "10.4.0"
 maven-publish = "0.36.0"

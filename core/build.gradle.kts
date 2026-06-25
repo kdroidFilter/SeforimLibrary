@@ -12,11 +12,13 @@ kotlin {
     jvmToolchain(libs.versions.jvmToolchain.get().toInt())
 
     androidLibrary {
-        namespace = "io.github.kdroidfilter.seforimlibrary"
-        compileSdk = 35
+        namespace = "io.github.kdroidfilter.seforimlibrary.core"
+        compileSdk = 36
         minSdk = 21
     }
     jvm()
+    iosArm64()
+    iosSimulatorArm64()
 
     sourceSets {
         commonMain.dependencies {
