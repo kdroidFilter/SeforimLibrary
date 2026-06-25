@@ -44,12 +44,12 @@ selectBaseIds:
 SELECT id FROM book WHERE isBaseBook = 1 ORDER BY orderIndex, title;
 
 insert:
-INSERT INTO book (categoryId, sourceId, title, heRef, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook, hasSourceConnection, hasAltStructures, hasTeamim, hasNekudot)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO book (categoryId, sourceId, title, heRef, heShortDesc, heDesc, notesContent, orderIndex, totalLines, isBaseBook, hasSourceConnection, hasAltStructures, hasTeamim, hasNekudot)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 insertWithId:
-INSERT OR IGNORE INTO book (id, categoryId, sourceId, title, heRef, heShortDesc, notesContent, orderIndex, totalLines, isBaseBook, hasSourceConnection, hasAltStructures, hasTeamim, hasNekudot)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR IGNORE INTO book (id, categoryId, sourceId, title, heRef, heShortDesc, heDesc, notesContent, orderIndex, totalLines, isBaseBook, hasSourceConnection, hasAltStructures, hasTeamim, hasNekudot)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectByHeRef:
 SELECT * FROM book WHERE heRef = ? LIMIT 1;

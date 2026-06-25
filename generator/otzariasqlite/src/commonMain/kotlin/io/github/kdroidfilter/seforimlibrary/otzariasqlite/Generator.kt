@@ -154,8 +154,8 @@ class DatabaseGenerator(
     private fun normalizeCategorySegments(rawTitle: String): List<String> {
         val cleaned = normalizeHebrewLabel(rawTitle)
         return when (cleaned) {
-            "תלמוד בבלי" -> listOf("תלמוד", "בבלי")
-            "תלמוד ירושלמי", "תלמוד ירושלים" -> listOf("תלמוד", "ירושלמי")
+            "תלמוד בבלי" -> listOf("תלמוד בבלי")
+            "תלמוד ירושלמי", "תלמוד ירושלים" -> listOf("תלמוד ירושלמי")
             "תנך", "תנ\"ך", "תנ״ך" -> listOf("תנ״ך")
             "שות", "שו\"ת", "שו״ת" -> listOf("שו״ת")
             else -> listOf(cleaned)

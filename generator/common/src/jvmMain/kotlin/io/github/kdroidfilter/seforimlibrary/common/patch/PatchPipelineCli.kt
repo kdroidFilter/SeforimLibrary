@@ -62,11 +62,13 @@ fun main(args: Array<String>) {
     }
     DriverManager.getConnection("jdbc:sqlite:${target.toAbsolutePath()}").use { conn ->
         conn.createStatement().use { it.execute("PRAGMA foreign_keys = ON") }
-        // We don't pass expectedToContentHash yet: the producer ships upserts
-        // for the canonical FK-tracked tables but does NOT yet handle the
-        // junction / derived tables (line_toc except special-cased, alt_toc_*,
-        // book_has_links, book_*pub_place / book_*pub_date / book_topic / book_author,
-        // schema_meta). Those are tracked as a Phase 4.5 follow-up.
+        // The producer ships upserts/deletes for every table in
+        // PATCH_TABLES_IN_FK_ORDER (including the book_* junctions and
+        // book_generation). We still don't pass expectedToContentHash into
+        // apply(): the hash equality is checked below as a soft gate (warn, not
+        // throw) so a mismatch on a not-yet-fully-covered derived table doesn't
+        // fail the whole pipeline. Tighten to a hard assert once every tracked
+        // table is confirmed to round-trip.
         PatchApplier(logger).apply(conn = conn, patchDb = outPath)
         val appliedHash = LogicalContentHasher().compute(conn)
         if (appliedHash == newHash) {
@@ -75,8 +77,8 @@ fun main(args: Array<String>) {
             logger.w {
                 "Patch applied without errors but logical content hash differs " +
                     "(applied=$appliedHash, expected=$newHash). " +
-                    "Phase 4 MVP scope: producer/applier cover single-id tables + line_toc. " +
-                    "Junction / derived tables are Phase 4.5 follow-up."
+                    "Soft gate: a tracked table did not round-trip exactly — " +
+                    "inspect with diagnoseHashMismatch before trusting this patch."
             }
         }
     }
