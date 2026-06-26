@@ -204,6 +204,22 @@ jobs:
             PREV_DB=$(find prev-dbs/extract -name seforim.db -type f | head -n1)
             test -s "$PREV_DB" || { echo "::error::seforim.db not found in bundle of $TAG"; exit 1; }
 
+            # Skip the delta whenever the schema changed: a delta can only carry
+            # data (upserts/deletes), not schema migrations. If prev and new
+            # don't have identical table/index DDL, clients on $TARGET_VER must
+            # re-download the full bundle — so we don't produce (or fail CI on)
+            # a patch for this offset.
+            schema_of() {
+              sqlite3 "$1" \
+                "SELECT sql FROM sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL ORDER BY name;" \
+                | tr -s '[:space:]' ' '
+            }
+            if [ "$(schema_of "$PREV_DB")" != "$(schema_of "$PWD/build/seforim.db")" ]; then
+              echo "::notice::Schema differs v${TARGET_VER} → v${THIS_VER} — skipping delta, clients fall back to full bundle"
+              rm -rf prev-dbs
+              continue
+            fi
+
             ./gradlew :generator-common:producePatchAndVerify \
               -PprevDb=$PWD/$PREV_DB \
               -PnewDb=$PWD/build/seforim.db \
