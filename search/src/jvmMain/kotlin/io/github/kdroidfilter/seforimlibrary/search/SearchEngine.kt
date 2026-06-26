@@ -86,17 +86,33 @@ interface SearchEngine : Closeable {
     fun buildSnippet(rawText: String, query: String, near: Int): String
 
     /**
-     * Builds a list of terms to highlight for a given query, using dictionary expansion.
+     * Returns the contiguous passage within [text] whose meaning is closest to [query],
+     * for semantic highlighting (using the same dense encoder as semantic search).
      *
-     * This is useful for intelligent find-in-page that matches the same words
-     * as the global search (including synonyms and morphological variants).
-     * The terms are filtered to exclude hallucinated mappings and short words
-     * that only came from dictionary expansion.
+     * The result is a verbatim substring of [text] so callers can locate it with the
+     * usual diacritic-insensitive matching and highlight that single span — instead of
+     * scattering dictionary-expanded word matches that don't reflect meaning.
      *
-     * @param query The search query in Hebrew
-     * @return List of normalized terms to highlight (includes original tokens + expansions)
+     * @return the best-matching passage, or null when dense search is unavailable or no
+     *         passage stands out (e.g. the text is a single short clause).
      */
-    fun buildHighlightTerms(query: String): List<String>
+    suspend fun semanticSpan(query: String, text: String): String? = null
+
+    /**
+     * Embedding-based find-in-page within a single book: returns the ids of the lines
+     * semantically closest to [query] (dense KNN over the index, scoped to [bookId]),
+     * ordered by relevance. Used by the "smart" find mode — the simple mode matches literal
+     * words instead. The per-line passage to highlight is computed by the caller via
+     * [semanticSpan] on the displayed text. Empty when dense search is unavailable.
+     */
+    suspend fun semanticFind(query: String, bookId: Long, limit: Int): List<Long> = emptyList()
+
+    /**
+     * Ensures the dense backend (embedding model + vector index) is loaded and reports whether
+     * it is actually available. Useful for diagnostics and to decide whether semantic features
+     * can run. Returns false for engines without a dense path.
+     */
+    suspend fun denseReady(): Boolean = false
 
     /**
      * Computes aggregate facet counts without loading full results.
