@@ -150,9 +150,14 @@ private fun applyGenerations(
             linksCreated += linkStmt.executeUpdate()
         }
     }
-    require(unmatchedTitles.isEmpty()) {
-        "Generation CSV has ${unmatchedTitles.size} unmatched book title(s): " +
-            unmatchedTitles.take(20).joinToString()
+    // Don't abort the whole build when generations.csv references books that are
+    // not in the current library (upstream otzaria-library vs ForDB drift): keep
+    // every link that DID match and just warn about the rest.
+    if (unmatchedTitles.isNotEmpty()) {
+        logger.w {
+            "Generation CSV has ${unmatchedTitles.size} unmatched book title(s) (skipped): " +
+                unmatchedTitles.take(20).joinToString()
+        }
     }
     return GenerationApplyResult(generationsCreated, linksCreated, 0)
 }
