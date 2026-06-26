@@ -62,6 +62,8 @@ data class SearchPage(
  * @property snippet HTML snippet with highlighted matching terms (contains `<b>` tags)
  * @property score Relevance score (higher = more relevant). Includes boosts for base books.
  * @property rawText Original unprocessed text content of the line
+ * @property isBaseBook True if the line belongs to a base book (vs a commentary). Lets callers
+ *   correlate results: anchor each hit on its base line and nest matching commentaries under it.
  */
 data class LineHit(
     val bookId: Long,
@@ -70,7 +72,8 @@ data class LineHit(
     val lineIndex: Int,
     val snippet: String,
     val score: Float,
-    val rawText: String
+    val rawText: String,
+    val isBaseBook: Boolean = false
 )
 
 /**
