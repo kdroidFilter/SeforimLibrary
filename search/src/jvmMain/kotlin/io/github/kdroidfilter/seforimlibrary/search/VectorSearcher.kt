@@ -8,6 +8,7 @@ import org.apache.lucene.search.IndexSearcher
 import org.apache.lucene.search.KnnFloatVectorQuery
 import org.apache.lucene.search.Query
 import org.apache.lucene.store.FSDirectory
+import org.apache.lucene.store.NIOFSDirectory
 import java.io.Closeable
 import java.nio.file.Path
 
@@ -23,7 +24,14 @@ data class DenseHit(val lineId: Long, val bookId: Long, val score: Float)
  * Returns line ids that are joined back to the DB by the caller.
  */
 class VectorSearcher(indexDir: Path) : Closeable {
-    private val dir = FSDirectory.open(indexDir)
+    // GraalVM native image can't instantiate MMapDirectory's MemorySegmentIndexInputProvider
+    // (Panama foreign downcalls) — use NIOFSDirectory there, like LuceneSearchEngine does.
+    private val dir =
+        if (System.getProperty("org.graalvm.nativeimage.imagecode") != null) {
+            NIOFSDirectory(indexDir)
+        } else {
+            FSDirectory.open(indexDir)
+        }
 
     private fun filterQuery(baseBookOnly: Boolean, bookIds: Collection<Long>?): Query? {
         val b = BooleanQuery.Builder()
