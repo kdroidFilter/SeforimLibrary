@@ -20,6 +20,11 @@ kotlin {
             implementation(libs.sqlDelight.driver.sqlite)
             implementation(libs.kermit)
             implementation(libs.jsoup)
+            // Dense semantic search: ONNX Runtime (query embedding) + HuggingFace tokenizer.
+            // Stock Maven `onnxruntime` is CPU-only on desktop JVM (no DirectML/CoreML/XNNPACK
+            // native — those need a custom build; CUDA needs the separate onnxruntime_gpu).
+            implementation(libs.onnxruntime)
+            implementation(libs.djl.huggingface.tokenizers)
         }
 
         jvmTest.dependencies {
