@@ -270,12 +270,7 @@ internal class SefariaBookPayloadReader(
             ?: schemaObj["heDescription"]?.stringOrNull()
     }
 
-    /**
-     * Sefaria's real one-line summary (`heShortDesc`), distinct from the long
-     * `heDesc` read by [extractDescription]. Kept separate so `book.heShortDesc`
-     * holds the summary and `book.heDesc` the full text — previously the long
-     * text was stored under `heShortDesc` and this field went unused.
-     */
+    // Real one-line summary → book.heShortDesc (long text goes to heDesc via extractDescription).
     private fun extractShortDescription(schemaJson: JsonObject, schemaObj: JsonObject): String? {
         return schemaJson["heShortDesc"]?.stringOrNull()
             ?: schemaObj["heShortDesc"]?.stringOrNull()
