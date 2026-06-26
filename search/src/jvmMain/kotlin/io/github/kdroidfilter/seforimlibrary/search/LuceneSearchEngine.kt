@@ -558,7 +558,8 @@ class LuceneSearchEngine(
                 lineIndex = meta.lineIndex,
                 snippet = snippet,
                 score = boostedScore,
-                rawText = raw
+                rawText = raw,
+                isBaseBook = meta.isBaseBook
             )
         }
         // Re-sort by boosted score (descending)
