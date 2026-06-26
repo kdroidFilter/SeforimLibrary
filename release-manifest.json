@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-06-26T04:22:10Z",
+  "generatedAt": "2026-06-26T06:11:29Z",
   "latest": {
     "assets": [
       {
@@ -21,7 +21,7 @@
         "contentType": "application/octet-stream",
         "createdAt": "2026-06-01T11:50:23Z",
         "digest": "sha256:6fdd05b6a5c8cbb675184bf488f6c4de0a21b985d9ede7f13b0677e667fdf1c1",
-        "downloadCount": 11,
+        "downloadCount": 12,
         "id": "RA_kwDOPFZ3eM4Z8PTp",
         "label": "",
         "name": "seforim.db.buildstate",
