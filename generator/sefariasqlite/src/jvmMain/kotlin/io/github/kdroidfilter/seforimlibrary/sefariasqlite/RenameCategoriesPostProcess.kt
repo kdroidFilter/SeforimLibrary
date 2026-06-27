@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Paths
 import java.sql.Connection
 import java.sql.DriverManager
+import java.sql.Statement
 import java.util.zip.ZipInputStream
 import kotlin.io.path.exists
 import kotlin.system.exitProcess
@@ -36,8 +37,8 @@ import kotlin.system.exitProcess
  * 1. Simple rename: When no target category exists under the same parent
  * 2. Merge: When a target category already exists, books are moved and source is deleted
  *
- * Book moves require the source and destination category paths to already exist;
- * missing paths fail the task (no auto-creation).
+ * Book moves require the source path and the destination's parent path to exist;
+ * only the final (leaf) destination segment is auto-created if missing (idempotent).
  *
  * Order of operations: category renames → book renames → book moves. Paths in
  * book_moves.csv must therefore reference the POST-rename category names.
@@ -394,14 +395,14 @@ private fun findBookIdsByTitle(conn: Connection, title: String): List<Long> =
 private data class BookMove(val name: String, val sourcePath: String, val destPath: String)
 
 /**
- * Resolves sourcePath/destPath against the existing category tree and updates
- * the matching book's categoryId. Missing paths or ambiguous books fail the task.
+ * Updates the matching book's categoryId. Source path must fully exist; the
+ * destination's leaf is created if missing (parents must exist).
  */
 private fun applyBookMove(conn: Connection, move: BookMove, logger: Logger): Int {
     val sourceCatId = resolveCategoryPath(conn, move.sourcePath)
         ?: error("Book move source '${move.sourcePath}' not found for '${move.name}'")
-    val destCatId = resolveCategoryPath(conn, move.destPath)
-        ?: error("Book move destination '${move.destPath}' not found for '${move.name}'")
+    val destCatId = resolveOrCreateDestCategory(conn, move.destPath, logger)
+        ?: error("Book move destination parent path '${move.destPath}' not found for '${move.name}' (only the final segment is auto-created)")
 
     val candidates = mutableListOf<Pair<Long, Long>>() // (bookId, categoryId)
     conn.prepareStatement("SELECT id, categoryId FROM book WHERE title = ?").use { stmt ->
@@ -441,6 +442,50 @@ private fun resolveCategoryPath(conn: Connection, path: String): Long? {
     }
     return parentId
 }
+
+/** Resolves the dest path, creating only a missing leaf; parents must exist (else null). */
+private fun resolveOrCreateDestCategory(conn: Connection, path: String, logger: Logger): Long? {
+    val segments = path.split('/').map { it.trim() }.filter { it.isNotEmpty() }
+    if (segments.isEmpty()) return null
+    var parentId: Long? = null
+    for ((idx, segment) in segments.withIndex()) {
+        val existing = findCategoryByNameAndParent(conn, segment, parentId)
+        if (existing != null) {
+            parentId = existing
+        } else if (idx == segments.lastIndex) {
+            parentId = createCategory(conn, segment, parentId, logger)
+        } else {
+            return null
+        }
+    }
+    return parentId
+}
+
+/** Inserts a category under [parentId] (level = parent.level + 1) and returns its new id. */
+private fun createCategory(conn: Connection, title: String, parentId: Long?, logger: Logger): Long {
+    val level = if (parentId == null) 0 else categoryLevel(conn, parentId) + 1
+    conn.prepareStatement(
+        "INSERT INTO category (parentId, title, level) VALUES (?, ?, ?)",
+        Statement.RETURN_GENERATED_KEYS,
+    ).use { stmt ->
+        if (parentId == null) stmt.setNull(1, java.sql.Types.INTEGER) else stmt.setLong(1, parentId)
+        stmt.setString(2, title)
+        stmt.setInt(3, level)
+        stmt.executeUpdate()
+        stmt.generatedKeys.use { rs ->
+            require(rs.next()) { "Failed to create category '$title'" }
+            val id = rs.getLong(1)
+            logger.i { "Created category '$title' (id=$id, parentId=$parentId, level=$level)" }
+            return id
+        }
+    }
+}
+
+private fun categoryLevel(conn: Connection, categoryId: Long): Int =
+    conn.prepareStatement("SELECT level FROM category WHERE id = ?").use { stmt ->
+        stmt.setLong(1, categoryId)
+        stmt.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else 0 }
+    }
 
 internal fun downloadRequiredForDbCsv(fileName: String, logger: Logger): List<String> {
     return forDbReleaseCsvs(logger).getValue(fileName)
