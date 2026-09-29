@@ -11,7 +11,7 @@ group = "io.github.kdroidfilter.seforimlibrary"
 kotlin {
     jvmToolchain(libs.versions.jvmToolchain.get().toInt())
 
-    androidLibrary {
+    android {
         namespace = "io.github.kdroidfilter.seforimlibrary"
         compileSdk = 35
         minSdk = 21
