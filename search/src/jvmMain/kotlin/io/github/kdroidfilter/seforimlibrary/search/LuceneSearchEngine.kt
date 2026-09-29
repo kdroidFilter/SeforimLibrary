@@ -15,6 +15,7 @@ import org.apache.lucene.search.BooleanClause
 import org.apache.lucene.search.BooleanQuery
 import org.apache.lucene.search.BoostQuery
 import org.apache.lucene.search.Collector
+import org.apache.lucene.search.CollectorManager
 import org.apache.lucene.search.FuzzyQuery
 import org.apache.lucene.search.IndexSearcher
 import org.apache.lucene.search.LeafCollector
@@ -274,7 +275,14 @@ class LuceneSearchEngine(
                 override fun scoreMode(): ScoreMode = ScoreMode.COMPLETE_NO_SCORES
             }
 
-            searcher.search(context.query, collector)
+            // ponytail: searcher has no executor, so slices run sequentially and can share one collector
+            searcher.search(
+                context.query,
+                object : CollectorManager<Collector, Unit> {
+                    override fun newCollector(): Collector = collector
+                    override fun reduce(collectors: Collection<Collector>) = Unit
+                }
+            )
 
             SearchFacets(
                 totalHits = totalHits,
