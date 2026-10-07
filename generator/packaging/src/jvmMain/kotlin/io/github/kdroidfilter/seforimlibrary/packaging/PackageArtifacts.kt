@@ -72,11 +72,6 @@ fun main(args: Array<String>) {
     // Resolve lexical DB next to the DB
     val lexicalDbPath: Path = dbPath.resolveSibling("lexical.db")
 
-    // Resolve the dense embedding model (int8 ONNX) + tokenizer next to the DB.
-    // Bundled so the app gets dense search out of the box; absent -> lexical only.
-    val embedModelPath: Path = dbPath.resolveSibling("seforim-embed-v5-int8.onnx")
-    val embedTokenizerPath: Path = dbPath.resolveSibling("tokenizer.json")
-
     if (!textIndexDir.toFile().isDirectory) {
         logger.w { "Lucene text index directory missing: $textIndexDir (will skip)" }
     }
@@ -131,8 +126,6 @@ fun main(args: Array<String>) {
             " - Catalog: $catalogPath\n" +
             " - Release info: $releaseInfoPath\n" +
             " - Lexical DB: $lexicalDbPath\n" +
-            " - Embed model: $embedModelPath\n" +
-            " - Embed tokenizer: $embedTokenizerPath\n" +
             " - Text index: $textIndexDir\n" +
             " - Lookup index: $lookupIndexDir\n" +
             " -> Bundle .tar.zst: $bundleOutputPath\n" +
@@ -176,20 +169,6 @@ fun main(args: Array<String>) {
                             logger.i { "Added lexical DB to bundle" }
                         } else {
                             logger.w { "Lexical DB missing: $lexicalDbPath (skipped)" }
-                        }
-
-                        // Add the dense embedding model + tokenizer if available
-                        if (embedModelPath.exists()) {
-                            addFileToTar(tar, embedModelPath, embedModelPath.fileName.toString(), logger)
-                            logger.i { "Added embedding model to bundle" }
-                        } else {
-                            logger.w { "Embedding model missing: $embedModelPath (skipped, dense search disabled)" }
-                        }
-                        if (embedTokenizerPath.exists()) {
-                            addFileToTar(tar, embedTokenizerPath, embedTokenizerPath.fileName.toString(), logger)
-                            logger.i { "Added embedding tokenizer to bundle" }
-                        } else {
-                            logger.w { "Embedding tokenizer missing: $embedTokenizerPath (skipped)" }
                         }
 
                         // Add the precomputed catalog if available
