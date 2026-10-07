@@ -3110,6 +3110,7 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
             "test_library_index_workflow",
             "test_prefetch_patch_anchors",
             "test_split_full_db",
+            "test_merge_private_books",
         ]
         positions = [step.index(suite) for suite in suites]
         self.assertEqual(positions, sorted(positions))

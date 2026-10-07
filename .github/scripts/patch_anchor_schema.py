@@ -94,8 +94,8 @@ def _one_line(text: str) -> str:
 def dump(db_path: Path) -> dict:
     """The published DB's physical schema: version plus columns per table.
 
-    Every table in seforim.db is declared in Database.sq and every one of them
-    is a patch table, so the physical table list is the patch table list.  The
+    Every table in seforim.db is declared in Database.sq; all but the optional
+    side-channel tables are patch tables, and check() reads only the contract ones.  The
     column lists are sorted the same way PatchTableColumnContractTest sorts
     them, and the whole object is emitted as canonical JSON so it can be nested
     inside build_provenance.json without breaking that file's byte-canonical

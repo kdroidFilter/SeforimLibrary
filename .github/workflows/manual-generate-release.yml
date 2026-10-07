@@ -91,6 +91,21 @@ on:
         description: 'Exact parent pipeline correlation id'
         type: string
         required: true
+      private_repo:
+        description: 'Optional private books repo (owner/name); empty = public build only'
+        type: string
+        required: false
+        default: ''
+      private_tag:
+        description: 'Release tag in private_repo carrying private_books.zip'
+        type: string
+        required: false
+        default: ''
+      private_asset_sha256:
+        description: 'SHA-256 of private_books.zip'
+        type: string
+        required: false
+        default: ''
       relink_recovery_run_id:
         description: |
           Optional exact successful LinkerToOtzaria relink recovery run. When set,
@@ -175,7 +190,8 @@ jobs:
             test_patch_anchor_schema \
             test_library_index_workflow \
             test_prefetch_patch_anchors \
-            test_split_full_db; do
+            test_split_full_db \
+            test_merge_private_books; do
             log="$RUNNER_TEMP/$suite.log"
             if ! python3 ".github/scripts/$suite.py" > "$log" 2>&1; then
               cat "$log"
@@ -210,10 +226,19 @@ jobs:
           SAGA_RUN_ID: ${{ inputs.saga_run_id }}
           SAGA_RUN_ATTEMPT: ${{ inputs.saga_run_attempt }}
           RELINK_RECOVERY_RUN_ID: ${{ inputs.relink_recovery_run_id }}
+          PRIVATE_REPO: ${{ inputs.private_repo }}
+          PRIVATE_TAG: ${{ inputs.private_tag }}
+          PRIVATE_ASSET_SHA: ${{ inputs.private_asset_sha256 }}
         shell: bash
         run: |
           set -euo pipefail
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          # Private books: all three inputs or none.
+          if [[ -n "$PRIVATE_REPO$PRIVATE_TAG$PRIVATE_ASSET_SHA" ]]; then
+            [[ "$PRIVATE_REPO" =~ ^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$ ]]
+            [[ "$PRIVATE_TAG" =~ ^[A-Za-z0-9._-]{1,150}$ ]]
+            [[ "$PRIVATE_ASSET_SHA" =~ ^[0-9a-f]{64}$ ]]
+          fi
           [[ "$SEFARIA_TAG" =~ ^[A-Za-z0-9._-]{1,100}$ ]]
           [[ "$SEFARIA_METADATA_SHA" =~ ^[0-9a-f]{64}$ ]]
           [[ "$SEFARIA_ARCHIVE_SHA" =~ ^[0-9a-f]{64}$ ]]
@@ -246,8 +271,17 @@ jobs:
           FORDB_ARCHIVE_SHA: ${{ inputs.fordb_archive_sha256 }}
           FORDB_TAG: ${{ inputs.fordb_tag }}
           PHASE2_IMPLEMENTATION_COMMIT: ${{ inputs.relink_recovery_run_id != '' && github.sha || inputs.source_commit }}
+          PRIVATE_REPO: ${{ inputs.private_repo }}
+          PRIVATE_TAG: ${{ inputs.private_tag }}
+          PRIVATE_ASSET_SHA: ${{ inputs.private_asset_sha256 }}
         run: |
           set -euo pipefail
+          # A build reuses only a release with the same private input (or none).
+          PRIVATE_BOOKS=null
+          if [ -n "$PRIVATE_REPO" ]; then
+            PRIVATE_BOOKS=$(jq -cn --arg r "$PRIVATE_REPO" --arg t "$PRIVATE_TAG" --arg s "$PRIVATE_ASSET_SHA" \
+              '{repo:$r, tag:$t, asset_sha256:$s}')
+          fi
           mkdir -p "$RUNNER_TEMP/provenance-scan"
           gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq -s 'add' > "$RUNNER_TEMP/releases.json"
           MATCHES=0
@@ -288,7 +322,8 @@ jobs:
               --arg ec "$EXPECTED_LINKS_COMMIT" --arg tc "$OTZARIA_TARGET_COMMIT" \
               --arg fd "$FORDB_ARCHIVE_SHA" --arg ft "$FORDB_TAG" \
               --arg phase2 "$PHASE2_IMPLEMENTATION_COMMIT" \
-              '.source_commit==$source and .sefaria_tag==$st and .sefaria_release_metadata_sha256==$sm and
+              --argjson private "$PRIVATE_BOOKS" \
+              '(.private_books // null)==$private and .source_commit==$source and .sefaria_tag==$st and .sefaria_release_metadata_sha256==$sm and
                .sefaria_archive_sha256==$sa and .otzaria_tag==$ot and .otzaria_asset_sha256==$oa and
                .expected_links_commit==$ec and .otzaria_target_commit==$tc and
                .fordb_archive_sha256==$fd and .fordb_tag==$ft and
@@ -758,6 +793,10 @@ jobs:
           CORRELATION_ID: ${{ inputs.correlation_id }}
           FORDB_ARCHIVE_SHA: ${{ inputs.fordb_archive_sha256 }}
           FORDB_TAG: ${{ inputs.fordb_tag }}
+          PRIVATE_REPO: ${{ inputs.private_repo }}
+          PRIVATE_TAG: ${{ inputs.private_tag }}
+          PRIVATE_ASSET_SHA: ${{ inputs.private_asset_sha256 }}
+          PRIVATE_BOOKS_TOKEN: ${{ secrets.PRIVATE_BOOKS_TOKEN }}
         run: |
           set -euo pipefail
           [ -n "$GH_TOKEN" ] || { echo "::error::PIPELINE_TOKEN is required for pinned cross-repo downloads"; exit 1; }
@@ -887,6 +926,18 @@ jobs:
           if actual != expected:
               raise SystemExit(f"packaged links tree mismatch: {actual} != {expected}")
           PY
+
+          # Optional private books (RELEASE.md "Private books"): merged into the
+          # Otzaria extract as extra source folder(s). Skipped when not configured.
+          if [ -n "$PRIVATE_REPO" ]; then
+            [ -n "$PRIVATE_BOOKS_TOKEN" ] || { echo "::error::private_repo is set but the PRIVATE_BOOKS_TOKEN secret is empty"; exit 1; }
+            mkdir -p "$INPUTS/private-assets"
+            GH_TOKEN="$PRIVATE_BOOKS_TOKEN" gh release download "$PRIVATE_TAG" -R "$PRIVATE_REPO" \
+              --pattern private_books.zip --dir "$INPUTS/private-assets"
+            echo "$PRIVATE_ASSET_SHA  $INPUTS/private-assets/private_books.zip" | sha256sum -c -
+            python3 .pipeline-control/.github/scripts/merge_private_books.py \
+              "$INPUTS/private-assets/private_books.zip" "$OTZARIA_EXTRACT_ROOT"
+          fi
 
           # Pin the ForDB rules archive by digest: fetch it once here and verify it
           # against the dispatch-time pin, then hand this exact local file to every
@@ -2227,6 +2278,9 @@ jobs:
           FORDB_ARCHIVE_SHA: ${{ inputs.fordb_archive_sha256 }}
           FORDB_TAG: ${{ inputs.fordb_tag }}
           PHASE2_IMPLEMENTATION_COMMIT: ${{ inputs.relink_recovery_run_id != '' && github.sha || inputs.source_commit }}
+          PRIVATE_REPO: ${{ inputs.private_repo }}
+          PRIVATE_TAG: ${{ inputs.private_tag }}
+          PRIVATE_ASSET_SHA: ${{ inputs.private_asset_sha256 }}
         run: |
           set -euo pipefail
           STAGE=release-staging
@@ -2332,6 +2386,14 @@ jobs:
               "db_schema": db_schema,
               "assets": assets,
           }
+          # Only a build with private books records them (v6); otherwise v5 as before.
+          if os.environ.get("PRIVATE_REPO"):
+              value["schema_version"] = 6
+              value["private_books"] = {
+                  "repo": os.environ["PRIVATE_REPO"],
+                  "tag": os.environ["PRIVATE_TAG"],
+                  "asset_sha256": os.environ["PRIVATE_ASSET_SHA"],
+              }
           (stage / "build_provenance.json").write_text(
               json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
               encoding="utf-8",

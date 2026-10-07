@@ -110,6 +110,22 @@ class BuildProvenanceContractTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 contract.validate(contract.load(self.write(tmp, value)))
 
+    def test_v6_records_the_private_books_input_and_v5_cannot_claim_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            value = self.value()
+            value["schema_version"] = 6
+            value["private_books"] = {"repo": "Otzaria/private-books", "tag": "pb-1", "asset_sha256": "c" * 64}
+            contract.validate(contract.load(self.write(tmp, value)))
+
+            value["private_books"]["asset_sha256"] = "short"
+            with self.assertRaises(ValueError):
+                contract.validate(contract.load(self.write(tmp, value)))
+
+            value["private_books"] = {"repo": "Otzaria/private-books", "tag": "pb-1", "asset_sha256": "c" * 64}
+            value["schema_version"] = 5
+            with self.assertRaises(ValueError):
+                contract.load(self.write(tmp, value))
+
     def test_published_v2_contract_remains_readable(self):
         with tempfile.TemporaryDirectory() as tmp:
             contract.validate(contract.load(self.write(tmp, self.downgrade(2))))
