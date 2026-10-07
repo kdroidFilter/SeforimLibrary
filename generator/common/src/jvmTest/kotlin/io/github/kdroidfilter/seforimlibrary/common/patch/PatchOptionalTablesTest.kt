@@ -158,6 +158,42 @@ class PatchOptionalTablesTest {
     }
 
     @Test
+    fun `cross-repo golden per-table hashes`() {
+        val golden = db(
+            "golden.db",
+            banners = mapOf(
+                1L to "ספר זה באדיבות המו\"ל\n[לאתר המו\"ל](https://example.com/books?id=1)",
+                2L to "שורה ראשונה\nשורה שנייה",
+            ),
+            protections = mapOf(1L to 1, 2L to 2),
+        )
+        assertEquals(
+            mapOf(
+                "book_banner" to "87026c32c4996eee6e5c75b65ce5e08be1a1a28e52864a57a696cbb6555a0c59",
+                "book_protection" to "015c3c2291e1ebac6c68a6f33c8c01b42af0ce46dc3840d7e0a12ae370ae1319",
+            ),
+            connect(golden).use { optionalTableContentHashes(it) },
+        )
+    }
+
+    @Test
+    fun `a DDL that is not a single CREATE TABLE IF NOT EXISTS is refused`() {
+        val prev = db("prev.db", banners = null, protections = null)
+        val next = db("next.db", banners = mapOf(1L to "x"), protections = null)
+        val patch = path("patch.db")
+        PatchDbProducer().produce(prev, next, patch, fromVersion = 1, toVersion = 2)
+        connect(patch).use { conn ->
+            conn.createStatement().use {
+                it.execute("UPDATE optional_table_ddl SET sql = sql || '; DROP TABLE book' WHERE name = 'book_banner'")
+            }
+        }
+        val target = copy(prev)
+        connect(target).use { conn -> assertFailsWith<IllegalStateException> { PatchApplier().apply(conn, patch) } }
+        assertTrue(hasTable(target, "book"))
+        assertFalse(hasTable(target, "book_banner"))
+    }
+
+    @Test
     fun `the schema hash ignores the optional tables`() {
         val without = db("a.db", banners = null, protections = null)
         val with = db("b.db", banners = mapOf(1L to "x"), protections = mapOf(1L to 2))

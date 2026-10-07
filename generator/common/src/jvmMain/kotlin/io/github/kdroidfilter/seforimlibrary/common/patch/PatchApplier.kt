@@ -158,9 +158,14 @@ class PatchApplier(
             if (!patchHasTable(conn, snapshot)) continue
             val ddl = readOptionalTableDdl(conn, spec.name)
                 ?: error("patch.db carries $snapshot without its DDL in $OPTIONAL_TABLE_DDL_TABLE")
+            requireSingleCreateTable(ddl, spec.name)
             val colsCsv = spec.columns.joinToString(",") { "\"$it\"" }
             conn.createStatement().use { st ->
                 st.execute(ddl)
+                val created = PatchDbSchema.readTableInfo(conn, "main", spec.name).map { it.name }
+                check(created.containsAll(spec.columns)) {
+                    "optional table ${spec.name} lacks contract column(s) ${spec.columns - created.toSet()}"
+                }
                 st.execute("DELETE FROM main.\"${spec.name}\"")
                 counts[spec.name] = st.executeUpdate(
                     "INSERT INTO main.\"${spec.name}\" ($colsCsv) SELECT $colsCsv FROM patch.\"$snapshot\"",
@@ -168,6 +173,15 @@ class PatchApplier(
             }
         }
         return counts
+    }
+
+    /** Same gate as the Dart applier: one `CREATE TABLE IF NOT EXISTS <name> (` statement, nothing after it. */
+    private fun requireSingleCreateTable(ddl: String, name: String) {
+        val head = Regex("""^\s*CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+("${Regex.escape(name)}"|${Regex.escape(name)})\s*\(""", RegexOption.IGNORE_CASE)
+        val body = ddl.replace(Regex("""--[^\n]*"""), "").trimEnd().removeSuffix(";")
+        check(head.containsMatchIn(ddl) && ';' !in body) {
+            "patch.db carries a DDL for $name that is not a single CREATE TABLE IF NOT EXISTS statement"
+        }
     }
 
     private fun readOptionalTableDdl(conn: Connection, name: String): String? {
