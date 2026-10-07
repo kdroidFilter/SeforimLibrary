@@ -257,8 +257,8 @@ the change is deliberate.
 ### 1.5 Optional tables (side channel)
 
 `book_banner` and `book_protection` (`OPTIONAL_PATCH_TABLES` in `PatchTables.kt`) are
-outside the schema-6 contract: not in the FK order, not in any hash order. For each one
-present in the new DB the patch carries its DDL in `optional_table_ddl(name, sql)` and a
+outside the schema-6 contract: not in the FK order, not in any hash order. A new build
+always has both (possibly empty); older DBs may lack them. For each one present in the new DB the patch carries its DDL in `optional_table_ddl(name, sql)` and a
 full snapshot in `optional_<name>`; the applier (after deletes, before `stat1_snapshot`)
 runs the DDL, empties the table and copies the snapshot. The manifest adds
 

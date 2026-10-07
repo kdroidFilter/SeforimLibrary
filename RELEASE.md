@@ -117,7 +117,8 @@ version older than the oldest delta are routed to the full bundle.
 ## Optional tables (banners, protection)
 
 `book_banner` / `book_protection` come from the optional ForDB files `book_banners.csv` /
-`book_protection.csv` (`seedBookNotices`). They are outside the schema hash: each patch
+`book_protection.csv` (`seedBookNotices`). Both tables always exist in a new build (empty
+when the file is absent). They are outside the schema hash: each patch
 ships them as a full snapshot and the manifest adds `optionalTableContentHashes`, which
 `producePatchAndVerify` checks like the schema hashes (DELTA_UPDATE_WORKFLOW.md §1.5).
 
@@ -133,6 +134,10 @@ a source name the public library uses, a path collision or a hash mismatch fails
 Such a build publishes build provenance v6 with a `private_books` block, and reuses only a
 release built from the same private input. The private text still ends up in the public
 seforim.db; protection is enforced by the app only.
+
+Once private books have shipped, every later build must pass the private inputs too: a
+build without them drops those books, and its delta deletes them from every client. Known
+limitation: `delta-real-diff-test.yml` builds without private books.
 
 ## Failure modes
 

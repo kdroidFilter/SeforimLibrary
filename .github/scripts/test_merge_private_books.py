@@ -76,5 +76,28 @@ class MergePrivateBooksTest(unittest.TestCase):
             mpb.merge(self.archive({"../evil.txt": b"x"}, {f"Private/{LIB}/x.txt": {"hash": sha(b"x")}}), self.root)
 
 
+    def test_missing_public_manifest_fails(self):
+        for name in ("files_manifest.json", "files_manifest_new.json"):
+            (self.root / name).unlink()
+        with self.assertRaisesRegex(ValueError, "no public files_manifest"):
+            mpb.merge(self.archive({f"{LIB}/x.txt": b"x"}), self.root)
+        self.assertFalse((self.root / LIB / "x.txt").exists())
+
+    def test_malformed_manifest_key_fails(self):
+        archive = self.archive({f"{LIB}/x.txt": b"x"}, {f"{LIB}/x.txt": {"hash": sha(b"x")}})
+        with self.assertRaisesRegex(ValueError, "is not <SourceName>"):
+            mpb.merge(archive, self.root)
+
+    def test_manifest_overlap_fails_before_any_file_is_written(self):
+        # A key the public manifest lists under a source it does not otherwise use.
+        key = f"Private/{LIB}/x.txt"
+        public = dict(self.public_manifest)
+        public[key] = {"hash": sha(b"old")}
+        (self.root / "files_manifest_new.json").write_text(json.dumps(public, ensure_ascii=False), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "already"):
+            mpb.merge(self.archive({f"{LIB}/x.txt": b"x"}), self.root)
+        self.assertFalse((self.root / LIB / "x.txt").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

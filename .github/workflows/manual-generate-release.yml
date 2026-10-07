@@ -235,9 +235,13 @@ jobs:
           [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           # Private books: all three inputs or none.
           if [[ -n "$PRIVATE_REPO$PRIVATE_TAG$PRIVATE_ASSET_SHA" ]]; then
-            [[ "$PRIVATE_REPO" =~ ^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$ ]]
-            [[ "$PRIVATE_TAG" =~ ^[A-Za-z0-9._-]{1,150}$ ]]
-            [[ "$PRIVATE_ASSET_SHA" =~ ^[0-9a-f]{64}$ ]]
+            if [[ -z "$PRIVATE_REPO" || -z "$PRIVATE_TAG" || -z "$PRIVATE_ASSET_SHA" ]]; then
+              echo "::error::private_repo, private_tag and private_asset_sha256 must be given together (or all left empty)"
+              exit 1
+            fi
+            [[ "$PRIVATE_REPO" =~ ^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$ ]] || { echo "::error::invalid private_repo"; exit 1; }
+            [[ "$PRIVATE_TAG" =~ ^[A-Za-z0-9._-]{1,150}$ ]] || { echo "::error::invalid private_tag"; exit 1; }
+            [[ "$PRIVATE_ASSET_SHA" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::invalid private_asset_sha256"; exit 1; }
           fi
           [[ "$SEFARIA_TAG" =~ ^[A-Za-z0-9._-]{1,100}$ ]]
           [[ "$SEFARIA_METADATA_SHA" =~ ^[0-9a-f]{64}$ ]]
@@ -793,10 +797,6 @@ jobs:
           CORRELATION_ID: ${{ inputs.correlation_id }}
           FORDB_ARCHIVE_SHA: ${{ inputs.fordb_archive_sha256 }}
           FORDB_TAG: ${{ inputs.fordb_tag }}
-          PRIVATE_REPO: ${{ inputs.private_repo }}
-          PRIVATE_TAG: ${{ inputs.private_tag }}
-          PRIVATE_ASSET_SHA: ${{ inputs.private_asset_sha256 }}
-          PRIVATE_BOOKS_TOKEN: ${{ secrets.PRIVATE_BOOKS_TOKEN }}
         run: |
           set -euo pipefail
           [ -n "$GH_TOKEN" ] || { echo "::error::PIPELINE_TOKEN is required for pinned cross-repo downloads"; exit 1; }
@@ -927,18 +927,6 @@ jobs:
               raise SystemExit(f"packaged links tree mismatch: {actual} != {expected}")
           PY
 
-          # Optional private books (RELEASE.md "Private books"): merged into the
-          # Otzaria extract as extra source folder(s). Skipped when not configured.
-          if [ -n "$PRIVATE_REPO" ]; then
-            [ -n "$PRIVATE_BOOKS_TOKEN" ] || { echo "::error::private_repo is set but the PRIVATE_BOOKS_TOKEN secret is empty"; exit 1; }
-            mkdir -p "$INPUTS/private-assets"
-            GH_TOKEN="$PRIVATE_BOOKS_TOKEN" gh release download "$PRIVATE_TAG" -R "$PRIVATE_REPO" \
-              --pattern private_books.zip --dir "$INPUTS/private-assets"
-            echo "$PRIVATE_ASSET_SHA  $INPUTS/private-assets/private_books.zip" | sha256sum -c -
-            python3 .pipeline-control/.github/scripts/merge_private_books.py \
-              "$INPUTS/private-assets/private_books.zip" "$OTZARIA_EXTRACT_ROOT"
-          fi
-
           # Pin the ForDB rules archive by digest: fetch it once here and verify it
           # against the dispatch-time pin, then hand this exact local file to every
           # ForDB post-process so all three JVMs read byte-identical rules instead of
@@ -957,6 +945,27 @@ jobs:
             echo "FORDB_ARCHIVE=$FORDB_ARCHIVE"
             echo "FORDB_ARCHIVE_SHA=$FORDB_ARCHIVE_SHA"
           } >> "$GITHUB_ENV"
+
+      # Optional private books (RELEASE.md "Private books"): merged into the Otzaria
+      # extract as extra source folder(s). Its own step keeps the token out of the rest.
+      - name: Merge private books
+        if: inputs.private_repo != ''
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_BOOKS_TOKEN }}
+          PRIVATE_REPO: ${{ inputs.private_repo }}
+          PRIVATE_TAG: ${{ inputs.private_tag }}
+          PRIVATE_ASSET_SHA: ${{ inputs.private_asset_sha256 }}
+        run: |
+          set -euo pipefail
+          [ -n "$GH_TOKEN" ] || { echo "::error::private_repo is set but the PRIVATE_BOOKS_TOKEN secret is empty"; exit 1; }
+          PRIVATE_DIR="$RUNNER_TEMP/private-books-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rm -rf "$PRIVATE_DIR"
+          mkdir -p "$PRIVATE_DIR"
+          trap 'rm -rf "$PRIVATE_DIR"' EXIT
+          gh release download "$PRIVATE_TAG" -R "$PRIVATE_REPO" --pattern private_books.zip --dir "$PRIVATE_DIR"
+          echo "$PRIVATE_ASSET_SHA  $PRIVATE_DIR/private_books.zip" | sha256sum -c -
+          python3 .pipeline-control/.github/scripts/merge_private_books.py \
+            "$PRIVATE_DIR/private_books.zip" "$OTZARIA_EXTRACT_ROOT"
 
       # ─── Discover prior releases + decide db_version ───────────────────────
       # Tags are `v<dbVersion>-<utcTimestamp>` so version discovery is just

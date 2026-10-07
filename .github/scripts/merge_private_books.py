@@ -78,6 +78,10 @@ def merge(archive: Path, extract_root: Path) -> dict:
         clash = sorted(set(counts) & taken)
         if clash:
             raise ValueError(f"private source name(s) already used by the public library: {clash}")
+        for path, public in loaded.items():
+            overlap = set(public) & set(manifest)
+            if overlap:
+                raise ValueError(f"{path.name} already lists {sorted(overlap)[:5]}")
 
         for rel, info in sorted(files.items()):
             data = zf.read(info)
@@ -89,10 +93,8 @@ def merge(archive: Path, extract_root: Path) -> dict:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
 
+    # Every check ran above, before the first file was written.
     for path, public in loaded.items():
-        overlap = set(public) & set(manifest)
-        if overlap:
-            raise ValueError(f"{path.name} already lists {sorted(overlap)[:5]}")
         public.update(manifest)
         path.write_text(json.dumps(public, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return counts
