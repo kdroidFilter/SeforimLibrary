@@ -170,6 +170,12 @@ class PatchApplier(
                 counts[spec.name] = st.executeUpdate(
                     "INSERT INTO main.\"${spec.name}\" ($colsCsv) SELECT $colsCsv FROM patch.\"$snapshot\"",
                 )
+                val orphans = st.executeQuery("PRAGMA main.foreign_key_check(\"${spec.name}\")").use { rs ->
+                    var n = 0
+                    while (rs.next()) n++
+                    n
+                }
+                check(orphans == 0) { "optional table ${spec.name} has $orphans row(s) violating its foreign key" }
             }
         }
         return counts

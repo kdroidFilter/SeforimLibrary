@@ -160,6 +160,7 @@ internal const val OPTIONAL_TABLE_DDL_TABLE: String = "optional_table_ddl"
 internal fun optionalSnapshotTable(name: String): String = "optional_$name"
 
 // TODO: when schema 7 is introduced, move these tables into its contract and drop the side channel.
+// Any column change here needs schema 7 too: every applier copies exactly these columns.
 val OPTIONAL_PATCH_TABLES: List<OptionalPatchTable> = listOf(
     OptionalPatchTable(
         name = "book_banner",

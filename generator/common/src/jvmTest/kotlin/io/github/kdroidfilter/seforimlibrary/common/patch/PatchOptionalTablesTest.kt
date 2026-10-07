@@ -1,5 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.common.patch
 
+import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -175,6 +177,56 @@ class PatchOptionalTablesTest {
             connect(golden).use { optionalTableContentHashes(it) },
         )
     }
+
+    @Test
+    fun `cross-repo golden hashes of the empty tables`() {
+        val empty = db("empty.db", banners = emptyMap(), protections = emptyMap())
+        assertEquals(
+            mapOf(
+                "book_banner" to "473b121ac837ac17a9627ed583981faec4074ec3217224c18bb0a6bb62752240",
+                "book_protection" to "260da62f074581043b5bf203c9790203a9ea052f9d1e14e27ecc780f66790a81",
+            ),
+            connect(empty).use { optionalTableContentHashes(it) },
+        )
+    }
+
+    @Test
+    fun `Database sq declares the optional tables exactly as their shipped DDL`() {
+        val generated = path("generated.db")
+        JdbcSqliteDriver("jdbc:sqlite:${generated.toAbsolutePath()}").use { SeforimDb.Schema.create(it) }
+        val fromSpec = path("spec.db")
+        connect(fromSpec).use { conn ->
+            conn.createStatement().use { st ->
+                st.execute("CREATE TABLE book (id INTEGER PRIMARY KEY NOT NULL)")
+                OPTIONAL_PATCH_TABLES.forEach { st.execute(it.ddl) }
+            }
+        }
+        for (spec in OPTIONAL_PATCH_TABLES) {
+            val expected = shape(fromSpec, spec.name)
+            assertEquals(spec.columns, expected.first.map { it[0] })
+            assertEquals(expected, shape(generated, spec.name), "Database.sq drifted from the ${spec.name} DDL")
+        }
+    }
+
+    @Test
+    fun `a snapshot row whose book does not exist is refused`() {
+        val prev = db("prev.db", banners = null, protections = null)
+        val next = db("next.db", banners = mapOf(1L to "x"), protections = null)
+        val patch = path("patch.db")
+        PatchDbProducer().produce(prev, next, patch, fromVersion = 1, toVersion = 2)
+        connect(patch).use { conn -> conn.createStatement().use { it.execute("UPDATE optional_book_banner SET bookId = 99") } }
+        val target = copy(prev)
+        connect(target).use { conn ->
+            val error = assertFailsWith<IllegalStateException> { PatchApplier().apply(conn, patch) }
+            assertTrue("foreign key" in error.message.orEmpty(), error.message)
+        }
+        assertFalse(hasTable(target, "book_banner"))
+    }
+
+    /** (table_info rows: name, type, notnull, dflt, pk) to (foreign_key_list rows: table, from, to, on_delete). */
+    private fun shape(p: Path, table: String): Pair<List<List<Any?>>, List<List<Any?>>> =
+        query(p, "SELECT name, type, \"notnull\", dflt_value, pk FROM pragma_table_info('$table') ORDER BY cid") to
+            query(p, "SELECT \"table\", \"from\", \"to\", on_delete FROM pragma_foreign_key_list('$table') ORDER BY id")
 
     @Test
     fun `a DDL that is not a single CREATE TABLE IF NOT EXISTS is refused`() {
