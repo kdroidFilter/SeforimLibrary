@@ -352,6 +352,31 @@ tasks.register<JavaExec>("seedAllMetadata") {
     )
 }
 
+// Publisher banners and protection levels — book_banner / book_protection from the
+// optional ForDB book_banners.csv / book_protection.csv. Runs after every stage that
+// writes or renames books (it matches final titles).
+// Usage:
+//   ./gradlew :sefariasqlite:seedBookNotices -PseforimDb=/path/to/seforim.db
+tasks.register<JavaExec>("seedBookNotices") {
+    group = "application"
+    description = "Seed book_banner and book_protection from ForDB book_banners.csv / book_protection.csv."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.sefariasqlite.SeedBookNoticesPostProcessKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    if (project.hasProperty("seforimDb")) {
+        systemProperty("seforimDb", project.property("seforimDb") as String)
+    } else if (System.getenv("SEFORIM_DB") != null) {
+        systemProperty("seforimDb", System.getenv("SEFORIM_DB"))
+    } else {
+        val defaultDbPath = rootProject.layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+        systemProperty("seforimDb", defaultDbPath)
+    }
+
+    jvmArgs = listOf("-Xmx512m")
+}
+
 // Dry-run validation of EVERY ForDB rename/move rule against a real seforim.db:
 // the exact appliers in the exact build order, in a rolled-back transaction, and
 // a complete all-failures report instead of a first-row crash. The DB is never
@@ -399,6 +424,7 @@ tasks.matching {
         "renameCategories",
         "seedGenerations",
         "seedAllMetadata",
+        "seedBookNotices",
         "validateForDbInputs",
     )
 }

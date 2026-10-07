@@ -134,6 +134,7 @@ fun main(args: Array<String>) {
     }
     val libraryTrees = baseTreePath?.let { readLibraryTree(Path.of(it)) to readLibraryTree(Path.of(candidateTreePath!!)) }
     if (libraryTrees == null) logger.w { "No library trees given: categories of removed library folders are not checked" }
+    val bookNotices = loadBookNoticeRows(logger)
 
     DriverManager.getConnection("jdbc:sqlite:$dbPath").use { conn ->
         conn.autoCommit = false
@@ -196,13 +197,20 @@ fun main(args: Array<String>) {
                 repository.close()
             }
         }
+        // Last, like the build: a protection row naming a missing book fails here.
+        DriverManager.getConnection("jdbc:sqlite:$tempDb").use { conn ->
+            conn.autoCommit = false
+            applyBookNotices(conn, bookNotices, logger)
+            conn.commit()
+        }
         logger.i {
             "ForDB validation passed all real consumers: ${categoryRenames.size} category renames, " +
                 "${categoryMoves.size} category moves, ${bookRenames.size} book renames, " +
                 "${bookMoves.size} book moves, ${generations.size} generation rows, " +
                 "${bulkMetadata.size} bulk metadata rows, ${descriptionOverrides.size} description overrides, " +
                 "${categoryDescriptionOverrides.size} category-description overrides, " +
-                "${authorCanonicalNames.size} author renames. Original DB/buildstate untouched."
+                "${authorCanonicalNames.size} author renames, ${bookNotices.banners.size} banner rows, " +
+                "${bookNotices.protections.size} protection rows. Original DB/buildstate untouched."
         }
     } finally {
         tempDir.toFile().deleteRecursively()

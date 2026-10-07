@@ -53,6 +53,7 @@ tasks.register("generateSeforimDb") {
     dependsOn(":sefariasqlite:renameCategories")
     dependsOn(":sefariasqlite:seedGenerations")
     dependsOn(":sefariasqlite:seedAllMetadata")
+    dependsOn(":sefariasqlite:seedBookNotices")
     dependsOn(":generator-common:buildLineRefIndex")
     dependsOn(":generator-common:buildLineDhIndex")
     dependsOn(":sefariasqlite:synthesizeSeifimAltToc")
@@ -77,6 +78,7 @@ val lineContentWriters = listOf(
     ":catalog:buildCatalog",
     ":sefariasqlite:seedGenerations",
     ":sefariasqlite:seedAllMetadata",
+    ":sefariasqlite:seedBookNotices",
     ":sefariasqlite:synthesizeSeifimAltToc",
     ":sefariasqlite:synthesizeSimanNamesAltToc",
     ":sefariasqlite:inheritChaptersAltToc",
@@ -144,6 +146,7 @@ val generatorReportDir: String =
 listOf(
     ":sefariasqlite" to "generateSefariaSqlite",
     ":sefariasqlite" to "seedAllMetadata",
+    ":sefariasqlite" to "seedBookNotices",
     ":otzariasqlite" to "generateLines",
     ":otzariasqlite" to "generateLinks",
     ":otzariasqlite" to "appendOtzariaLines",
@@ -163,6 +166,7 @@ project(":generator-common").tasks.matching { it.name == "buildLineRefIndex" }.c
     mustRunAfter(":sefariasqlite:renameCategories")
     mustRunAfter(":sefariasqlite:seedGenerations")
     mustRunAfter(":sefariasqlite:seedAllMetadata")
+    mustRunAfter(":sefariasqlite:seedBookNotices")
     mustRunAfter(":sefariasqlite:synthesizeSeifimAltToc")
     mustRunAfter(":sefariasqlite:synthesizeSimanNamesAltToc")
     mustRunAfter(":sefariasqlite:inheritChaptersAltToc")
@@ -177,6 +181,7 @@ project(":generator-common").tasks.matching { it.name == "buildLineDhIndex" }.co
     mustRunAfter(":sefariasqlite:renameCategories")
     mustRunAfter(":sefariasqlite:seedGenerations")
     mustRunAfter(":sefariasqlite:seedAllMetadata")
+    mustRunAfter(":sefariasqlite:seedBookNotices")
     mustRunAfter(":generator-common:buildLineRefIndex")
 }
 
@@ -215,6 +220,16 @@ project(":sefariasqlite").tasks.matching { it.name == "seedAllMetadata" }.config
     mustRunAfter(":sefariasqlite:renameCategories")
     mustRunAfter(":sefariasqlite:seedGenerations")
 }
+// seedBookNotices matches final book titles and sources, so it follows the
+// seeders that rename books or set sourceId; ordered before the alt-TOC writers
+// only so post-process seeders write to seforim.db sequentially.
+project(":sefariasqlite").tasks.matching { it.name == "seedBookNotices" }.configureEach {
+    mustRunAfter(":otzariasqlite:appendOtzaria")
+    mustRunAfter(":otzariasqlite:generateHavroutaLinks")
+    mustRunAfter(":sefariasqlite:renameCategories")
+    mustRunAfter(":sefariasqlite:seedGenerations")
+    mustRunAfter(":sefariasqlite:seedAllMetadata")
+}
 // synthesizeSeifimAltToc reads COMMENTARY links and the final main TOC, so it
 // runs after every book- and link-writing stage. Ordered after the other
 // post-process seeders so they write to seforim.db sequentially.
@@ -224,6 +239,7 @@ project(":sefariasqlite").tasks.matching { it.name == "synthesizeSeifimAltToc" }
     mustRunAfter(":sefariasqlite:renameCategories")
     mustRunAfter(":sefariasqlite:seedGenerations")
     mustRunAfter(":sefariasqlite:seedAllMetadata")
+    mustRunAfter(":sefariasqlite:seedBookNotices")
 }
 // synthesizeSimanNamesAltToc reads the Sefaria Topic structures and COMMENTARY
 // links; ordered after synthesizeSeifimAltToc only so the two write sequentially.
@@ -233,6 +249,7 @@ project(":sefariasqlite").tasks.matching { it.name == "synthesizeSimanNamesAltTo
     mustRunAfter(":sefariasqlite:renameCategories")
     mustRunAfter(":sefariasqlite:seedGenerations")
     mustRunAfter(":sefariasqlite:seedAllMetadata")
+    mustRunAfter(":sefariasqlite:seedBookNotices")
     mustRunAfter(":sefariasqlite:synthesizeSeifimAltToc")
 }
 // inheritChaptersAltToc skips any book that already has an alt structure, so
@@ -243,6 +260,7 @@ project(":sefariasqlite").tasks.matching { it.name == "inheritChaptersAltToc" }.
     mustRunAfter(":sefariasqlite:renameCategories")
     mustRunAfter(":sefariasqlite:seedGenerations")
     mustRunAfter(":sefariasqlite:seedAllMetadata")
+    mustRunAfter(":sefariasqlite:seedBookNotices")
     mustRunAfter(":sefariasqlite:synthesizeSeifimAltToc")
     mustRunAfter(":sefariasqlite:synthesizeSimanNamesAltToc")
 }
@@ -250,6 +268,7 @@ project(":catalog").tasks.matching { it.name == "buildCatalog" }.configureEach {
     mustRunAfter(":otzariasqlite:generateHavroutaLinks")
     mustRunAfter(":sefariasqlite:seedGenerations")
     mustRunAfter(":sefariasqlite:seedAllMetadata")
+    mustRunAfter(":sefariasqlite:seedBookNotices")
     mustRunAfter(":sefariasqlite:synthesizeSeifimAltToc")
     mustRunAfter(":sefariasqlite:synthesizeSimanNamesAltToc")
     mustRunAfter(":sefariasqlite:inheritChaptersAltToc")
