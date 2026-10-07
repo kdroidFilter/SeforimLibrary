@@ -56,7 +56,7 @@ project(":otzariasqlite").tasks.matching { it.name == "generateHavroutaLinks" }.
 project(":catalog").tasks.matching { it.name == "buildCatalog" }.configureEach {
     mustRunAfter(":otzariasqlite:generateHavroutaLinks")
 }
-project(":searchindex").tasks.matching { it.name == "buildLuceneIndexDefault" }.configureEach {
+project(":searchindex").tasks.matching { it.name in setOf("embedCorpus", "buildLuceneIndexDefault") }.configureEach {
     mustRunAfter(":catalog:buildCatalog")
 }
 project(":packaging").tasks.matching { it.name == "writeReleaseInfo" }.configureEach {
