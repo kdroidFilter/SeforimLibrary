@@ -197,10 +197,11 @@ fun main(args: Array<String>) {
                 repository.close()
             }
         }
-        // Last, like the build: a protection row naming a missing book fails here.
+        // Warnings only: this DB is the last published one, without new or private books.
+        // The build itself (seedBookNotices) fails on an unmatched protection row.
         DriverManager.getConnection("jdbc:sqlite:$tempDb").use { conn ->
             conn.autoCommit = false
-            applyBookNotices(conn, bookNotices, logger)
+            applyBookNotices(conn, bookNotices, logger, strict = false)
             conn.commit()
         }
         logger.i {

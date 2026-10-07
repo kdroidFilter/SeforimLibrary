@@ -89,13 +89,12 @@ class SeedBookNoticesTest {
                     protections = listOf(
                         BookNoticeRow("KSK", "", 1),
                         BookNoticeRow("KSK", "קסק ב", 2),
-                        BookNoticeRow("Private", "", 1),
                     ),
                 ),
                 logger,
             )
             assertEquals(listOf("Other / חסר"), result.unmatchedBanners)
-            assertEquals(listOf("Private / *"), result.unmatchedProtectionSources)
+            assertEquals(emptyList(), result.unmatchedProtection)
             assertEquals(
                 listOf(
                     listOf<Any?>(1, "באדיבות\n[כאן](https://w.org/%D7%A1%D7%A4%D7%A8%20%D7%90)"),
@@ -118,6 +117,30 @@ class SeedBookNoticesTest {
             assertEquals(emptyList(), rows(it, "SELECT * FROM book_banner"))
             assertEquals(emptyList(), rows(it, "SELECT * FROM book_protection"))
         }
+    }
+
+    @Test
+    fun `a protection default for an unknown source fails the build and only warns at the ForDB gate`() {
+        val input = BookNoticeRows(emptyList(), listOf(BookNoticeRow("Private", "", 1), BookNoticeRow("KSK", "חדש", 1)))
+        db().use {
+            val error = assertFailsWith<IllegalStateException> { applyBookNotices(it, input, logger) }
+            assertContains(error.message.orEmpty(), "Private / *")
+        }
+        db().use {
+            val result = applyBookNotices(it, input, logger, strict = false)
+            assertEquals(listOf("Private / *", "KSK / חדש"), result.unmatchedProtection)
+            assertEquals(emptyList(), rows(it, "SELECT * FROM book_protection"))
+        }
+    }
+
+    @Test
+    fun `a BOM and CRLF line endings do not change the parsed rows`() {
+        val plain = "sourceName,bookName,text\n\"S\",\"\",\"שורה א\nשורה ב\"\n"
+        val expected = listOf(BookNoticeRow("S", "", "שורה א\nשורה ב"))
+        assertEquals(expected, parseBookBanners(forDbText(plain.lines())))
+        // readForDbZip's readLines() strips CR; the BOM survives it and must go.
+        val bomCrlf = "\uFEFF" + plain.replace("\n", "\r\n")
+        assertEquals(expected, parseBookBanners(forDbText(bomCrlf.byteInputStream().bufferedReader().readLines())))
     }
 
     @Test

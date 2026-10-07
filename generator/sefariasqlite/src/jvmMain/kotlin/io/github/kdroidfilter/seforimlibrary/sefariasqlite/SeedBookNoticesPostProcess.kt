@@ -34,9 +34,9 @@ internal data class BookNoticeRows(
 internal data class BookNoticesResult(
     val banners: Int,
     val protections: Int,
-    /** Rows (`source / title`) that matched no book; for banners only a warning. */
+    /** Rows (`source / title`, `source / *` for a default) that matched no book. */
     val unmatchedBanners: List<String>,
-    val unmatchedProtectionSources: List<String>,
+    val unmatchedProtection: List<String>,
 )
 
 /**
@@ -45,8 +45,8 @@ internal data class BookNoticesResult(
  *
  * Both files are optional: an archive without one leaves its table empty. Runs after
  * every stage that writes or renames books, so `bookName` is the final DB title.
- * A protection row naming a book that is not in the DB fails the build — dropping
- * protection silently is worse than a failed release.
+ * A protection row (per book or source default) that matches no book fails the build:
+ * dropping protection silently is worse than a failed release.
  *
  * Usage:
  *   ./gradlew :sefariasqlite:seedBookNotices -PseforimDb=/path/to/seforim.db
@@ -86,7 +86,7 @@ internal fun loadBookNoticeRows(logger: Logger): BookNoticeRows = BookNoticeRows
 )
 
 /** The archive reader splits files into lines; quoted fields may span them, so re-join first. */
-internal fun forDbText(lines: List<String>): String = lines.joinToString("\n").removePrefix("﻿")
+internal fun forDbText(lines: List<String>): String = lines.joinToString("\n").removePrefix("\uFEFF")
 
 internal fun parseBookBanners(text: String): List<BookNoticeRow<String>> =
     parseNoticeRows(text, BOOK_BANNERS_FILE, BANNER_HEADER) { value, where ->
@@ -137,8 +137,15 @@ private val LINK_PATTERN = Regex("""\[([^\]\n]*)]\(([^)\n]*)\)""")
 /**
  * Replaces both tables (DELETE + INSERT in bookId order). Source defaults expand to
  * every book of the source; a per-book row wins over its source's default.
+ * [strict] = false (the ForDB gate, run on the last published DB, which lacks new and
+ * private books) turns unmatched protection rows into warnings.
  */
-internal fun applyBookNotices(conn: Connection, rows: BookNoticeRows, logger: Logger): BookNoticesResult {
+internal fun applyBookNotices(
+    conn: Connection,
+    rows: BookNoticeRows,
+    logger: Logger,
+    strict: Boolean = true,
+): BookNoticesResult {
     conn.createStatement().use { st -> OPTIONAL_PATCH_TABLES.forEach { st.execute(it.ddl) } }
 
     data class Book(val id: Long, val title: String, val source: String)
@@ -167,10 +174,9 @@ internal fun applyBookNotices(conn: Connection, rows: BookNoticeRows, logger: Lo
 
     val unmatchedProtection = mutableListOf<String>()
     val protections = resolve(rows.protections, unmatchedProtection)
-    val missingBooks = unmatchedProtection.filterNot { it.endsWith(" / *") }
-    check(missingBooks.isEmpty()) {
-        "$BOOK_PROTECTION_FILE names book(s) that are not in the DB (title after renames): " +
-            missingBooks.joinToString()
+    check(!strict || unmatchedProtection.isEmpty()) {
+        "$BOOK_PROTECTION_FILE rows match no book in the DB (source / title after renames): " +
+            unmatchedProtection.joinToString()
     }
     val unmatchedBanners = mutableListOf<String>()
     val banners = resolve(rows.banners, unmatchedBanners)
@@ -194,16 +200,15 @@ internal fun applyBookNotices(conn: Connection, rows: BookNoticeRows, logger: Lo
         }
     }
 
-    val unmatchedSources = unmatchedProtection.filter { it.endsWith(" / *") }
-    if (unmatchedBanners.isNotEmpty() || unmatchedSources.isNotEmpty()) {
+    if (unmatchedBanners.isNotEmpty() || unmatchedProtection.isNotEmpty()) {
         logger.w {
-            "Book notices: ${unmatchedBanners.size} banner row(s) and ${unmatchedSources.size} protection " +
-                "source default(s) matched no book: ${(unmatchedBanners + unmatchedSources).take(20).joinToString()}"
+            "Book notices: ${unmatchedBanners.size} banner row(s) and ${unmatchedProtection.size} protection " +
+                "row(s) matched no book: ${(unmatchedBanners + unmatchedProtection).take(20).joinToString()}"
         }
         GeneratorReport.write("book-notices-unmatched", logger) {
             putStrings("banners", unmatchedBanners)
-            putStrings("protectionSources", unmatchedSources)
+            putStrings("protection", unmatchedProtection)
         }
     }
-    return BookNoticesResult(banners.size, protections.size, unmatchedBanners, unmatchedSources)
+    return BookNoticesResult(banners.size, protections.size, unmatchedBanners, unmatchedProtection)
 }
