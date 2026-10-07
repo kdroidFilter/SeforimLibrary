@@ -46,7 +46,6 @@ class SeedBookNoticesTest {
         assertEquals(
             listOf(
                 BookNoticeRow("KSK", "", 1),
-                BookNoticeRow("MoreBooks", "הערות על שמירת שבת כהלכתה - א", 1),
                 BookNoticeRow("MoreBooks", "שמירת שבת כהלכתה - א", 1),
             ),
             rows,
