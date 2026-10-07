@@ -125,6 +125,9 @@ fun main(args: Array<String>) {
     val newReport = DriverManager.getConnection("jdbc:sqlite:${newPath.toAbsolutePath()}").use {
         LogicalContentHasher.forSchemaVersion(toSchemaVersion).computeReport(it)
     }
+    val newOptionalHashes = DriverManager.getConnection("jdbc:sqlite:${newPath.toAbsolutePath()}").use {
+        optionalTableContentHashes(it)
+    }
     val newHash = newReport.wholeHash
     DriverManager.getConnection("jdbc:sqlite:${target.toAbsolutePath()}").use { conn ->
         conn.createStatement().use { it.execute("PRAGMA foreign_keys = ON") }
@@ -139,6 +142,7 @@ fun main(args: Array<String>) {
             patchDb = outPath,
             expectedToContentHash = newHash,
             expectedToSchemaVersion = toSchemaVersion,
+            expectedOptionalTableHashes = newOptionalHashes,
         )
         val appliedReport = LogicalContentHasher.forSchemaVersion(toSchemaVersion).computeReport(conn)
         val appliedHash = appliedReport.wholeHash
@@ -228,6 +232,7 @@ fun main(args: Array<String>) {
         toContentHash = newHash,
         fromTableContentHashes = prevReport.tableHashes,
         toTableContentHashes = newReport.tableHashes,
+        optionalTableContentHashes = newOptionalHashes,
         compressed = ReleaseManifestWriter.CompressedPatchSpec(
             file = compressed.compressedFile,
             sha256 = compressed.compressedSha256,

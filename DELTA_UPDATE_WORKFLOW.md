@@ -254,6 +254,21 @@ The oracle for both sides is `logical_hash_contract.json` — byte-identical in
 `contract.yml`. Do not regenerate it unless both sides fail identically and
 the change is deliberate.
 
+### 1.5 Optional tables (side channel)
+
+`book_banner` and `book_protection` (`OPTIONAL_PATCH_TABLES` in `PatchTables.kt`) are
+outside the schema-6 contract: not in the FK order, not in any hash order. For each one
+present in the new DB the patch carries its DDL in `optional_table_ddl(name, sql)` and a
+full snapshot in `optional_<name>`; the applier (after deletes, before `stat1_snapshot`)
+runs the DDL, empties the table and copies the snapshot. The manifest adds
+
+```json
+"optionalTableContentHashes": { "book_banner": "<hex>", "book_protection": "<hex>" }
+```
+
+— the same per-table hash, of the new DB, checked before COMMIT by the verify-apply gate
+and by new clients. Old clients ignore both. Schema 7 should fold the tables into the contract.
+
 ---
 
 ## 2. CDN / static-host layout

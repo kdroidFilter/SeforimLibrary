@@ -20,10 +20,12 @@ import java.sql.Connection
  *     `DO NOTHING` for pure-PK junctions).
  *  6. For each tracked table in REVERSE FK order:
  *     `DELETE FROM <table> WHERE (pk…) IN (SELECT pk… FROM patch.delete_<table>)`.
- *  6a. Install the patch's `stat1_snapshot`, when present, clear stale STAT4
+ *  6a. Replace every optional table the patch snapshots (`optional_<name>`, see
+ *      [OPTIONAL_PATCH_TABLES]); a table without a snapshot is left untouched.
+ *  6b. Install the patch's `stat1_snapshot`, when present, clear stale STAT4
  *      histograms, and reload planner statistics on the applying connection.
  *  7. Verify the FK violation count did not grow.
- *  8. (Optional) verify logical content hash.
+ *  8. (Optional) verify logical content hash, and each optional table's hash.
  *  9. COMMIT.
  */
 class PatchApplier(
@@ -34,6 +36,8 @@ class PatchApplier(
         val migrationsApplied: Int,
         val upsertCounts: Map<String, Int>,
         val deleteCounts: Map<String, Int>,
+        /** Rows written per replaced optional table; kept apart from [upsertCounts]. */
+        val optionalTablesReplaced: Map<String, Int> = emptyMap(),
     )
 
     fun apply(
@@ -41,6 +45,7 @@ class PatchApplier(
         patchDb: Path,
         expectedToContentHash: String? = null,
         expectedToSchemaVersion: Int? = null,
+        expectedOptionalTableHashes: Map<String, String> = emptyMap(),
     ): Result {
         val wasAutoCommit = conn.autoCommit
         conn.autoCommit = false
@@ -52,6 +57,7 @@ class PatchApplier(
             val migrations = runMigrations(conn)
             val upserts = runUpserts(conn)
             val deletes = runDeletes(conn)
+            val optionalReplaced = replaceOptionalTables(conn)
             applyStat1Snapshot(conn)
             val postFkCount = countFkViolations(conn)
             check(postFkCount <= preFkCount) {
@@ -72,11 +78,16 @@ class PatchApplier(
                 }
             }
 
+            verifyOptionalTables(conn, expectedOptionalTableHashes)
+
             conn.commit()
             conn.autoCommit = true
             detach(conn)
-            logger.i { "Patch applied — migrations=$migrations, upserts=$upserts, deletes=$deletes" }
-            return Result(migrations, upserts, deletes)
+            logger.i {
+                "Patch applied — migrations=$migrations, upserts=$upserts, deletes=$deletes, " +
+                    "optional=$optionalReplaced"
+            }
+            return Result(migrations, upserts, deletes, optionalReplaced)
         } catch (t: Throwable) {
             runCatching { conn.rollback() }
             runCatching { detach(conn) }
@@ -137,6 +148,45 @@ class PatchApplier(
             if (n > 0) logger.d { "Upserted $n row(s) into ${table.name}" }
         }
         return counts
+    }
+
+    /** Full replacement of each known optional table the patch snapshots; unknown snapshots are ignored. */
+    private fun replaceOptionalTables(conn: Connection): Map<String, Int> {
+        val counts = LinkedHashMap<String, Int>()
+        for (spec in OPTIONAL_PATCH_TABLES) {
+            val snapshot = optionalSnapshotTable(spec.name)
+            if (!patchHasTable(conn, snapshot)) continue
+            val ddl = readOptionalTableDdl(conn, spec.name)
+                ?: error("patch.db carries $snapshot without its DDL in $OPTIONAL_TABLE_DDL_TABLE")
+            val colsCsv = spec.columns.joinToString(",") { "\"$it\"" }
+            conn.createStatement().use { st ->
+                st.execute(ddl)
+                st.execute("DELETE FROM main.\"${spec.name}\"")
+                counts[spec.name] = st.executeUpdate(
+                    "INSERT INTO main.\"${spec.name}\" ($colsCsv) SELECT $colsCsv FROM patch.\"$snapshot\"",
+                )
+            }
+        }
+        return counts
+    }
+
+    private fun readOptionalTableDdl(conn: Connection, name: String): String? {
+        if (!patchHasTable(conn, OPTIONAL_TABLE_DDL_TABLE)) return null
+        conn.prepareStatement("SELECT sql FROM patch.\"$OPTIONAL_TABLE_DDL_TABLE\" WHERE name = ?").use { ps ->
+            ps.setString(1, name)
+            ps.executeQuery().use { rs -> return if (rs.next()) rs.getString(1) else null }
+        }
+    }
+
+    /** Checks every known optional table the manifest carries a hash for; unknown names are not verified. */
+    private fun verifyOptionalTables(conn: Connection, expected: Map<String, String>) {
+        val tables = OPTIONAL_PATCH_TABLES.map { it.name }.filter { it in expected }
+        if (tables.isEmpty()) return
+        val actual = LogicalContentHasher(tables).computeReport(conn).tableHashes
+        val mismatched = tables.filter { actual[it] != expected[it] }
+        check(mismatched.isEmpty()) {
+            "Optional table hash after apply does not match optionalTableContentHashes for ${mismatched.joinToString(", ")}"
+        }
     }
 
     /** Installs the patch's planner statistics; a patch without a snapshot keeps the existing ones. */

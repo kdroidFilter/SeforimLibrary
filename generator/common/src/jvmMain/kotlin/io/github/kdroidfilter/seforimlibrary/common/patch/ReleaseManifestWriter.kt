@@ -53,6 +53,7 @@ class ReleaseManifestWriter(
         catalogBlobName: String? = null,
         fromTableContentHashes: Map<String, String> = emptyMap(),
         toTableContentHashes: Map<String, String> = emptyMap(),
+        optionalTableContentHashes: Map<String, String> = emptyMap(),
         patchFormatVersion: Int = PatchDbSchema.CURRENT_VERSION,
         fullRebase: Boolean = false,
     ): Path {
@@ -78,6 +79,10 @@ class ReleaseManifestWriter(
             if (fromTableContentHashes.isNotEmpty()) {
                 appendHashMap("fromTableContentHashes", fromTableContentHashes)
                 appendHashMap("toTableContentHashes", toTableContentHashes)
+            }
+            // Outside the schema hash: per-table hashes of the optional tables the new DB has.
+            if (optionalTableContentHashes.isNotEmpty()) {
+                appendHashMap("optionalTableContentHashes", optionalTableContentHashes)
             }
             append("  \"patchFiles\": [\n")
             append("    {\n")

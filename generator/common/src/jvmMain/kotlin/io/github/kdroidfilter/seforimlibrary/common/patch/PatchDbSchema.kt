@@ -13,6 +13,8 @@ import java.sql.Connection
  *                     SAME columns + the target table's PK
  *  - `delete_<table>` one row per row to remove, with the target table's PK
  *  - `stat1_snapshot` the target DB's `sqlite_stat1` (optional, see [writeStat1Snapshot])
+ *  - `optional_table_ddl` + `optional_<name>` full snapshots of the optional
+ *                     tables (see [writeOptionalTables])
  *
  * The upsert / delete table shapes are derived dynamically from the target
  * seforim.db schema attached as `prev` (or `new`) at producer time — that way
@@ -120,6 +122,44 @@ internal object PatchDbSchema {
                     "SELECT tbl, idx, stat FROM $sourceSchemaAlias.sqlite_stat1",
             )
         }
+    }
+
+    /**
+     * Writes [OPTIONAL_TABLE_DDL_TABLE] plus a full `optional_<name>` snapshot for every
+     * [OPTIONAL_PATCH_TABLES] entry present in [sourceSchemaAlias]. Returns rows per table.
+     */
+    fun writeOptionalTables(conn: Connection, sourceSchemaAlias: String): Map<String, Int> {
+        val counts = LinkedHashMap<String, Int>()
+        for (spec in OPTIONAL_PATCH_TABLES) {
+            val cols = readTableInfo(conn, sourceSchemaAlias, spec.name)
+            if (cols.isEmpty()) continue
+            val byName = cols.associateBy { it.name }
+            val missing = spec.columns.filter { it !in byName }
+            check(missing.isEmpty()) { "optional table ${spec.name} lacks column(s) $missing" }
+            val colDdl = spec.columns.joinToString(", ") { name ->
+                val c = byName.getValue(name)
+                "\"$name\" ${c.type}${if (c.notNull) " NOT NULL" else ""}"
+            }
+            val pk = spec.primaryKey.joinToString(",") { "\"$it\"" }
+            val colsCsv = spec.columns.joinToString(",") { "\"$it\"" }
+            val snapshot = optionalSnapshotTable(spec.name)
+            conn.createStatement().use { st ->
+                st.execute(
+                    "CREATE TABLE IF NOT EXISTS \"$OPTIONAL_TABLE_DDL_TABLE\" " +
+                        "(name TEXT PRIMARY KEY NOT NULL, sql TEXT NOT NULL)",
+                )
+                st.execute("CREATE TABLE \"$snapshot\" ($colDdl, PRIMARY KEY ($pk))")
+                counts[spec.name] = st.executeUpdate(
+                    "INSERT INTO \"$snapshot\" ($colsCsv) SELECT $colsCsv FROM $sourceSchemaAlias.\"${spec.name}\"",
+                )
+            }
+            conn.prepareStatement("INSERT INTO \"$OPTIONAL_TABLE_DDL_TABLE\" (name, sql) VALUES (?, ?)").use { ps ->
+                ps.setString(1, spec.name)
+                ps.setString(2, spec.ddl)
+                ps.executeUpdate()
+            }
+        }
+        return counts
     }
 
     /**

@@ -23,6 +23,8 @@ data class DeltaManifest(
      */
     val fromTableContentHashes: Map<String, String> = emptyMap(),
     val toTableContentHashes: Map<String, String> = emptyMap(),
+    /** Per-table hashes of the new DB's optional tables (outside the schema hash). */
+    val optionalTableContentHashes: Map<String, String> = emptyMap(),
     /**
      * Books touched / added / removed / renamed between fromVersion and toVersion.
      * Empty when the diff has no per-book scope (e.g. lookup-only changes).

@@ -175,6 +175,10 @@ class PatchDbProducer(
             val statRows = PatchDbSchema.writeStat1Snapshot(conn, "new")
             if (statRows > 0) logger.i { "Shipping $statRows sqlite_stat1 row(s) as ${PatchDbSchema.STAT1_SNAPSHOT_TABLE}" }
 
+            // Outside the schema contract: every patch replaces these tables whole.
+            val optionalRows = PatchDbSchema.writeOptionalTables(conn, "new")
+            if (optionalRows.isNotEmpty()) logger.i { "Shipping optional table snapshot(s): $optionalRows" }
+
             // Commit BEFORE detach so SQLite isn't holding locks on the
             // attached DBs through an open transaction.
             conn.commit()

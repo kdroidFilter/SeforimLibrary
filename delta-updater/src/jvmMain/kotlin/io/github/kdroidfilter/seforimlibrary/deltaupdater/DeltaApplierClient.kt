@@ -111,6 +111,7 @@ class DeltaApplierClient(
                     patchDb = patchDb,
                     expectedToContentHash = manifest.toContentHash,
                     expectedToSchemaVersion = manifest.toSchemaVersion,
+                    expectedOptionalTableHashes = manifest.optionalTableContentHashes,
                 )
                 return Result(applied = applied, backupPath = backup, markerPath = marker)
             }

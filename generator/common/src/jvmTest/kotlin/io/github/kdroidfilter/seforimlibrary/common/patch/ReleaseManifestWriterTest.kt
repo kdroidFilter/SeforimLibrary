@@ -112,6 +112,37 @@ class ReleaseManifestWriterTest {
     }
 
     @Test
+    fun `writeManifest emits optionalTableContentHashes after the schema table maps`() {
+        val patch = tmp.newFile("patch.db").toPath()
+        Files.writeString(patch, "hello world")
+        val compressed = PatchCompressor.compress(patch, level = 3, workers = 1)
+        val target = ReleaseManifestWriter().writeManifest(
+            patchFile = patch,
+            fromVersion = 1, toVersion = 2,
+            fromSchemaVersion = 6, toSchemaVersion = 6,
+            fromContentHash = "aaaa", toContentHash = "bbbb",
+            compressed = ReleaseManifestWriter.CompressedPatchSpec(
+                file = compressed.compressedFile,
+                sha256 = compressed.compressedSha256,
+                size = compressed.compressedSize,
+                compression = "zstd",
+            ),
+            fromTableContentHashes = linkedMapOf("source" to "11"),
+            toTableContentHashes = linkedMapOf("source" to "22"),
+            optionalTableContentHashes = linkedMapOf("book_banner" to "44", "book_protection" to "55"),
+        )
+        val body = Files.readString(target)
+        assertTrue(
+            body.contains(
+                "  \"toTableContentHashes\": {\n    \"source\": \"22\"\n  },\n" +
+                    "  \"optionalTableContentHashes\": {\n    \"book_banner\": \"44\",\n" +
+                    "    \"book_protection\": \"55\"\n  },\n  \"patchFiles\": [",
+            ),
+            body,
+        )
+    }
+
+    @Test
     fun `writeManifest omits the table-hash maps when not supplied`() {
         val patch = tmp.newFile("patch.db").toPath()
         Files.writeString(patch, "hello world")
