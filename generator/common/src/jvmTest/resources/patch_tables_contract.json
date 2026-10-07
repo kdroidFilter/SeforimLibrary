@@ -81,5 +81,9 @@
     "default_commentator",
     "default_targum",
     "schema_meta"
+  ],
+  "optionalTables": [
+    { "table": "book_banner", "pk": ["bookId"], "columns": ["bookId", "text"] },
+    { "table": "book_protection", "pk": ["bookId"], "columns": ["bookId", "level"] }
   ]
 }

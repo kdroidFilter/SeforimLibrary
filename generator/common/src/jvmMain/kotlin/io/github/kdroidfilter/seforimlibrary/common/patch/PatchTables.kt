@@ -140,3 +140,62 @@ internal fun patchTablesForSchemaVersion(schemaVersion: Int): List<PatchTable> =
     6 -> PATCH_TABLES_IN_FK_ORDER
     else -> error("Unsupported patch-table schema version $schemaVersion")
 }
+
+/**
+ * A table outside the schema contract: never in [PATCH_TABLES_IN_FK_ORDER] or any
+ * hash order. A patch carries a full snapshot of it (`optional_<name>`) plus its
+ * [ddl], and the applier replaces the whole table; absent from a DB means "no data".
+ */
+internal data class OptionalPatchTable(
+    val name: String,
+    val primaryKey: List<String>,
+    /** DDL column order — the columns copied from the snapshot. */
+    val columns: List<String>,
+    val ddl: String,
+)
+
+/** Patch table holding the DDL of each optional table it snapshots. */
+internal const val OPTIONAL_TABLE_DDL_TABLE: String = "optional_table_ddl"
+
+internal fun optionalSnapshotTable(name: String): String = "optional_$name"
+
+// TODO: when schema 7 is introduced, move these tables into its contract and drop the side channel.
+internal val OPTIONAL_PATCH_TABLES: List<OptionalPatchTable> = listOf(
+    OptionalPatchTable(
+        name = "book_banner",
+        primaryKey = listOf("bookId"),
+        columns = listOf("bookId", "text"),
+        ddl = """
+            CREATE TABLE IF NOT EXISTS book_banner (
+                bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
+                text TEXT NOT NULL
+            );
+        """.trimIndent(),
+    ),
+    OptionalPatchTable(
+        name = "book_protection",
+        primaryKey = listOf("bookId"),
+        columns = listOf("bookId", "level"),
+        ddl = """
+            CREATE TABLE IF NOT EXISTS book_protection (
+                bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
+                level INTEGER NOT NULL CHECK (level >= 1)
+            );
+        """.trimIndent(),
+    ),
+)
+
+/**
+ * Per-table logical hash of every optional table present in the DB on [conn], in
+ * [OPTIONAL_PATCH_TABLES] order — the bytes [LogicalContentHasher] hashes for any table.
+ */
+internal fun optionalTableContentHashes(conn: java.sql.Connection): LinkedHashMap<String, String> {
+    val present = OPTIONAL_PATCH_TABLES.map { it.name }.filter { name ->
+        conn.prepareStatement("SELECT 1 FROM main.sqlite_master WHERE type='table' AND name=?").use { ps ->
+            ps.setString(1, name)
+            ps.executeQuery().use { it.next() }
+        }
+    }
+    if (present.isEmpty()) return LinkedHashMap()
+    return LogicalContentHasher(present).computeReport(conn).tableHashes
+}

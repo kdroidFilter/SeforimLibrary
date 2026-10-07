@@ -67,6 +67,8 @@
 --     default_commentator.commentatorBookId -> book(id)          ON DELETE CASCADE
 --     default_targum.bookId           -> book(id)                ON DELETE CASCADE
 --     default_targum.targumBookId     -> book(id)                ON DELETE CASCADE
+--     book_banner.bookId              -> book(id)                ON DELETE CASCADE
+--     book_protection.bookId          -> book(id)                ON DELETE CASCADE
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- Schema-level metadata (db_version, db_schema_version, content_hash, ...)
@@ -613,3 +615,15 @@ CREATE TABLE IF NOT EXISTS default_targum (
 
 CREATE INDEX IF NOT EXISTS idx_default_targum_book ON default_targum(bookId);
 CREATE INDEX IF NOT EXISTS idx_default_targum_target ON default_targum(targumBookId);
+
+-- Optional per-book publisher banner and protection level (sparse). Outside the
+-- schema hash contract: patches ship them as a full snapshot (OPTIONAL_PATCH_TABLES).
+CREATE TABLE IF NOT EXISTS book_banner (
+    bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
+    text TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS book_protection (
+    bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
+    level INTEGER NOT NULL CHECK (level >= 1)
+);

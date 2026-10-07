@@ -89,7 +89,9 @@ class PatchTablesContractTest {
         fkOrder: List<PatchTable>,
         hashOrder: List<String>,
         schemaVersion: Int,
+        optionalTables: List<OptionalPatchTable>? = null,
     ): String {
+        fun strings(xs: List<String>) = xs.joinToString(", ") { "\"$it\"" }
         val b = StringBuilder()
         b.append("{\n")
         b.append("  \"schemaVersion\": ").append(schemaVersion).append(",\n")
@@ -109,7 +111,21 @@ class PatchTablesContractTest {
             if (i != hashOrder.lastIndex) b.append(",")
             b.append("\n")
         }
-        b.append("  ]\n")
+        // Frozen pre-side-channel fixtures end at hashOrder.
+        if (optionalTables == null) {
+            b.append("  ]\n")
+        } else {
+            b.append("  ],\n")
+            b.append("  \"optionalTables\": [\n")
+            for ((i, t) in optionalTables.withIndex()) {
+                b.append("    { \"table\": \"").append(t.name)
+                    .append("\", \"pk\": [").append(strings(t.primaryKey))
+                    .append("], \"columns\": [").append(strings(t.columns)).append("] }")
+                if (i != optionalTables.lastIndex) b.append(",")
+                b.append("\n")
+            }
+            b.append("  ]\n")
+        }
         b.append("}\n")
         return b.toString()
     }
@@ -121,8 +137,20 @@ class PatchTablesContractTest {
             PATCH_TABLES_IN_FK_ORDER,
             LogicalContentHasher.DEFAULT_TABLES,
             CURRENT_DB_SCHEMA_VERSION,
+            OPTIONAL_PATCH_TABLES,
         )
         assertEquals(expected, actual)
+    }
+
+    @Test
+    fun `optional tables stay outside the FK order and every hash order`() {
+        val names = OPTIONAL_PATCH_TABLES.map { it.name }.toSet()
+        assertEquals(OPTIONAL_PATCH_TABLES.size, names.size)
+        assertEquals(emptySet(), PATCH_TABLES_IN_FK_ORDER.map { it.name }.toSet() intersect names)
+        for (v in 1..CURRENT_DB_SCHEMA_VERSION) {
+            assertEquals(emptySet(), LogicalContentHasher.tablesForSchemaVersion(v).toSet() intersect names)
+            assertEquals(emptySet(), patchTablesForSchemaVersion(v).map { it.name }.toSet() intersect names)
+        }
     }
 
     @Test
