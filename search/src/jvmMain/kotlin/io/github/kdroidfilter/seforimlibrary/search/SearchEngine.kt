@@ -108,6 +108,19 @@ interface SearchEngine : Closeable {
     suspend fun semanticFind(query: String, bookId: Long, limit: Int): List<Long> = emptyList()
 
     /**
+     * Literal find-in-page over a whole book, not just its loaded lines: the ids of the lines
+     * of [bookId] that may contain [query] as a substring (nikud, final letters and case
+     * ignored), in no particular order.
+     *
+     * A superset: the index knows which words a line holds, not where, so the caller confirms
+     * each candidate against the line's text.
+     *
+     * @return null when the index can't answer (the book isn't indexed, no index at all, or a
+     *         query too short to filter on): the caller must then scan the book itself
+     */
+    fun findInBookCandidates(query: String, bookId: Long): LongArray? = null
+
+    /**
      * Ensures the dense backend (embedding model + vector index) is loaded and reports whether
      * it is actually available. Useful for diagnostics and to decide whether semantic features
      * can run. Returns false for engines without a dense path.
