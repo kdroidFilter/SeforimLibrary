@@ -219,6 +219,69 @@ class LuceneSearchEngine(
         return buildSnippetInternal(rawClean, anchorTerms, highlightTerms)
     }
 
+    override fun findInBookCandidates(query: String, bookId: Long): LongArray? {
+        val norm = HebrewTextUtils.normalizeHebrew(query)
+        if (norm.isBlank()) return LongArray(0)
+        val bookLines = BooleanQuery.Builder()
+            .add(TermQuery(Term("type", "line")), BooleanClause.Occur.FILTER)
+            .add(IntPoint.newExactQuery("book_id", bookId.toInt()), BooleanClause.Occur.FILTER)
+            .build()
+        // Nothing to filter on: every line would be a candidate, cheaper scanned from the DB
+        val clauses = literalPresenceClauses(analyzeToTerms(stdAnalyzer, norm).orEmpty())
+        if (clauses.isEmpty()) return null
+        val builder = BooleanQuery.Builder().add(bookLines, BooleanClause.Occur.FILTER)
+        clauses.forEach { builder.add(it, BooleanClause.Occur.FILTER) }
+
+        return withSearcher { searcher ->
+            var ids = LongArray(256)
+            var count = 0
+            // Only line_id is read per hit: no scoring, no other stored field
+            val collector = object : Collector {
+                override fun getLeafCollector(leafContext: LeafReaderContext): LeafCollector {
+                    val storedFields = leafContext.reader().storedFields()
+                    return object : LeafCollector {
+                        override fun setScorer(scorer: Scorable) = Unit
+
+                        override fun collect(doc: Int) {
+                            val lineId = storedFields.document(doc, setOf("line_id"))
+                                .getField("line_id")?.numericValue()?.toLong() ?: return
+                            if (count == ids.size) ids = ids.copyOf(count * 2)
+                            ids[count++] = lineId
+                        }
+                    }
+                }
+
+                override fun scoreMode(): ScoreMode = ScoreMode.COMPLETE_NO_SCORES
+            }
+            // searcher has no executor, so slices run sequentially and can share one collector
+            searcher.search(
+                builder.build(),
+                object : CollectorManager<Collector, Unit> {
+                    override fun newCollector(): Collector = collector
+                    override fun reduce(collectors: Collection<Collector>) = Unit
+                }
+            )
+            // No candidate may mean a book the index lacks (older index, book added later): unknown, not "no match"
+            if (count == 0 && searcher.count(bookLines) == 0) null else ids.copyOf(count)
+        }
+    }
+
+    /**
+     * Filters every line holding the analyzed [tokens] as one literal substring satisfies. The
+     * substring may start and end mid-word: the first token is only a word suffix, the last a
+     * word prefix, the inner ones whole words. A first or lone token is matched anywhere in a
+     * word through its 4-grams, so one under 4 letters can't filter (a leading wildcard would
+     * scan the whole term dictionary); a last one under 3 neither, its prefix being too common.
+     */
+    private fun literalPresenceClauses(tokens: List<String>): List<Query> =
+        tokens.mapIndexedNotNull { i, token ->
+            when {
+                i in 1 until tokens.lastIndex -> TermQuery(Term("text", token))
+                i > 0 && token.length >= 3 -> PrefixQuery(Term("text", token))
+                else -> buildNgramPresenceForToken(token)
+            }
+        }
+
     override fun close() {
         // Directory is closed automatically when readers are closed
     }

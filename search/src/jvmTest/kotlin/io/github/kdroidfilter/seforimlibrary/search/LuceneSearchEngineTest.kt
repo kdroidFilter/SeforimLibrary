@@ -7,7 +7,12 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
+import org.apache.lucene.analysis.Analyzer
+import org.apache.lucene.analysis.LowerCaseFilter
+import org.apache.lucene.analysis.miscellaneous.PerFieldAnalyzerWrapper
+import org.apache.lucene.analysis.ngram.NGramTokenFilter
 import org.apache.lucene.analysis.standard.StandardAnalyzer
+import org.apache.lucene.analysis.standard.StandardTokenizer
 import org.apache.lucene.document.Document
 import org.apache.lucene.document.Field
 import org.apache.lucene.document.IntPoint
@@ -482,6 +487,46 @@ class LuceneSearchEngineTest {
         }
     }
 
+    // --- findInBookCandidates tests ---
+
+    @Test
+    fun `findInBookCandidates finds a substring inside a word, nikud ignored`() {
+        withFindIndex { engine ->
+            assertEquals(setOf(1L), engine.findInBookCandidates("רֵאשִׁי", bookId = 1)!!.toSet())
+        }
+    }
+
+    @Test
+    fun `findInBookCandidates finds a query starting and ending mid-word`() {
+        withFindIndex { engine ->
+            // "שית" ends a word, "ברא" begins one, "אלהים" is whole
+            assertEquals(setOf(1L), engine.findInBookCandidates("שית ברא אלהים", bookId = 1)!!.toSet())
+        }
+    }
+
+    @Test
+    fun `findInBookCandidates can't answer for a book the index lacks`() {
+        withFindIndex { engine ->
+            assertNull(engine.findInBookCandidates("בראשית", bookId = 99))
+            assertTrue(engine.findInBookCandidates("ויקרא", bookId = 1)!!.isEmpty())
+        }
+    }
+
+    @Test
+    fun `findInBookCandidates stays within the book`() {
+        withFindIndex { engine ->
+            assertEquals(setOf(4L), engine.findInBookCandidates("בראשית", bookId = 2)!!.toSet())
+        }
+    }
+
+    @Test
+    fun `findInBookCandidates can't answer when the query is too short to filter`() {
+        withFindIndex { engine ->
+            assertNull(engine.findInBookCandidates("של", bookId = 1))
+            assertTrue(engine.findInBookCandidates("  ", bookId = 1)!!.isEmpty())
+        }
+    }
+
     // --- Helper methods ---
 
     private fun collectLineIds(session: SearchSession): Set<Long> = runBlocking {
@@ -523,6 +568,46 @@ class LuceneSearchEngineTest {
                     writer.addDocument(doc)
                 }
             }
+        }
+    }
+
+    private fun withFindIndex(block: (LuceneSearchEngine) -> Unit) {
+        val tempDir = createTempIndexDir()
+        try {
+            // Same analyzers as the generator: standard words + per-word 4-grams
+            val ngram4 = object : Analyzer() {
+                override fun createComponents(fieldName: String): TokenStreamComponents {
+                    val src = StandardTokenizer()
+                    return TokenStreamComponents(src, NGramTokenFilter(LowerCaseFilter(src), 4, 4, false))
+                }
+            }
+            val analyzer = PerFieldAnalyzerWrapper(StandardAnalyzer(), mapOf("text_ng4" to ngram4))
+            FSDirectory.open(tempDir).use { dir ->
+                IndexWriter(dir, IndexWriterConfig(analyzer)).use { writer ->
+                    listOf(
+                        Triple(1L, 1, "בראשית ברא אלהים"),
+                        Triple(2L, 1, "והארץ היתה תהו"),
+                        Triple(3L, 1, "ויברא אלהים את האדם"),
+                        Triple(4L, 2, "בראשית רבה"),
+                    ).forEach { (lineId, bookId, text) ->
+                        val norm = HebrewTextUtils.normalizeHebrew(text)
+                        writer.addDocument(
+                            Document().apply {
+                                add(StringField("type", "line", Field.Store.NO))
+                                add(StoredField("book_id", bookId))
+                                add(IntPoint("book_id", bookId))
+                                add(StoredField("line_id", lineId))
+                                add(IntPoint("line_id", lineId.toInt()))
+                                add(TextField("text", norm, Field.Store.NO))
+                                add(TextField("text_ng4", norm, Field.Store.NO))
+                            },
+                        )
+                    }
+                }
+            }
+            block(LuceneSearchEngine(tempDir))
+        } finally {
+            deleteDirectory(tempDir)
         }
     }
 
