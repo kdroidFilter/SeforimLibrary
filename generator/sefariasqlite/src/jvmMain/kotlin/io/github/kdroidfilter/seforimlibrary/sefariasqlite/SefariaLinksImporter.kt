@@ -25,7 +25,8 @@ internal class SefariaLinksImporter(
         lineKeyToId: Map<Pair<String, Int>, Long>,
         lineIdToBookId: Map<Long, Long>,
         bookMetaById: Map<Long, BookMeta>,
-        headingLineIds: Set<Long> = emptySet()
+        headingLineIds: Set<Long> = emptySet(),
+        onLinkStored: (Link) -> Unit = {},
     ) = coroutineScope {
         // Pre-register all connection types we'll use so their ids are stable
         // (so `link.connectionTypeId` is reproducible across builds).
@@ -60,6 +61,7 @@ internal class SefariaLinksImporter(
         val inserter = launch {
             val batch = mutableListOf<Link>()
             for (link in linkChannel) {
+                onLinkStored(link)
                 batch += link
                 if (batch.size >= SefariaImportTuning.LINK_BATCH_SIZE) {
                     repository.insertLinksBatch(batch)
@@ -230,6 +232,36 @@ internal class SefariaLinksImporter(
                 }
             }
         }
+    }
+
+    /**
+     * Stores the [anchors] of a sparsely linked commentary as COMMENTARY links from its base
+     * text. See [anchorUnlinkedCommentaryLines].
+     */
+    suspend fun insertCommentaryAnchors(
+        commentary: SparseCommentary,
+        anchors: List<CommentaryAnchor>,
+        bookMetaById: Map<Long, BookMeta>,
+    ) {
+        val typeId = bindings.upsertConnectionType(ConnectionType.COMMENTARY.name)
+        val isDeclaredBase = bookMetaById[commentary.commentaryBookId]
+            ?.sefariaDeclaredBaseTextBookIds
+            ?.contains(commentary.baseBookId) == true
+        anchors
+            .map { anchor ->
+                Link(
+                    id = bindings.allocator.linkId(anchor.baseLineId, anchor.commentaryLine.lineId, typeId),
+                    sourceBookId = commentary.baseBookId,
+                    targetBookId = commentary.commentaryBookId,
+                    sourceLineId = anchor.baseLineId,
+                    targetLineId = anchor.commentaryLine.lineId,
+                    targetLineIndex = anchor.commentaryLine.lineIndex,
+                    connectionType = ConnectionType.COMMENTARY,
+                    isDeclaredBase = isDeclaredBase,
+                )
+            }
+            .chunked(SefariaImportTuning.LINK_BATCH_SIZE)
+            .forEach { repository.insertLinksBatch(it) }
     }
 
     private data class StoredLink(
