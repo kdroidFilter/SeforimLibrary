@@ -501,7 +501,7 @@ internal class SefariaBookPayloadReader(
         if (depth == 0 || (leafPrimitive != null && leafPrimitive.isString)) {
             val content = leafPrimitive?.takeIf { it.isString }?.content
             if (!content.isNullOrEmpty()) {
-                val cleaned = cleanSefariaLine(content)
+                val cleaned = cleanSefariaLine(content, stripFootnotes = hasTranslatorFootnotes(refPrefix))
                 if (cleaned.isNotEmpty()) {
                     output += linePrefix + cleaned
                     val cleanRef = trimTrailingSeparators(refPrefix)

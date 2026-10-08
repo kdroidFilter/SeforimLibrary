@@ -2,6 +2,8 @@ package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class SefariaCleanSefariaLineTest {
     @Test
@@ -57,5 +59,27 @@ class SefariaCleanSefariaLineTest {
     @Test
     fun handlesSelfClosingAndUppercaseBr() {
         assertEquals("a b c", cleanSefariaLine("a<br/>b<BR />c"))
+    }
+
+    @Test
+    fun keepsFootnotesByDefault() {
+        val line = """א<sup class="footnote-marker">*</sup><i class="footnote">הגה״ה</i>. ב"""
+        assertEquals(line, cleanSefariaLine(line))
+    }
+
+    @Test
+    fun stripsFootnotesWithNestedItalics() {
+        // Shape of Noda BiYehudah I, Orach Chaim 1:20 (Landa's translator footnotes)
+        val line = "ע\"ש<sup class=\"footnote-marker\">38</sup><i class=\"footnote\">הלכות תפילין ג:א<br>" +
+            "<b>There are eight requirements in the making of <i>tefillin</i>.</b> See <i>Sukkah</i> 8a.</i> " +
+            "והנה<sup class=\"footnote-marker\">39</sup><i class=\"footnote\">See note 47</i>, שכן נראה"
+        assertEquals("ע\"ש והנה, שכן נראה", cleanSefariaLine(line, stripFootnotes = true))
+    }
+
+    @Test
+    fun translatorFootnotesAreScopedToNodaBiYehudahOrachChaim() {
+        assertTrue(hasTranslatorFootnotes("Noda BiYehudah I, Orach Chaim,  1 20 "))
+        assertFalse(hasTranslatorFootnotes("Noda BiYehudah I, Author's Introduction,  1 "))
+        assertFalse(hasTranslatorFootnotes("Noda BiYehudah II, Orach Chaim,  1 "))
     }
 }

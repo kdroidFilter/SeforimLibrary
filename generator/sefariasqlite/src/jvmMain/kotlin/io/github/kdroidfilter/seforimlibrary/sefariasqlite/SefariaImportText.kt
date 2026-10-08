@@ -18,8 +18,49 @@ private val OTZAR_MARKUP_REGEX = Regex("""@\d{2}([^}]*)\}""")
 // continuous. Collapse them to a single space so paragraphs read as prose.
 private val HTML_LINE_BREAK_REGEX = Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE)
 
-internal fun cleanSefariaLine(raw: String): String {
+// Ref prefixes of sections whose footnotes are a translator's apparatus rather
+// than part of the printed sefer. Noda BiYehudah I's Orach Chaim comes from
+// Harold Landa's edition, whose footnotes mix English notes with Hebrew
+// sources followed by Sefaria's English translations (kdroidFilter/Zayit#439).
+private val TRANSLATOR_FOOTNOTE_REF_PREFIXES = listOf("Noda BiYehudah I, Orach Chaim,")
+
+internal fun hasTranslatorFootnotes(ref: String): Boolean =
+    TRANSLATOR_FOOTNOTE_REF_PREFIXES.any { ref.startsWith(it) }
+
+private val FOOTNOTE_MARKER_REGEX = Regex("""<sup class="footnote-marker">.*?</sup>""")
+private const val FOOTNOTE_OPEN = """<i class="footnote">"""
+private val ITALIC_TAG_REGEX = Regex("""<i\b[^>]*>|</i>""", RegexOption.IGNORE_CASE)
+
+/** Drops footnote markers and bodies; bodies may nest `<i>` tags, so closing tags are matched by depth. */
+internal fun stripSefariaFootnotes(line: String): String {
+    if (!line.contains(FOOTNOTE_OPEN)) return line
+    val withoutMarkers = FOOTNOTE_MARKER_REGEX.replace(line, "")
+    val out = StringBuilder(withoutMarkers.length)
+    var cursor = 0
+    while (true) {
+        val start = withoutMarkers.indexOf(FOOTNOTE_OPEN, cursor)
+        if (start < 0) break
+        out.append(withoutMarkers, cursor, start)
+        var depth = 0
+        var end = withoutMarkers.length
+        for (tag in ITALIC_TAG_REGEX.findAll(withoutMarkers, start)) {
+            depth += if (tag.value.startsWith("</")) -1 else 1
+            if (depth == 0) {
+                end = tag.range.last + 1
+                break
+            }
+        }
+        cursor = end
+    }
+    out.append(withoutMarkers, cursor, withoutMarkers.length)
+    return out.toString()
+}
+
+internal fun cleanSefariaLine(raw: String, stripFootnotes: Boolean = false): String {
     var s = if (raw.contains('\n')) raw.replace("\n", "") else raw
+    if (stripFootnotes) {
+        s = stripSefariaFootnotes(s)
+    }
     if (OTZAR_MARKUP_REGEX.containsMatchIn(s)) {
         s = OTZAR_MARKUP_REGEX.replace(s, "$1")
     }
