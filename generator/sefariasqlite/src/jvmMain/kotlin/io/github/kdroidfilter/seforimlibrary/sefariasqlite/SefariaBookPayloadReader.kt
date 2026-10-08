@@ -134,6 +134,8 @@ internal class SefariaBookPayloadReader(
             val collectiveTitleEn = (schemaJson["collective_title"] as? JsonObject)
                 ?.get("en")?.stringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
             val titleAliasKeys = extractTitleAliasKeys(schemaJson, schemaObj)
+            val isReferenceWork = schemaJson["categories"]?.jsonArray
+                ?.firstOrNull()?.jsonPrimitive?.contentOrNull == "Reference"
 
             BookPayload(
                 heTitle = hebrewTitle,
@@ -150,6 +152,7 @@ internal class SefariaBookPayloadReader(
                 baseTextTitleKeys = baseTextTitleKeys,
                 collectiveTitleEn = collectiveTitleEn,
                 titleAliasKeys = titleAliasKeys,
+                isReferenceWork = isReferenceWork,
             )
         }.onFailure { e ->
             logger.w(e) { "Failed to prepare book from $textPath" }

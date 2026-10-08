@@ -280,6 +280,7 @@ class SefariaDirectImporter(
                 // Resolved in a second pass; left empty for now.
                 baseTextBookIds = emptySet(),
                 collectiveTitleEn = payload.collectiveTitleEn,
+                isReferenceWork = payload.isReferenceWork,
             )
             if (payload.baseTextTitleKeys.isNotEmpty()) {
                 pendingBaseTextKeysByBookId[bookId] = payload.baseTextTitleKeys

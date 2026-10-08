@@ -591,6 +591,15 @@ internal fun resolveDirectionalConnectionTypesForMeta(
         return baseType to baseType
     }
 
+    // A reference work (e.g. Otzar La'azei Rashi, a dictionary of Rashi's Old French
+    // glosses) is neither the base nor a commentary of the texts it explains. Sefaria
+    // still types those rows `commentary`, and since a dictionary has no `dependence`
+    // the asymmetry below would make it Rashi's base (Zayit issue #503). Links inside
+    // the reference category (Hafla'ah she-ba'Arakhin on Sefer HeArukh) stay oriented.
+    if (sourceMeta.isReferenceWork != targetMeta.isReferenceWork) {
+        return ConnectionType.REFERENCE to ConnectionType.REFERENCE
+    }
+
     // (1) Strongest signal: explicit base_text_titles declaration.
     val targetDependsOnSource = sourceBookId in targetMeta.baseTextBookIds
     val sourceDependsOnTarget = targetBookId in sourceMeta.baseTextBookIds
