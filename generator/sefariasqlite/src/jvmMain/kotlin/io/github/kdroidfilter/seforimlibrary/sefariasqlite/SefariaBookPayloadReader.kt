@@ -542,9 +542,13 @@ internal class SefariaBookPayloadReader(
 
             val sectionIndex = sectionNames.size - depth
             val isReferenceable = referenceableSections.getOrNull(sectionIndex) ?: true
+            val isNumberedParagraph = depth == 1 && hasNumberedParagraphs(bookEnTitle)
             val nextLinePrefix = if (
-                depth == 1 && isReferenceable && currentAddressType != "Integer" && nonEmptyCount > 1 &&
-                !hasSelfLabeledSegments(bookEnTitle)
+                isNumberedParagraph ||
+                (
+                    depth == 1 && isReferenceable && currentAddressType != "Integer" && nonEmptyCount > 1 &&
+                        !hasSelfLabeledSegments(bookEnTitle)
+                    )
             ) {
                 "($letter) "
             } else {
@@ -586,6 +590,7 @@ internal class SefariaBookPayloadReader(
                 append(", ")
             }
             val nextRefIndexOffset = childRefOffsets?.getOrNull(idx) ?: 0
+            val lineCountBefore = output.size
 
             recursiveSections(
                 sectionNames = sectionNames,
@@ -604,6 +609,12 @@ internal class SefariaBookPayloadReader(
                 referenceableSections = referenceableSections,
                 refIndexOffset = nextRefIndexOffset
             )
+
+            // The paragraph's TOC entry points at the paragraph line itself, so the
+            // text gets no extra heading line.
+            if (isNumberedParagraph && output.size > lineCountBefore) {
+                headings += Heading(title = "אות $letter", level = level, lineIndex = lineCountBefore)
+            }
         }
     }
 

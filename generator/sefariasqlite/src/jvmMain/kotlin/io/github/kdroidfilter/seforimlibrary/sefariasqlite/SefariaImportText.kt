@@ -35,6 +35,24 @@ private val SELF_LABELED_SEGMENT_BOOKS = setOf("Mishnah Berurah")
 
 internal fun hasSelfLabeledSegments(bookEnTitle: String): Boolean = bookEnTitle in SELF_LABELED_SEGMENT_BOOKS
 
+// Books whose unnamed ("Integer") segments are the printed numbered paragraphs (אותיות)
+// readers navigate by: each segment gets its "(letter) " label and its own TOC entry
+// (kdroidFilter/Zayit#509).
+private val NUMBERED_PARAGRAPH_BOOKS = setOf(
+    "Bereshit Rabbah",
+    "Shemot Rabbah",
+    "Vayikra Rabbah",
+    "Bamidbar Rabbah",
+    "Devarim Rabbah",
+    "Ruth Rabbah",
+    "Esther Rabbah",
+    "Eikhah Rabbah",
+    "Kohelet Rabbah",
+    "Shir HaShirim Rabbah",
+)
+
+internal fun hasNumberedParagraphs(bookEnTitle: String): Boolean = bookEnTitle in NUMBERED_PARAGRAPH_BOOKS
+
 // Some simanim of the Mishnah Berurah (494-529) mark the seif katan as "{א}"
 // instead of the printed "(א)".
 private val BRACED_SEGMENT_MARKER_REGEX = Regex("""^\{([א-ת]{1,4})\}""")
