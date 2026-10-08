@@ -731,7 +731,8 @@ internal class SefariaBookPayloadReader(
             val content = leafPrimitive?.takeIf { it.isString }?.content
             if (!content.isNullOrEmpty()) {
                 val collapseBreaks = collapsesInlineBreaks(bookEnTitle)
-                val normalized = cleanSefariaLine(content, collapseInlineBreaks = collapseBreaks)
+                val stripFootnotes = hasTranslatorFootnotes(refPrefix)
+                val normalized = cleanSefariaLine(content, collapseInlineBreaks = collapseBreaks, stripFootnotes = stripFootnotes)
                 // A second walk of the book repeats the same separations: count them once.
                 val cleaned = SefariaDashlessDibburim.separate(bookHeTitle, normalized, recordStats = !labels.repeatedWalk)
                 if (cleaned.isNotEmpty()) {
@@ -754,7 +755,7 @@ internal class SefariaBookPayloadReader(
                         val keyContent = if (!collapseBreaks && "<br>" in normalized) {
                             SefariaDashlessDibburim.separate(
                                 bookHeTitle,
-                                cleanSefariaLine(content, collapseInlineBreaks = true),
+                                cleanSefariaLine(content, collapseInlineBreaks = true, stripFootnotes = stripFootnotes),
                                 recordStats = false,
                             )
                         } else {
