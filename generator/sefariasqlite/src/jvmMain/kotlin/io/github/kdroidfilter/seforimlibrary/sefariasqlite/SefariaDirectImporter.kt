@@ -13,6 +13,7 @@ import io.github.kdroidfilter.seforimlibrary.common.reports.GeneratorReport
 import io.github.kdroidfilter.seforimlibrary.core.models.Author
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
+import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
 import io.github.kdroidfilter.seforimlibrary.core.models.Line
 import io.github.kdroidfilter.seforimlibrary.core.text.HebrewTextUtils
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
@@ -607,6 +608,10 @@ class SefariaDirectImporter(
         if (linksDir.exists()) {
             logger.i { "Processing links (${headingLineIds.size} heading lines will be excluded from link targets)..." }
             val charLevelPending = java.util.concurrent.ConcurrentLinkedQueue<PendingCharLevelAnchor>()
+            // Commentary links between the books of sparsely linked commentaries (see
+            // SefariaSparseCommentaryLinks.kt). Filled by the single inserter coroutine.
+            val sparseCommentaries = collectSparseCommentaries(allRefsWithPath, lineKeyToId, lineIdToBookId)
+            val sparseLinks = sparseCommentaries.associateWith { SparseCommentaryLinks() }
             linksImporter.processLinksInParallel(
                 linksDir = linksDir,
                 refsByCanonical = refsByCanonical,
@@ -618,7 +623,18 @@ class SefariaDirectImporter(
                 charLevelPending = charLevelPending,
                 refsByPath = refsByPath,
                 requireExportedVisibility = true,
+                onLinkStored = { link ->
+                    if (link.connectionType == ConnectionType.COMMENTARY) {
+                        sparseLinks.forEach { (commentary, links) -> links.record(commentary, link) }
+                    }
+                },
             )
+            sparseLinks.forEach { (commentary, links) ->
+                val anchors = anchorUnlinkedCommentaryLines(commentary, links)
+                linksImporter.insertCommentaryAnchors(commentary, anchors, bookMetaById)
+                logger.i { "Anchored ${anchors.size} lines of book ${commentary.commentaryBookId} to its base text" }
+            }
+            // After the anchors: they are counted as written links too.
             linkImportMetrics = linksImporter.metricsSnapshot()
             logger.i { "Links processed" }
 

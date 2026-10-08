@@ -78,6 +78,7 @@ internal class SefariaLinksImporter(
         // authoritative per-side verdict. Tests and explicit schema-2 tooling
         // may leave this false to exercise the legacy whole-unit fallback.
         requireExportedVisibility: Boolean = false,
+        onLinkStored: (Link) -> Unit = {},
     ) = coroutineScope {
         // Pre-register all connection types we'll use so their ids are stable
         // (so `link.connectionTypeId` is reproducible across builds).
@@ -154,6 +155,7 @@ internal class SefariaLinksImporter(
                 batch.clear()
             }
             for (link in linkChannel) {
+                onLinkStored(link)
                 batch += link
                 if (batch.size >= SefariaImportTuning.LINK_BATCH_SIZE) flush()
             }
@@ -716,6 +718,39 @@ internal class SefariaLinksImporter(
             wholeUnitCoverageSuppressed.increment()
         }
         rangesResolved.increment()
+    }
+
+    /**
+     * Stores the [anchors] of a sparsely linked commentary as COMMENTARY links from its base
+     * text. See [anchorUnlinkedCommentaryLines].
+     */
+    suspend fun insertCommentaryAnchors(
+        commentary: SparseCommentary,
+        anchors: List<CommentaryAnchor>,
+        bookMetaById: Map<Long, BookMeta>,
+    ) {
+        val typeId = bindings.upsertConnectionType(ConnectionType.COMMENTARY.name)
+        val baseProvenance = computeBaseProvenance(commentary.baseBookId, bookMetaById[commentary.commentaryBookId])
+        anchors
+            .map { anchor ->
+                Link(
+                    id = bindings.allocator.linkId(anchor.baseLineId, anchor.commentaryLine.lineId, typeId),
+                    sourceBookId = commentary.baseBookId,
+                    targetBookId = commentary.commentaryBookId,
+                    sourceLineId = anchor.baseLineId,
+                    targetLineId = anchor.commentaryLine.lineId,
+                    targetLineIndex = anchor.commentaryLine.lineIndex,
+                    connectionType = ConnectionType.COMMENTARY,
+                    baseProvenance = baseProvenance,
+                )
+            }
+            .chunked(SefariaImportTuning.LINK_BATCH_SIZE)
+            .forEach { batch ->
+                val inserted = repository.insertLinksBatchReportingInserted(batch)
+                batch.forEachIndexed { i, link ->
+                    if (inserted[i]) linksWrittenByType.bump(link.connectionType)
+                }
+            }
     }
 
     private data class StoredLink(
