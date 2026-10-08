@@ -56,6 +56,8 @@
 --     default_targum.bookId           -> book(id)                ON DELETE CASCADE
 --     default_targum.targumBookId     -> book(id)                ON DELETE CASCADE
 --     author_alias.authorId           -> author(id)              ON DELETE CASCADE
+--     author_bio.authorId             -> author(id)              ON DELETE CASCADE
+--     author_bio.licenseId            -> license(id)             ON DELETE RESTRICT
 --     edition.licenseId               -> license(id)             ON DELETE RESTRICT
 --     book_edition.bookId             -> book(id)                ON DELETE CASCADE
 --     book_edition.editionId          -> edition(id)             ON DELETE CASCADE
@@ -118,6 +120,20 @@ CREATE TABLE IF NOT EXISTS author_alias (
 );
 
 CREATE INDEX IF NOT EXISTS idx_author_alias_alias ON author_alias(alias);
+
+-- Author biographies (kdroidFilter/seforim-author-bio), shipped under their own license.
+CREATE TABLE IF NOT EXISTS author_bio (
+    authorId INTEGER PRIMARY KEY NOT NULL,
+    -- The תקציר paragraph, for author cards.
+    summary TEXT,
+    -- Full biography in markdown (sections + sources), zayit:// links included.
+    bodyMd TEXT NOT NULL,
+    -- high | medium | low | unknown, as assessed by the biography's author.
+    confidence TEXT NOT NULL,
+    licenseId INTEGER NOT NULL,
+    FOREIGN KEY (authorId) REFERENCES author(id) ON DELETE CASCADE,
+    FOREIGN KEY (licenseId) REFERENCES license(id) ON DELETE RESTRICT
+);
 
 -- Table des topics
 CREATE TABLE IF NOT EXISTS topic (
