@@ -2708,6 +2708,34 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         database.authorQueriesQueries.insertWithId(id, name)
     }
 
+    suspend fun insertLicenseWithId(
+        id: Long,
+        code: String,
+        attribution: Boolean?,
+        shareAlike: Boolean?,
+        commercial: Boolean?,
+        derivatives: Boolean?,
+    ) = withContext(Dispatchers.IO) {
+        database.licenseQueriesQueries.insertLicenseWithId(
+            id,
+            code,
+            attribution?.let { if (it) 1L else 0L },
+            shareAlike?.let { if (it) 1L else 0L },
+            commercial?.let { if (it) 1L else 0L },
+            derivatives?.let { if (it) 1L else 0L },
+        )
+    }
+
+    suspend fun insertEditionWithId(id: Long, title: String, heTitle: String?, sourceUrl: String?) =
+        withContext(Dispatchers.IO) {
+            database.licenseQueriesQueries.insertEditionWithId(id, title, heTitle, sourceUrl)
+        }
+
+    suspend fun linkBookEdition(bookId: Long, editionId: Long, licenseId: Long, licenseInferred: Boolean) =
+        withContext(Dispatchers.IO) {
+            database.licenseQueriesQueries.linkBookEdition(bookId, editionId, licenseId, if (licenseInferred) 1L else 0L)
+        }
+
     suspend fun insertTopicWithId(id: Long, name: String) = withContext(Dispatchers.IO) {
         database.topicQueriesQueries.insertWithId(id, name)
     }

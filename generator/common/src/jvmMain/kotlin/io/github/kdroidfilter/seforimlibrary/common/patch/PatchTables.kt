@@ -36,6 +36,8 @@ internal val PATCH_TABLES_IN_FK_ORDER: List<PatchTable> = listOf(
     PatchTable("pub_date",           listOf("id"),       updatable = true),
     PatchTable("connection_type",    listOf("id"),       updatable = true),
     PatchTable("tocText",            listOf("id"),       updatable = true),
+    PatchTable("license",            listOf("id"),       updatable = true),
+    PatchTable("edition",            listOf("id"),       updatable = true),
 
     // Self-ref tree — categories. parentId FK is self → same table, OK.
     PatchTable("category",           listOf("id"),       updatable = true),
@@ -50,6 +52,7 @@ internal val PATCH_TABLES_IN_FK_ORDER: List<PatchTable> = listOf(
     PatchTable("book_pub_place",     listOf("bookId", "pubPlaceId"),  updatable = false),
     PatchTable("book_pub_date",      listOf("bookId", "pubDateId"),   updatable = false),
     PatchTable("book_acronym",       listOf("bookId", "term"),        updatable = false),
+    PatchTable("book_edition",       listOf("bookId", "editionId"),   updatable = true),
 
     // TOC. tocEntry FK to line (lineId) and line FK to tocEntry (tocEntryId)
     // form a cycle, broken at apply time with PRAGMA defer_foreign_keys = ON.

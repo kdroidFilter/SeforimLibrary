@@ -31,6 +31,8 @@ interface IdAllocator {
     fun connectionTypeId(name: String): Long
     fun categoryId(canonicalPath: String): Long
     fun tocTextId(text: String): Long
+    fun licenseId(code: String): Long
+    fun editionId(naturalKey: String): Long
 
     // ─── Composite-keyed tables ────────────────────────────────────────────────
     fun bookId(sourceName: String, canonicalHeTitle: String): Long

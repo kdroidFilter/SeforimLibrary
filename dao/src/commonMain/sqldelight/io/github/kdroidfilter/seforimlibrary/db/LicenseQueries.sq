@@ -1,0 +1,27 @@
+-- Queries for licenses, editions and the book_edition junction
+
+insertLicenseWithId:
+INSERT OR IGNORE INTO license (id, code, attribution, shareAlike, commercial, derivatives)
+VALUES (?, ?, ?, ?, ?, ?);
+
+selectAllLicenses:
+SELECT * FROM license ORDER BY code;
+
+insertEditionWithId:
+INSERT OR IGNORE INTO edition (id, title, heTitle, sourceUrl) VALUES (?, ?, ?, ?);
+
+linkBookEdition:
+INSERT INTO book_edition (bookId, editionId, licenseId, licenseInferred)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (bookId, editionId) DO NOTHING;
+
+selectEditionsByBookId:
+SELECT e.*, l.code AS licenseCode, be.licenseInferred
+FROM book_edition be
+JOIN edition e ON e.id = be.editionId
+JOIN license l ON l.id = be.licenseId
+WHERE be.bookId = ?
+ORDER BY e.title;
+
+selectLicensesByBookId:
+SELECT * FROM book_license_v WHERE bookId = ? ORDER BY code;

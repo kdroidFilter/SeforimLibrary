@@ -1,5 +1,6 @@
 package io.github.kdroidfilter.seforimlibrary.common.ids
 
+import io.github.kdroidfilter.seforimlibrary.common.licenses.Licenses
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Line
 import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
@@ -45,6 +46,8 @@ class IdAllocatorBindings(
     private val connectionTypesInserted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val categoriesInserted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val tocTextsInserted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val licensesInserted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val editionsInserted = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     // ─── Lookup-table helpers ──────────────────────────────────────────────────
 
@@ -101,6 +104,32 @@ class IdAllocatorBindings(
     suspend fun upsertTocText(text: String): Long {
         val id = allocator.tocTextId(text)
         if (tocTextsInserted.add(text)) repo.insertTocTextWithId(id, text)
+        return id
+    }
+
+    /** Get-or-create the license for an upstream code (see [Licenses.canonicalCode]). */
+    suspend fun upsertLicense(rawCode: String?): Long {
+        val code = Licenses.canonicalCode(rawCode)
+        val id = allocator.licenseId(code)
+        if (licensesInserted.add(code)) {
+            val permissions = Licenses.permissionsOf(code)
+            repo.insertLicenseWithId(
+                id = id,
+                code = code,
+                attribution = permissions?.attribution,
+                shareAlike = permissions?.shareAlike,
+                commercial = permissions?.commercial,
+                derivatives = permissions?.derivatives,
+            )
+        }
+        return id
+    }
+
+    /** Get-or-create an upstream edition, identified by its title and source URL. */
+    suspend fun upsertEdition(title: String, heTitle: String?, sourceUrl: String?): Long {
+        val key = "$title\u001F${sourceUrl.orEmpty()}"
+        val id = allocator.editionId(key)
+        if (editionsInserted.add(key)) repo.insertEditionWithId(id, title, heTitle, sourceUrl)
         return id
     }
 

@@ -84,6 +84,16 @@ class SefariaDirectImporter(
         val bookPayloads = bookPayloadReader.readBooksInParallel(jsonDir, schemaDir, schemaLookup)
         logger.i { "Parsed ${bookPayloads.size} books" }
 
+        // Resolve every merged version's license up front: a version missing from
+        // versions.json means the export is inconsistent, so fail before inserting anything.
+        val versionLicenses = SefariaVersionLicenses.load(dbRoot, json)
+        val licensesByTitle = bookPayloads.associate { payload ->
+            payload.sefariaTitle to payload.versions.map { version ->
+                versionLicenses.resolve(payload.sefariaTitle, version.versionTitle)
+                    ?: error("Version '${version.versionTitle}' of '${payload.sefariaTitle}' missing from versions.json")
+            }
+        }
+
         val classLoader = javaClass.classLoader
         val blacklists = loadSefariaBlacklists(classLoader, logger)
         if (!blacklists.isEmpty()) {
@@ -255,6 +265,11 @@ class SefariaDirectImporter(
                 hasNekudot = hasNekudot
             )
             repository.insertBook(book)
+            licensesByTitle[payload.sefariaTitle].orEmpty().forEach { version ->
+                val editionId = bindings.upsertEdition(version.versionTitle, version.heVersionTitle, version.versionSource)
+                val licenseId = bindings.upsertLicense(version.licenseCode)
+                repository.linkBookEdition(bookId, editionId, licenseId, version.inferred)
+            }
 
             // Track normalized titles (Hebrew/English) for later default-commentator mapping.
             // Indexes the primary titles plus all Sefaria-known aliases (titleVariants /

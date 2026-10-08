@@ -17,6 +17,8 @@ enum class IdTable(val tableName: String, val lookupKind: String?) {
     CONNECTION_TYPE("connection_type", "connection_type"),
     CATEGORY("category", "category"),
     TOC_TEXT("tocText", "toc_text"),
+    LICENSE("license", "license"),
+    EDITION("edition", "edition"),
 
     // Composite-keyed tables — dedicated storage.
     BOOK("book", null),
