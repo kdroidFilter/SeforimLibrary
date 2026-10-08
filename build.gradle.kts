@@ -14,6 +14,7 @@ tasks.register("generateSeforimDb") {
     dependsOn(":sefariasqlite:generateSefariaSqlite")
     dependsOn(":otzariasqlite:appendOtzaria")
     dependsOn(":otzariasqlite:generateHavroutaLinks")
+    dependsOn(":generator-common:importAuthorBios")
     dependsOn(":sefariasqlite:renameCategories")
     dependsOn(":catalog:buildCatalog")
     dependsOn(":searchindex:buildLuceneIndexDefault")
@@ -53,8 +54,13 @@ project(":sefariasqlite").tasks.matching { it.name == "renameCategories" }.confi
 project(":otzariasqlite").tasks.matching { it.name == "generateHavroutaLinks" }.configureEach {
     mustRunAfter(":otzariasqlite:appendOtzaria")
 }
+// Biographies join on author names, so they go in once every author exists.
+project(":generator-common").tasks.matching { it.name == "importAuthorBios" }.configureEach {
+    mustRunAfter(":otzariasqlite:generateHavroutaLinks")
+}
 project(":catalog").tasks.matching { it.name == "buildCatalog" }.configureEach {
     mustRunAfter(":otzariasqlite:generateHavroutaLinks")
+    mustRunAfter(":generator-common:importAuthorBios")
 }
 project(":searchindex").tasks.matching { it.name in setOf("embedCorpus", "buildLuceneIndexDefault") }.configureEach {
     mustRunAfter(":catalog:buildCatalog")

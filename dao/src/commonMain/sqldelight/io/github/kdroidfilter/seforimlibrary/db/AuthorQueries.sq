@@ -38,6 +38,9 @@ INSERT OR IGNORE INTO author_alias (authorId, alias) VALUES (?, ?);
 selectAliasesByAuthorId:
 SELECT alias FROM author_alias WHERE authorId = ? ORDER BY alias;
 
+selectBioByAuthorId:
+SELECT * FROM author_bio WHERE authorId = ?;
+
 selectIdByName:
 SELECT id FROM author WHERE name = ? LIMIT 1;
 

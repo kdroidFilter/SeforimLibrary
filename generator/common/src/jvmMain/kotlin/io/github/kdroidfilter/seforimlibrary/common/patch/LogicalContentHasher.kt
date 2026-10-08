@@ -88,6 +88,7 @@ class LogicalContentHasher(
             "book_topic",
             "book_author",
             "author_alias",
+            "author_bio",
             "book_pub_place",
             "book_pub_date",
             "book_edition",

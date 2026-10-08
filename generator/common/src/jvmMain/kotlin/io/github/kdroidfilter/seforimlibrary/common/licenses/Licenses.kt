@@ -18,6 +18,7 @@ data class LicensePermissions(
 object Licenses {
     const val UNKNOWN = "unknown"
     const val PUBLIC_DOMAIN = "Public Domain"
+    const val CC_BY_SA = "CC-BY-SA"
 
     private val ALIASES = mapOf(
         "pd" to PUBLIC_DOMAIN,
@@ -29,7 +30,7 @@ object Licenses {
         PUBLIC_DOMAIN to LicensePermissions(attribution = false, shareAlike = false, commercial = true, derivatives = true),
         "CC0" to LicensePermissions(attribution = false, shareAlike = false, commercial = true, derivatives = true),
         "CC-BY" to LicensePermissions(attribution = true, shareAlike = false, commercial = true, derivatives = true),
-        "CC-BY-SA" to LicensePermissions(attribution = true, shareAlike = true, commercial = true, derivatives = true),
+        CC_BY_SA to LicensePermissions(attribution = true, shareAlike = true, commercial = true, derivatives = true),
         "CC-BY-NC" to LicensePermissions(attribution = true, shareAlike = false, commercial = false, derivatives = true),
         "CC-BY-NC-SA" to LicensePermissions(attribution = true, shareAlike = true, commercial = false, derivatives = true),
         "CC-BY-ND" to LicensePermissions(attribution = true, shareAlike = false, commercial = true, derivatives = false),
