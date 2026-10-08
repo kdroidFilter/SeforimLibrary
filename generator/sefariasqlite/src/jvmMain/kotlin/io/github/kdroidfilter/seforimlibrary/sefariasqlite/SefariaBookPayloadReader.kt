@@ -105,7 +105,13 @@ internal class SefariaBookPayloadReader(
                 ?: textJson["categories"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
                 ?: emptyList()
 
-            val authors = schemaJson["authors"]?.jsonArray?.mapNotNull(::resolveSefariaAuthorName).orEmpty()
+            val authorEntries = schemaJson["authors"]?.jsonArray.orEmpty()
+            val authors = authorEntries.mapNotNull(::resolveSefariaAuthorName)
+            val authorSlugs = authorEntries.mapNotNull { entry ->
+                val name = resolveSefariaAuthorName(entry) ?: return@mapNotNull null
+                val slug = (entry as? JsonObject)?.get("slug")?.stringOrNull() ?: return@mapNotNull null
+                name to slug
+            }.toMap()
 
             val (lines, refs, headings) = buildBookContent(
                 schemaObj = schemaObj,
@@ -157,6 +163,7 @@ internal class SefariaBookPayloadReader(
                 titleAliasKeys = titleAliasKeys,
                 isReferenceWork = isReferenceWork,
                 sefariaTitle = fileTitle ?: englishTitle,
+                authorSlugs = authorSlugs,
                 versions = versions,
             )
         }.onFailure { e ->
