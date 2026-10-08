@@ -57,4 +57,21 @@ class HtmlCharCounterTest {
         // Visible: "Title" (5) + "Hello " (6) + "world" (5) + " " (1) + "& welcome!" (10) = 27
         assertEquals(27, countVisibleChars(html))
     }
+
+    @Test
+    fun `nikud and teamim are not counted`() {
+        // Vocalized and cantillated "בראשית" renders as its 6 letters
+        assertEquals(6, countVisibleChars("\u05D1\u05B0\u05BC\u05E8\u05B5\u05D0\u05E9\u05C1\u05B4\u0596\u05D9\u05EA"))
+    }
+
+    @Test
+    fun `visible hebrew punctuation is counted`() {
+        // Maqaf and sof pasuq take horizontal space
+        assertEquals(4, countVisibleChars("\u05D0\u05BE\u05D1\u05C3"))
+    }
+
+    @Test
+    fun `bidi controls are not counted`() {
+        assertEquals(2, countVisibleChars("a\u200Fb"))
+    }
 }

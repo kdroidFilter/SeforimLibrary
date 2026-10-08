@@ -4,7 +4,10 @@ package io.github.kdroidfilter.seforimlibrary.common
  * Fast counter for the number of visible characters inside an HTML snippet.
  *
  * Tag content (`<...>`) is skipped entirely and each HTML entity (`&...;`) is
- * counted as a single visible character. The counter does not allocate a
+ * counted as a single visible character. Zero-width code points (Hebrew nikud and
+ * teamim, other combining marks, bidi controls) are skipped: they take no horizontal
+ * space, so counting them would double the weight of vocalized text and overshoot
+ * the scrollbar's height model. The counter does not allocate a
  * stripped string and walks the input in a single pass, which matters when the
  * whole corpus is ~4M lines processed at generation time.
  *
@@ -36,9 +39,15 @@ fun countVisibleChars(html: String): Int {
                 count++
                 i = if (terminated) j else i
             }
+            c.isZeroWidth() -> Unit
             else -> count++
         }
         i++
     }
     return count
+}
+
+private fun Char.isZeroWidth(): Boolean {
+    val cat = category
+    return cat == CharCategory.NON_SPACING_MARK || cat == CharCategory.ENCLOSING_MARK || cat == CharCategory.FORMAT
 }
