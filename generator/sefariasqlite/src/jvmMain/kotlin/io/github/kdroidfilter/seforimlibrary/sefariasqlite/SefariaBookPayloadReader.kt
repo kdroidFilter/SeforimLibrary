@@ -845,12 +845,13 @@ internal class SefariaBookPayloadReader(
 
             val sectionIndex = sectionNames.size - depth
             val isReferenceable = referenceableSections.getOrNull(sectionIndex) ?: true
+            val isNumberedParagraph = depth == 1 && hasNumberedParagraphs(bookEnTitle)
             // An item that already carries its own label for this very number keeps
             // that label alone: "(נח) [נח]" is noise. Any other number keeps the prefix.
             val numbered = depth == 1 && isReferenceable && prefixesLeaf && nonEmptyCount > 1 && !selfLabeledBook
             val selfLabelled = numbered && currentAddressType != "Talmud" && ownLabelled?.get(idx) == true
             if (numbered) labels.count(selfLabelled)
-            val nextLinePrefix = if (numbered && !selfLabelled) "($letter) " else ""
+            val nextLinePrefix = if (isNumberedParagraph || (numbered && !selfLabelled)) "($letter) " else ""
 
             if (depth > 1 && sectionName?.isBlank() != true && isReferenceable) {
                 val tag = when (level) {
@@ -887,6 +888,7 @@ internal class SefariaBookPayloadReader(
                 append(", ")
             }
             val nextRefIndexOffset = childRefOffsets?.get(idx) ?: 0
+            val lineCountBefore = output.size
 
             recursiveSections(
                 sectionNames = sectionNames,
@@ -910,6 +912,12 @@ internal class SefariaBookPayloadReader(
                 numbersIntegerLeaf = numbersIntegerLeaf,
                 labels = labels,
             )
+
+            // The paragraph's TOC entry points at the paragraph line itself, so the
+            // text gets no extra heading line.
+            if (isNumberedParagraph && output.size > lineCountBefore) {
+                headings += Heading(title = "אות $letter", level = level, lineIndex = lineCountBefore)
+            }
         }
     }
 
