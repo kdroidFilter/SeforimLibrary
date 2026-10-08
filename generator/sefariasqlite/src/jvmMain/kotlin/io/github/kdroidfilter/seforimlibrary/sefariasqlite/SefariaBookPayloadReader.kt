@@ -732,7 +732,11 @@ internal class SefariaBookPayloadReader(
             if (!content.isNullOrEmpty()) {
                 val collapseBreaks = collapsesInlineBreaks(bookEnTitle)
                 val stripFootnotes = hasTranslatorFootnotes(refPrefix)
-                val normalized = cleanSefariaLine(content, collapseInlineBreaks = collapseBreaks, stripFootnotes = stripFootnotes)
+                val selfLabeled = hasSelfLabeledSegments(bookEnTitle)
+                fun clean(collapse: Boolean) =
+                    cleanSefariaLine(content, collapseInlineBreaks = collapse, stripFootnotes = stripFootnotes)
+                        .let { if (selfLabeled) normalizeSegmentMarker(it) else it }
+                val normalized = clean(collapseBreaks)
                 // A second walk of the book repeats the same separations: count them once.
                 val cleaned = SefariaDashlessDibburim.separate(bookHeTitle, normalized, recordStats = !labels.repeatedWalk)
                 if (cleaned.isNotEmpty()) {
@@ -755,7 +759,7 @@ internal class SefariaBookPayloadReader(
                         val keyContent = if (!collapseBreaks && "<br>" in normalized) {
                             SefariaDashlessDibburim.separate(
                                 bookHeTitle,
-                                cleanSefariaLine(content, collapseInlineBreaks = true, stripFootnotes = stripFootnotes),
+                                clean(collapse = true),
                                 recordStats = false,
                             )
                         } else {
@@ -853,7 +857,8 @@ internal class SefariaBookPayloadReader(
             val isReferenceable = referenceableSections.getOrNull(sectionIndex) ?: true
             // An item that already carries its own label for this very number keeps
             // that label alone: "(נח) [נח]" is noise. Any other number keeps the prefix.
-            val numbered = depth == 1 && isReferenceable && prefixesLeaf && nonEmptyCount > 1 && !sourceNumbered
+            val numbered = depth == 1 && isReferenceable && prefixesLeaf && nonEmptyCount > 1 && !sourceNumbered &&
+                !hasSelfLabeledSegments(bookEnTitle)
             val selfLabelled = numbered && currentAddressType != "Talmud" && ownLabelled?.get(idx) == true
             if (numbered) labels.count(selfLabelled)
             val nextLinePrefix = if (numbered && !selfLabelled) "($letter) " else ""
