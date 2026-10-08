@@ -110,6 +110,8 @@ class InMemoryIdAllocator private constructor(
     override fun connectionTypeId(name: String): Long = allocateLookup(IdTable.CONNECTION_TYPE, name)
     override fun categoryId(canonicalPath: String): Long = allocateLookup(IdTable.CATEGORY, canonicalPath)
     override fun tocTextId(text: String): Long = allocateLookup(IdTable.TOC_TEXT, text)
+    override fun licenseId(code: String): Long = allocateLookup(IdTable.LICENSE, code)
+    override fun editionId(naturalKey: String): Long = allocateLookup(IdTable.EDITION, naturalKey)
 
     // ─── Composite-keyed accessors ─────────────────────────────────────────────
 

@@ -71,6 +71,15 @@ internal data class BookPayload(
     val titleAliasKeys: List<String> = emptyList(),
     // Top-level Sefaria category is `Reference` (dictionaries, lexicons, bibliographies).
     val isReferenceWork: Boolean = false,
+    // The Sefaria versions merged into this book (merged.json `title` + `versions`),
+    // joined against versions.json to resolve each version's license.
+    val sefariaTitle: String = enTitle,
+    val versions: List<SefariaVersionRef> = emptyList(),
+)
+
+internal data class SefariaVersionRef(
+    val versionTitle: String,
+    val versionSource: String?,
 )
 
 internal data class RefEntry(

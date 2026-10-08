@@ -55,6 +55,10 @@
 --     default_commentator.commentatorBookId -> book(id)          ON DELETE CASCADE
 --     default_targum.bookId           -> book(id)                ON DELETE CASCADE
 --     default_targum.targumBookId     -> book(id)                ON DELETE CASCADE
+--     edition.licenseId               -> license(id)             ON DELETE RESTRICT
+--     book_edition.bookId             -> book(id)                ON DELETE CASCADE
+--     book_edition.editionId          -> edition(id)             ON DELETE CASCADE
+--     book_edition.licenseId          -> license(id)             ON DELETE RESTRICT
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- Schema-level metadata (db_version, db_schema_version, content_hash, ...)
@@ -206,6 +210,58 @@ CREATE TABLE IF NOT EXISTS book_author (
 
 CREATE INDEX IF NOT EXISTS idx_book_author_book ON book_author(bookId);
 CREATE INDEX IF NOT EXISTS idx_book_author_author ON book_author(authorId);
+
+-- Licenses, one row per distinct license met while importing (get-or-create on `code`).
+-- The permission flags are NULL for a license the generator does not recognize.
+CREATE TABLE IF NOT EXISTS license (
+    id INTEGER PRIMARY KEY NOT NULL,
+    code TEXT NOT NULL UNIQUE,
+    attribution INTEGER,
+    shareAlike INTEGER,
+    commercial INTEGER,
+    derivatives INTEGER
+);
+
+-- Upstream editions a book is built from (e.g. a Sefaria version), declared once.
+CREATE TABLE IF NOT EXISTS edition (
+    id INTEGER PRIMARY KEY NOT NULL,
+    title TEXT NOT NULL,
+    heTitle TEXT,
+    sourceUrl TEXT,
+    UNIQUE (title, sourceUrl)
+);
+
+-- Book ↔ edition, with the license that applies to that book's copy of the edition.
+-- `licenseInferred` = 1 when the upstream license was unknown and was inherited from the
+-- other books of the same edition, all sharing a single license.
+CREATE TABLE IF NOT EXISTS book_edition (
+    bookId INTEGER NOT NULL,
+    editionId INTEGER NOT NULL,
+    licenseId INTEGER NOT NULL,
+    licenseInferred INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (bookId, editionId),
+    FOREIGN KEY (bookId) REFERENCES book(id) ON DELETE CASCADE,
+    FOREIGN KEY (editionId) REFERENCES edition(id) ON DELETE CASCADE,
+    FOREIGN KEY (licenseId) REFERENCES license(id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_book_edition_book ON book_edition(bookId);
+CREATE INDEX IF NOT EXISTS idx_book_edition_license ON book_edition(licenseId);
+
+-- The single place that resolves a book's licenses: one row per (book, license).
+-- Books without any edition (non-Sefaria sources for now) have no row = unknown.
+CREATE VIEW IF NOT EXISTS book_license_v AS
+SELECT be.bookId AS bookId,
+       l.id AS licenseId,
+       l.code AS code,
+       l.attribution AS attribution,
+       l.shareAlike AS shareAlike,
+       l.commercial AS commercial,
+       l.derivatives AS derivatives,
+       MAX(be.licenseInferred) AS inferred
+FROM book_edition be
+JOIN license l ON l.id = be.licenseId
+GROUP BY be.bookId, l.id;
 
 -- Lines table
 CREATE TABLE IF NOT EXISTS line (
