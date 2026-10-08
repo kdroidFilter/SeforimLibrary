@@ -502,6 +502,7 @@ internal class SefariaBookPayloadReader(
             val content = leafPrimitive?.takeIf { it.isString }?.content
             if (!content.isNullOrEmpty()) {
                 val cleaned = cleanSefariaLine(content, stripFootnotes = hasTranslatorFootnotes(refPrefix))
+                    .let { if (hasSelfLabeledSegments(bookEnTitle)) normalizeSegmentMarker(it) else it }
                 if (cleaned.isNotEmpty()) {
                     output += linePrefix + cleaned
                     val cleanRef = trimTrailingSeparators(refPrefix)
@@ -541,7 +542,10 @@ internal class SefariaBookPayloadReader(
 
             val sectionIndex = sectionNames.size - depth
             val isReferenceable = referenceableSections.getOrNull(sectionIndex) ?: true
-            val nextLinePrefix = if (depth == 1 && isReferenceable && currentAddressType != "Integer" && nonEmptyCount > 1) {
+            val nextLinePrefix = if (
+                depth == 1 && isReferenceable && currentAddressType != "Integer" && nonEmptyCount > 1 &&
+                !hasSelfLabeledSegments(bookEnTitle)
+            ) {
                 "($letter) "
             } else {
                 ""
