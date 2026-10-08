@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-08T20:10:49Z",
+  "generatedAt": "2026-10-08T20:37:36Z",
   "latest": {
     "assets": [
       {
@@ -35,7 +35,7 @@
         "contentType": "application/octet-stream",
         "createdAt": "2026-06-01T11:50:23Z",
         "digest": "sha256:cfa4b07ca92dc46436b68f60963b2c75700bdb472d2030fd94d82bceb9abce57",
-        "downloadCount": 3533,
+        "downloadCount": 3534,
         "id": "RA_kwDOPFZ3eM4Z8PTs",
         "label": "",
         "name": "seforim_bundle.tar.zst.part01",
