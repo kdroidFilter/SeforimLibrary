@@ -105,9 +105,7 @@ internal class SefariaBookPayloadReader(
                 ?: textJson["categories"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
                 ?: emptyList()
 
-            val authors = schemaJson["authors"]?.jsonArray?.mapNotNull { author ->
-                author.jsonObject["he"]?.stringOrNull()
-            } ?: emptyList()
+            val authors = schemaJson["authors"]?.jsonArray?.mapNotNull(::resolveSefariaAuthorName).orEmpty()
 
             val (lines, refs, headings) = buildBookContent(
                 schemaObj = schemaObj,
