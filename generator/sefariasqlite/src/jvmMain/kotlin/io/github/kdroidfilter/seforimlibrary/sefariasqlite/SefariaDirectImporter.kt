@@ -87,6 +87,8 @@ class SefariaDirectImporter(
         // Resolve every merged version's license up front: a version missing from
         // versions.json means the export is inconsistent, so fail before inserting anything.
         val versionLicenses = SefariaVersionLicenses.load(dbRoot, json)
+        val authorTopics = SefariaAuthorTopics.load(dbRoot, json)
+        val enrichedAuthorIds = HashSet<Long>()
         val licensesByTitle = bookPayloads.associate { payload ->
             payload.sefariaTitle to payload.versions.map { version ->
                 versionLicenses.resolve(payload.sefariaTitle, version.versionTitle)
@@ -237,7 +239,20 @@ class SefariaDirectImporter(
             // would assign a fresh auto-increment id on every build and break the
             // delta producer's secondary-UNIQUE collision pre-check).
             val resolvedAuthors = payload.authors.map { name ->
-                Author(id = bindings.upsertAuthor(name), name = name)
+                val authorId = bindings.upsertAuthor(name)
+                val topic = payload.authorSlugs[name]?.let { authorTopics[it] }
+                if (topic != null && enrichedAuthorIds.add(authorId)) {
+                    repository.updateAuthorLifeData(
+                        authorId = authorId,
+                        birthYear = topic.birthYear,
+                        birthYearApprox = topic.birthYearIsApprox,
+                        deathYear = topic.deathYear,
+                        deathYearApprox = topic.deathYearIsApprox,
+                        era = topic.era,
+                    )
+                    topic.aliasesOf(name).forEach { repository.insertAuthorAlias(authorId, it) }
+                }
+                Author(id = authorId, name = name)
             }
             val resolvedPubDates = payload.pubDates.map { pd ->
                 io.github.kdroidfilter.seforimlibrary.core.models.PubDate(

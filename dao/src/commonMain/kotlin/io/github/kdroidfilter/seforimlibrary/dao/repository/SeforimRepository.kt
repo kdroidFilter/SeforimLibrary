@@ -2708,6 +2708,28 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         database.authorQueriesQueries.insertWithId(id, name)
     }
 
+    suspend fun updateAuthorLifeData(
+        authorId: Long,
+        birthYear: Int?,
+        birthYearApprox: Boolean?,
+        deathYear: Int?,
+        deathYearApprox: Boolean?,
+        era: String?,
+    ) = withContext(Dispatchers.IO) {
+        database.authorQueriesQueries.updateLifeData(
+            birthYear?.toLong(),
+            birthYearApprox?.let { if (it) 1L else 0L },
+            deathYear?.toLong(),
+            deathYearApprox?.let { if (it) 1L else 0L },
+            era,
+            authorId,
+        )
+    }
+
+    suspend fun insertAuthorAlias(authorId: Long, alias: String) = withContext(Dispatchers.IO) {
+        database.authorQueriesQueries.insertAlias(authorId, alias)
+    }
+
     suspend fun insertLicenseWithId(
         id: Long,
         code: String,

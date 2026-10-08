@@ -75,6 +75,8 @@ internal data class BookPayload(
     // joined against versions.json to resolve each version's license.
     val sefariaTitle: String = enTitle,
     val versions: List<SefariaVersionRef> = emptyList(),
+    // Sefaria topic slug of each author, keyed by the resolved author name.
+    val authorSlugs: Map<String, String> = emptyMap(),
 )
 
 internal data class SefariaVersionRef(

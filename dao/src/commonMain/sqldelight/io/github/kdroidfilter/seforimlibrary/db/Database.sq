@@ -55,6 +55,7 @@
 --     default_commentator.commentatorBookId -> book(id)          ON DELETE CASCADE
 --     default_targum.bookId           -> book(id)                ON DELETE CASCADE
 --     default_targum.targumBookId     -> book(id)                ON DELETE CASCADE
+--     author_alias.authorId           -> author(id)              ON DELETE CASCADE
 --     edition.licenseId               -> license(id)             ON DELETE RESTRICT
 --     book_edition.bookId             -> book(id)                ON DELETE CASCADE
 --     book_edition.editionId          -> edition(id)             ON DELETE CASCADE
@@ -95,10 +96,28 @@ CREATE INDEX IF NOT EXISTS idx_category_closure_descendant ON category_closure(d
 -- Authors table
 CREATE TABLE IF NOT EXISTS author (
     id INTEGER PRIMARY KEY NOT NULL,
-    name TEXT NOT NULL UNIQUE
+    -- Raw upstream name: the id's natural key, never rewritten.
+    name TEXT NOT NULL UNIQUE,
+    -- Life data from the Sefaria author topic, when known.
+    birthYear INTEGER,
+    birthYearApprox INTEGER,
+    deathYear INTEGER,
+    deathYearApprox INTEGER,
+    -- Sefaria era code (T, A, GN, RI, AH, CO...).
+    era TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_author_name ON author(name);
+
+-- Other names of an author (רעק"א, ראב"ע...), for author search.
+CREATE TABLE IF NOT EXISTS author_alias (
+    authorId INTEGER NOT NULL,
+    alias TEXT NOT NULL,
+    PRIMARY KEY (authorId, alias),
+    FOREIGN KEY (authorId) REFERENCES author(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_author_alias_alias ON author_alias(alias);
 
 -- Table des topics
 CREATE TABLE IF NOT EXISTS topic (
