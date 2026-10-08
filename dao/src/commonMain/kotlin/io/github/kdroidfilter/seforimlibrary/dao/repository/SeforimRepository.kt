@@ -2730,6 +2730,20 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         database.authorQueriesQueries.insertAlias(authorId, alias)
     }
 
+    /** Every author with its aliases and number of books, for the lookup index. */
+    suspend fun getAuthorsForLookup(): List<AuthorLookupEntry> = withContext(Dispatchers.IO) {
+        val aliases = database.authorQueriesQueries.selectAllAliases().executeAsList()
+            .groupBy({ it.authorId }, { it.alias })
+        database.authorQueriesQueries.selectAllWithBookCount().executeAsList().map {
+            AuthorLookupEntry(
+                id = it.id,
+                name = it.name,
+                aliases = aliases[it.id].orEmpty(),
+                bookCount = it.bookCount.toInt(),
+            )
+        }
+    }
+
     suspend fun insertLicenseWithId(
         id: Long,
         code: String,
@@ -2846,6 +2860,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
  * @property author The name of the commentator
  * @property linkCount The number of links (comments) by this commentator
  */
+data class AuthorLookupEntry(
+    val id: Long,
+    val name: String,
+    val aliases: List<String>,
+    val bookCount: Int,
+)
+
 data class CommentatorInfo(
     val bookId: Long,
     val title: String,

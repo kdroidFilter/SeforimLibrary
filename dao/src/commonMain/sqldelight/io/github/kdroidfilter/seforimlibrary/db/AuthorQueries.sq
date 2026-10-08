@@ -35,6 +35,15 @@ WHERE id = ?;
 insertAlias:
 INSERT OR IGNORE INTO author_alias (authorId, alias) VALUES (?, ?);
 
+selectAllWithBookCount:
+SELECT a.id, a.name, COUNT(ba.bookId) AS bookCount
+FROM author a
+LEFT JOIN book_author ba ON ba.authorId = a.id
+GROUP BY a.id;
+
+selectAllAliases:
+SELECT authorId, alias FROM author_alias;
+
 selectAliasesByAuthorId:
 SELECT alias FROM author_alias WHERE authorId = ? ORDER BY alias;
 

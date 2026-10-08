@@ -10,13 +10,11 @@ interface LookupIndexWriter : AutoCloseable {
         orderIndex: Int? = null
     )
 
-    fun addToc(
-        tocId: Long,
-        bookId: Long,
-        categoryId: Long,
-        bookTitle: String,
-        text: String,
-        level: Int
+    fun addAuthor(
+        authorId: Long,
+        name: String,
+        terms: Collection<String>,
+        bookCount: Int,
     )
 
     fun commit()

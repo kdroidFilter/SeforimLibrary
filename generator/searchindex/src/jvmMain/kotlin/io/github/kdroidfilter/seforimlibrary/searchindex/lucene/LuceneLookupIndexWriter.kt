@@ -15,20 +15,20 @@ class LuceneLookupIndexWriter(indexDir: Path, analyzer: Analyzer = StandardAnaly
     companion object F {
         const val FIELD_TYPE = "type"
         const val TYPE_BOOK = "book"
-        const val TYPE_TOC = "toc"
+        const val TYPE_AUTHOR = "author"
 
         const val FIELD_BOOK_ID = "book_id"
         const val FIELD_CATEGORY_ID = "category_id"
         const val FIELD_BOOK_TITLE = "book_title" // stored
-        const val FIELD_Q = "q" // analyzed text for lookup (title/acronyms/toc)
+        const val FIELD_Q = "q" // analyzed text for lookup (titles, acronyms, author names)
         const val FIELD_IS_BASE_BOOK = "is_base_book"
         const val FIELD_ORDER_INDEX = "order_index"
 
         private const val BASE_BOOK_TERM_MULTIPLIER = 120
 
-        const val FIELD_TOC_ID = "toc_id"
-        const val FIELD_TOC_TEXT = "toc_text" // stored
-        const val FIELD_TOC_LEVEL = "toc_level"
+        const val FIELD_AUTHOR_ID = "author_id"
+        const val FIELD_AUTHOR_NAME = "author_name" // stored
+        const val FIELD_BOOK_COUNT = "book_count" // stored + doc values, to rank authors
     }
 
     private val dir = FSDirectory.open(indexDir)
@@ -78,29 +78,26 @@ class LuceneLookupIndexWriter(indexDir: Path, analyzer: Analyzer = StandardAnaly
         writer.addDocument(doc)
     }
 
-    override fun addToc(
-        tocId: Long,
-        bookId: Long,
-        categoryId: Long,
-        bookTitle: String,
-        text: String,
-        level: Int
+    override fun addAuthor(
+        authorId: Long,
+        name: String,
+        terms: Collection<String>,
+        bookCount: Int,
     ) {
         val doc = Document().apply {
-            add(StringField(FIELD_TYPE, TYPE_TOC, Field.Store.NO))
-            add(StoredField(FIELD_TOC_ID, tocId))
-            add(IntPoint(FIELD_TOC_ID, tocId.toInt()))
-            add(StoredField(FIELD_BOOK_ID, bookId))
-            add(IntPoint(FIELD_BOOK_ID, bookId.toInt()))
-            add(NumericDocValuesField(FIELD_BOOK_ID, bookId))
-            add(StoredField(FIELD_CATEGORY_ID, categoryId))
-            add(IntPoint(FIELD_CATEGORY_ID, categoryId.toInt()))
-            add(StoredField(FIELD_BOOK_TITLE, bookTitle))
+            add(StringField(FIELD_TYPE, TYPE_AUTHOR, Field.Store.NO))
+            add(StoredField(FIELD_AUTHOR_ID, authorId))
+            add(IntPoint(FIELD_AUTHOR_ID, authorId.toInt()))
+            add(StoredField(FIELD_AUTHOR_NAME, name))
+            add(StoredField(FIELD_BOOK_COUNT, bookCount))
+            add(NumericDocValuesField(FIELD_BOOK_COUNT, bookCount.toLong()))
+            // Same structures as book docs for the index-sort fields: Lucene rejects a field
+            // whose points/doc values differ across documents.
+            add(IntPoint(FIELD_IS_BASE_BOOK, 0))
             add(NumericDocValuesField(FIELD_IS_BASE_BOOK, 0L))
+            add(IntPoint(FIELD_ORDER_INDEX, Int.MAX_VALUE))
             add(NumericDocValuesField(FIELD_ORDER_INDEX, Int.MAX_VALUE.toLong()))
-            add(StoredField(FIELD_TOC_TEXT, text))
-            add(StoredField(FIELD_TOC_LEVEL, level))
-            add(TextField(FIELD_Q, text, Field.Store.NO))
+            terms.forEach { t -> add(TextField(FIELD_Q, t, Field.Store.NO)) }
         }
         writer.addDocument(doc)
     }
