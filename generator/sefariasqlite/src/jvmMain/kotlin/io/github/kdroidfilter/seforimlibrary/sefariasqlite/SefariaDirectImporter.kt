@@ -238,7 +238,7 @@ class SefariaDirectImporter(
                 id = bookId,
                 categoryId = catId,
                 sourceId = sourceId,
-                title = payload.heTitle,
+                title = sefariaDisplayTitle(payload.heTitle, payload.collectiveTitleEn),
                 heRef = payload.heTitle,
                 authors = resolvedAuthors,
                 pubPlaces = emptyList(),
