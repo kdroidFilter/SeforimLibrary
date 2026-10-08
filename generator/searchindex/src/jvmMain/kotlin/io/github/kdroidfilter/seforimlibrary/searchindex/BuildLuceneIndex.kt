@@ -232,28 +232,24 @@ fun main() = runBlocking {
                             }
                         }
 
-                        // TOC into lookup
-                        runCatching {
-                            val tocs = localRepo.getBookToc(book.id)
-                            for (t in tocs) {
-                                val norm = normalizeForIndexDefault(t.text)
-                                lookup.addToc(
-                                    tocId = t.id,
-                                    bookId = t.bookId,
-                                    categoryId = book.categoryId,
-                                    bookTitle = book.title,
-                                    text = norm,
-                                    level = t.level
-                                )
-                            }
-                        }
-
                         logger.i { "Completed '${book.title}' [$current/$totalBooks | ${globalPct}%]" }
                     } finally {
                         localRepo.close()
                     }
                 }
             }.awaitAll()
+
+            // Authors into lookup: name + aliases, ranked by their number of books
+            val authors = repo.getAuthorsForLookup().filter { it.name.isNotBlank() }
+            for (author in authors) {
+                val terms = (listOf(author.name) + author.aliases)
+                    .flatMap { listOf(it, sanitizeAcronymTerm(it)) }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                lookup.addAuthor(author.id, author.name, terms, author.bookCount)
+            }
+            logger.i { "Indexed ${authors.size} authors into lookup" }
+
             writer.commit()
             lookup.commit()
             logger.i { "Lucene text index built successfully at $indexDir (StandardAnalyzer + 4-gram)" }
