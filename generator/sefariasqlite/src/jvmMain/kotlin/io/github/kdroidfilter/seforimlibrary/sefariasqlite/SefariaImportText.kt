@@ -40,12 +40,19 @@ internal fun cleanSefariaLine(raw: String): String {
  * matching `heSectionNames`, so the generated TOC labels fall back gracefully
  * instead of showing English strings mid-Hebrew UI.
  *
- * Returns the original string if no mapping applies, or `null` for blank input.
+ * Returns the original string if no mapping applies, or `null` for blank input
+ * and for unnamed levels: Sefaria uses "Integer" as a placeholder name and shows
+ * those sections by their number alone (its Hebrew refs read "א׳:ב׳", and
+ * "Integer" has no Hebrew term in its dictionary).
  */
 internal fun mapSectionNameToHebrew(base: String?): String? {
     if (base.isNullOrBlank()) return null
-    val norm = base.lowercase()
+    val norm = base.lowercase().trim('\'', '"', ' ')
     return when {
+        // Short tokens are matched exactly: as substrings they would hit unrelated names.
+        norm == "integer" -> null
+        norm == "ot" -> "אות"
+        norm == "dh" -> "דיבור המתחיל"
         "aliyah" in norm || "aliya" in norm -> "עליה"
         "daf" in norm -> "דף"
         "chapter" in norm -> "פרק"
@@ -69,6 +76,37 @@ internal fun mapSectionNameToHebrew(base: String?): String? {
         "column" in norm -> "טור"
         "folio" in norm -> "דף"
         "segment" in norm -> "קטע"
+        "question" in norm -> "שאלה"
+        "comment" in norm -> "פירוש"
+        "footnote" in norm -> "הערה"
+        "pararaph" in norm -> "פסקה"
+        "se'if" in norm -> "סעיף"
+        "passuk" in norm -> "פסוק"
+        "sheilta" in norm -> "שאילתא"
+        "tosefta" in norm -> "תוספתא"
+        "midrash" in norm -> "מדרש"
+        "drush" in norm -> "דרוש"
+        "remez" in norm -> "רמז"
+        "inyan" in norm -> "ענין"
+        "mitzvah" in norm -> "מצוה"
+        "shorash" in norm -> "שורש"
+        "piyyut" in norm -> "פיוט"
+        "hadran" in norm -> "הדרן"
+        "kovetz" in norm -> "קובץ"
+        "gate" in norm || "shaar" in norm || "sha'ar" in norm -> "שער"
+        "essay" in norm || "treatise" in norm -> "מאמר"
+        "statement" in norm -> "סימן"
+        "principle" in norm -> "עיקר"
+        "epistle" in norm -> "אגרת"
+        "letter" in norm -> "אות"
+        "page" in norm -> "עמוד"
+        "word" in norm -> "ערך"
+        "room" in norm || "chamber" in norm -> "חדר"
+        "window" in norm -> "חלון"
+        "book" in norm -> "ספר"
+        "nahar" in norm -> "נהר"
+        "maayan" in norm -> "מעין"
+        "shoket" in norm -> "שוקת"
         else -> base
     }
 }
