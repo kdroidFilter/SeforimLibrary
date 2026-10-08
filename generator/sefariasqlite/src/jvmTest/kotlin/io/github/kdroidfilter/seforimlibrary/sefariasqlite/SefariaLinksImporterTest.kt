@@ -64,6 +64,55 @@ class SefariaLinksImporterTest {
         assertEquals(ConnectionType.COMMENTARY, reverse)
     }
 
+    // Zayit #503: Sefaria types Otzar La'azei Rashi → Rashi on X rows `commentary`.
+    // The dictionary has no dependence, so it must not become Rashi's base.
+    @Test
+    fun referenceWorkIsNeverOrientedAgainstNonReferenceBook() {
+        val dictionary = BookMeta(isBaseBook = false, categoryLevel = 1, priorityRank = null, isReferenceWork = true)
+        val rashi = BookMeta(
+            isBaseBook = false,
+            categoryLevel = 2,
+            priorityRank = null,
+            dependence = Dependence.COMMENTARY,
+        )
+
+        val (forward, reverse) = resolveDirectionalConnectionTypesForMeta(
+            baseType = ConnectionType.COMMENTARY,
+            sourceBookId = 10L,
+            targetBookId = 20L,
+            sourceMeta = dictionary,
+            targetMeta = rashi
+        )
+
+        assertEquals(ConnectionType.REFERENCE, forward)
+        assertEquals(ConnectionType.REFERENCE, reverse)
+    }
+
+    // A commentary on a dictionary (Hafla'ah she-ba'Arakhin on Sefer HeArukh) stays oriented.
+    @Test
+    fun commentaryInsideReferenceCategoryKeepsOrientation() {
+        val arukh = BookMeta(isBaseBook = false, categoryLevel = 1, priorityRank = null, isReferenceWork = true)
+        val haflaah = BookMeta(
+            isBaseBook = false,
+            categoryLevel = 1,
+            priorityRank = null,
+            dependence = Dependence.COMMENTARY,
+            baseTextBookIds = setOf(10L),
+            isReferenceWork = true,
+        )
+
+        val (forward, reverse) = resolveDirectionalConnectionTypesForMeta(
+            baseType = ConnectionType.COMMENTARY,
+            sourceBookId = 10L,
+            targetBookId = 20L,
+            sourceMeta = arukh,
+            targetMeta = haflaah
+        )
+
+        assertEquals(ConnectionType.COMMENTARY, forward)
+        assertEquals(ConnectionType.SOURCE, reverse)
+    }
+
     // When base_text_titles couldn't be resolved (e.g. the base book is not in
     // our DB), fall back to schema dependence flag.
     @Test
