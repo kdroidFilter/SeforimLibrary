@@ -2730,6 +2730,24 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         database.authorQueriesQueries.insertAlias(authorId, alias)
     }
 
+    /** Everything an author page shows: life data, aliases, biography and books; null when unknown. */
+    suspend fun getAuthorDetails(authorId: Long): AuthorDetails? = withContext(Dispatchers.IO) {
+        val author = database.authorQueriesQueries.selectById(authorId).executeAsOneOrNull() ?: return@withContext null
+        val bio = database.authorQueriesQueries.selectBioWithLicenseByAuthorId(authorId).executeAsOneOrNull()
+        AuthorDetails(
+            id = author.id,
+            name = author.name,
+            birthYear = author.birthYear?.toInt(),
+            birthYearApprox = author.birthYearApprox == 1L,
+            deathYear = author.deathYear?.toInt(),
+            deathYearApprox = author.deathYearApprox == 1L,
+            era = author.era,
+            aliases = database.authorQueriesQueries.selectAliasesByAuthorId(authorId).executeAsList(),
+            bio = bio?.let { AuthorBio(it.summary, it.bodyMd, it.confidence, it.licenseCode) },
+            books = database.bookQueriesQueries.selectByAuthorId(authorId).executeAsList().map { it.toModel(json) },
+        )
+    }
+
     /** Every author with its aliases and number of books, for the lookup index. */
     suspend fun getAuthorsForLookup(): List<AuthorLookupEntry> = withContext(Dispatchers.IO) {
         val aliases = database.authorQueriesQueries.selectAllAliases().executeAsList()
@@ -2860,6 +2878,31 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
  * @property author The name of the commentator
  * @property linkCount The number of links (comments) by this commentator
  */
+data class AuthorDetails(
+    val id: Long,
+    val name: String,
+    val birthYear: Int?,
+    val birthYearApprox: Boolean,
+    val deathYear: Int?,
+    val deathYearApprox: Boolean,
+    /** Sefaria era code (T, A, GN, RI, AH, CO...). */
+    val era: String?,
+    val aliases: List<String>,
+    val bio: AuthorBio?,
+    val books: List<Book>,
+)
+
+data class AuthorBio(
+    /** The תקציר paragraph. */
+    val summary: String?,
+    /** The full biography in markdown, sources included. */
+    val bodyMd: String,
+    /** high | medium | low | unknown. */
+    val confidence: String,
+    /** The biography's license code (CC-BY-SA). */
+    val licenseCode: String,
+)
+
 data class AuthorLookupEntry(
     val id: Long,
     val name: String,

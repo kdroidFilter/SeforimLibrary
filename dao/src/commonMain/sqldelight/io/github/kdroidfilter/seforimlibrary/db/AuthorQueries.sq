@@ -50,6 +50,12 @@ SELECT alias FROM author_alias WHERE authorId = ? ORDER BY alias;
 selectBioByAuthorId:
 SELECT * FROM author_bio WHERE authorId = ?;
 
+selectBioWithLicenseByAuthorId:
+SELECT b.summary, b.bodyMd, b.confidence, l.code AS licenseCode
+FROM author_bio b
+JOIN license l ON l.id = b.licenseId
+WHERE b.authorId = ?;
+
 selectIdByName:
 SELECT id FROM author WHERE name = ? LIMIT 1;
 
