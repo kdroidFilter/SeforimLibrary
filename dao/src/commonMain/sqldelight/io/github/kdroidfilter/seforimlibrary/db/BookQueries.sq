@@ -32,6 +32,12 @@ selectAltFlags:
 SELECT id, hasAltStructures FROM book;
 
 
+selectByAuthorId:
+SELECT b.* FROM book b
+JOIN book_author ba ON b.id = ba.bookId
+WHERE ba.authorId = ?
+ORDER BY b.orderIndex, b.title;
+
 selectByAuthor:
 SELECT b.* FROM book b
 JOIN book_author ba ON b.id = ba.bookId
