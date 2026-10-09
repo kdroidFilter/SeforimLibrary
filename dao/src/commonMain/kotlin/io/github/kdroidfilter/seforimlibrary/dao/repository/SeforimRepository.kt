@@ -2748,6 +2748,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         )
     }
 
+    /** A book's editions, each with its source and license (several when its text joins editions). */
+    suspend fun getBookEditions(bookId: Long): List<BookEdition> = withContext(Dispatchers.IO) {
+        database.licenseQueriesQueries.selectEditionsByBookId(bookId).executeAsList().map {
+            BookEdition(it.title, it.heTitle, it.sourceUrl, it.licenseCode)
+        }
+    }
+
     /** Every author with its aliases and number of books, for the lookup index. */
     suspend fun getAuthorsForLookup(): List<AuthorLookupEntry> = withContext(Dispatchers.IO) {
         val aliases = database.authorQueriesQueries.selectAllAliases().executeAsList()
@@ -2900,6 +2907,14 @@ data class AuthorBio(
     /** high | medium | low | unknown. */
     val confidence: String,
     /** The biography's license code (CC-BY-SA). */
+    val licenseCode: String,
+)
+
+data class BookEdition(
+    val title: String,
+    val heTitle: String?,
+    val sourceUrl: String?,
+    /** CC-BY-SA, Public Domain, … or unknown. */
     val licenseCode: String,
 )
 
