@@ -90,6 +90,10 @@ class BookRenameDetector(
             var bestKey: BookKey? = null
             var bestScore = 0.0
             for ((newKey, newHashes) in mutableAdded) {
+                // Jaccard is bounded by min/max size: skip pairs that cannot reach the threshold.
+                val sizeRatio = minOf(oldHashes.size, newHashes.size).toDouble() /
+                    maxOf(oldHashes.size, newHashes.size)
+                if (sizeRatio < maxOf(threshold, bestScore)) continue
                 val score = oldHashes.jaccard(newHashes)
                 if (score > bestScore) {
                     bestScore = score
@@ -116,6 +120,8 @@ class BookRenameDetector(
         removedKeys: Set<BookKey>,
         atVersion: Int,
     ): List<Alias> {
+        // Linear scan of every line per removed key: fine for tests, too slow on a
+        // full build state (use IdAllocator.lineHashesByBook there).
         val removed = removedKeys.associateWith { key ->
             val bookId = previous.books[key] ?: return@associateWith LineHashSet(emptySet())
             val hashes = previous.lines.entries.asSequence()
