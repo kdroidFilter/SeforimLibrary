@@ -86,6 +86,22 @@ interface SearchEngine : Closeable {
     fun buildSnippet(rawText: String, query: String, near: Int): String
 
     /**
+     * Fills `snippet` and `rawText` of [hits] fetched without snippets (`nextPage(limit, snippets = false)`), so
+     * only the hits actually shown pay for their snippet. Order and other fields are kept.
+     */
+    suspend fun attachSnippets(
+        hits: List<LineHit>,
+        query: String,
+        near: Int,
+    ): List<LineHit> = hits
+
+    /**
+     * Loads what the first search would otherwise load (index readers, dictionary, models), so it answers at full
+     * speed. Meant to run in the background at startup; safe to call more than once.
+     */
+    suspend fun warmUp() {}
+
+    /**
      * Returns the contiguous passage within [text] whose meaning is closest to [query],
      * for semantic highlighting (using the same dense encoder as semantic search).
      *
