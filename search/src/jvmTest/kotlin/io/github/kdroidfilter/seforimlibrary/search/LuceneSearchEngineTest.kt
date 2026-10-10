@@ -611,6 +611,85 @@ class LuceneSearchEngineTest {
         }
     }
 
+    // --- facets ---
+
+    @Test
+    fun `computeFacets counts hits per book and per ancestor category`() {
+        listOf(true, false).forEach { docValues ->
+            withFacetIndex(docValues) { engine ->
+                val facets = assertNotNull(engine.computeFacets("שלום"))
+                assertEquals(6, facets.totalHits)
+                assertEquals(mapOf(1L to 3, 2L to 3), facets.bookCounts)
+                // Book 1 sits in 10 > 11, book 2 in 10 > 12; the delta line of book 1 inherits its ancestors
+                assertEquals(mapOf(10L to 6, 11L to 3, 12L to 3), facets.categoryCounts)
+            }
+        }
+    }
+
+    @Test
+    fun `computeFacets matches the session hit set`() {
+        withFacetIndex(docValues = true) { engine ->
+            val facets = assertNotNull(engine.computeFacets("שלום", baseBookOnly = true))
+            val ids = collectLineIds(assertNotNull(engine.openSession("שלום", baseBookOnly = true)))
+            assertEquals(ids.size.toLong(), facets.totalHits)
+        }
+    }
+
+    @Test
+    fun `pages without snippets get them attached later`() {
+        withFacetIndex(docValues = true) { engine ->
+            runBlocking {
+                val page = assertNotNull(engine.openSession("שלום")?.use { it.nextPage(10, snippets = false) })
+                assertTrue(page.hits.all { it.snippet.isEmpty() })
+                val withSnippets = engine.attachSnippets(page.hits, "שלום", 5)
+                assertEquals(page.hits.map { it.lineId }, withSnippets.map { it.lineId })
+                assertTrue(withSnippets.all { it.snippet.contains("<b>שלום</b>") })
+            }
+        }
+    }
+
+    private fun withFacetIndex(docValues: Boolean, block: (LuceneSearchEngine) -> Unit) {
+        val tempDir = createTempIndexDir()
+        try {
+            FSDirectory.open(tempDir).use { dir ->
+                IndexWriter(dir, IndexWriterConfig(StandardAnalyzer())).use { writer ->
+                    // (lineId, bookId, ancestor category ids)
+                    listOf(
+                        Triple(1L, 1L, "10,11"), Triple(2L, 1L, "10,11"), Triple(3L, 2L, "10,12"),
+                        Triple(4L, 2L, "10,12"), Triple(5L, 2L, "10,12"),
+                    ).forEach { (lineId, bookId, ancestors) ->
+                        writer.addDocument(facetDoc(lineId, bookId, ancestors, "שלום עולם $lineId", docValues))
+                    }
+                    writer.addDocument(facetDoc(6L, 1L, "10,11", "אחר לגמרי", docValues))
+                    writer.commit()
+                    // A line added by a delta update: own segment, no ancestors field
+                    writer.addDocument(facetDoc(7L, 1L, null, "שלום לכולם", docValues))
+                }
+            }
+            block(LuceneSearchEngine(tempDir))
+        } finally {
+            deleteDirectory(tempDir)
+        }
+    }
+
+    private fun facetDoc(lineId: Long, bookId: Long, ancestors: String?, text: String, docValues: Boolean) =
+        Document().apply {
+            add(StringField("type", "line", Field.Store.NO))
+            add(StoredField("book_id", bookId))
+            add(IntPoint("book_id", bookId.toInt()))
+            if (docValues) add(NumericDocValuesField("book_id", bookId))
+            add(StoredField("book_title", "ספר $bookId"))
+            ancestors?.let { add(StoredField("ancestor_category_ids", it)) }
+            add(StoredField("line_id", lineId))
+            add(IntPoint("line_id", lineId.toInt()))
+            add(StoredField("line_index", lineId.toInt()))
+            add(TextField("text", HebrewTextUtils.normalizeHebrew(text), Field.Store.NO))
+            add(StoredField("text_raw", text))
+            add(StoredField("is_base_book", 1))
+            add(IntPoint("is_base_book", 1))
+            add(StoredField("order_index", 1))
+        }
+
     private fun createTempIndexDir(): Path {
         return Files.createTempDirectory("lucene_test_index")
     }

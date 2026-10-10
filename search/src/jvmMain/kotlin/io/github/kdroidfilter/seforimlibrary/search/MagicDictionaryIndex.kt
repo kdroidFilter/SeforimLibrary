@@ -6,6 +6,10 @@ import java.nio.file.Path
 import java.sql.Connection
 import java.sql.DriverManager
 import java.sql.PreparedStatement
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Streaming dictionary index backed by SQLite (tables: surface, variant, base).
@@ -41,10 +45,11 @@ class MagicDictionaryIndex private constructor(
     }
 
     /**
-     * Cache expansions per normalized token to avoid repeated DB hits.
+     * Cache expansions per normalized token to avoid repeated DB hits. Lookups in progress are cached too, so
+     * concurrent searches (facets and results start together) share them.
      */
-    private val tokenCache = object : LinkedHashMap<String, List<Expansion>>(TOKEN_CACHE_SIZE, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Expansion>>?): Boolean =
+    private val tokenCache = object : LinkedHashMap<String, CompletableFuture<List<Expansion>>>(TOKEN_CACHE_SIZE, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CompletableFuture<List<Expansion>>>?): Boolean =
             size > TOKEN_CACHE_SIZE
     }
 
@@ -55,6 +60,11 @@ class MagicDictionaryIndex private constructor(
     private val baseCache = object : LinkedHashMap<Long, Expansion>(BASE_CACHE_SIZE, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, Expansion>?): Boolean =
             size > BASE_CACHE_SIZE
+    }
+
+    /** Starts looking up [tokens] in parallel, so the following [expansionFor] calls find them ready. */
+    fun prefetch(tokens: Collection<String>) {
+        tokens.forEach { lookup(it, async = true) }
     }
 
     fun expansionsFor(tokens: List<String>): List<Expansion> =
@@ -75,14 +85,25 @@ class MagicDictionaryIndex private constructor(
         return expansions.maxByOrNull { it.surface.size }
     }
 
-    private fun expansionsForToken(token: String): List<Expansion> {
-        val normalized = norm(token)
-        if (normalized.isEmpty()) return emptyList()
+    private fun expansionsForToken(token: String): List<Expansion> = lookup(token, async = false).join()
 
+    private fun lookup(token: String, async: Boolean): CompletableFuture<List<Expansion>> {
+        val normalized = norm(token)
+        if (normalized.isEmpty()) return CompletableFuture.completedFuture(emptyList())
+        val future = CompletableFuture<List<Expansion>>()
         synchronized(tokenCache) {
             tokenCache[normalized]?.let { return it }
+            tokenCache[normalized] = future
         }
+        val fetch = Runnable {
+            // fetchExpansions logs and skips its failures: an empty result is cached like any other
+            future.complete(runCatching { fetchForToken(token, normalized) }.getOrDefault(emptyList()))
+        }
+        if (async) lookupExecutor.execute(fetch) else fetch.run()
+        return future
+    }
 
+    private fun fetchForToken(token: String, normalized: String): List<Expansion> {
         // Try raw, normalized, and final-form variants to match DB values.
         val candidates = buildLookupCandidates(token, normalized)
         val mergedByBase = LinkedHashMap<Long, Expansion>()
@@ -101,12 +122,7 @@ class MagicDictionaryIndex private constructor(
                 }
             }
         }
-
-        val expansions = mergedByBase.values.toList()
-        synchronized(tokenCache) {
-            tokenCache[normalized] = expansions
-        }
-        return expansions
+        return mergedByBase.values.toList()
     }
 
     /**
@@ -173,6 +189,14 @@ class MagicDictionaryIndex private constructor(
     companion object {
         private val logger = Logger.withTag("MagicDictionary")
         private const val TOKEN_CACHE_SIZE = 1024
+
+        // Parallel lookups of a query's words (each thread keeps its own connection)
+        private val lookupExecutor: ExecutorService by lazy {
+            val ids = AtomicInteger()
+            Executors.newFixedThreadPool(minOf(Runtime.getRuntime().availableProcessors(), 4)) { task ->
+                Thread(task, "magic-dictionary-${ids.incrementAndGet()}").apply { isDaemon = true }
+            }
+        }
         private const val BASE_CACHE_SIZE = 512
 
         /**

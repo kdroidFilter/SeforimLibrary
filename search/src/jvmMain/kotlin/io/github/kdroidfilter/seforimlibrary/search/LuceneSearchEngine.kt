@@ -7,7 +7,11 @@ import org.apache.lucene.analysis.Analyzer
 import org.apache.lucene.analysis.TokenStream
 import org.apache.lucene.analysis.standard.StandardAnalyzer
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
-import org.apache.lucene.index.DirectoryReader
+import org.apache.lucene.index.DocValuesType
+import org.apache.lucene.index.FieldInfo
+import org.apache.lucene.index.IndexReader
+import org.apache.lucene.index.NumericDocValues
+import org.apache.lucene.index.StoredFieldVisitor
 import org.apache.lucene.index.StoredFields
 import org.apache.lucene.index.Term
 import org.apache.lucene.index.LeafReaderContext
@@ -20,10 +24,15 @@ import org.apache.lucene.search.FuzzyQuery
 import org.apache.lucene.search.IndexSearcher
 import org.apache.lucene.search.LeafCollector
 import org.apache.lucene.search.PrefixQuery
+import org.apache.lucene.search.PointRangeQuery
 import org.apache.lucene.search.Query
+import org.apache.lucene.search.QueryCachingPolicy
 import org.apache.lucene.search.Scorable
 import org.apache.lucene.search.ScoreDoc
+import org.apache.lucene.search.ReferenceManager
 import org.apache.lucene.search.ScoreMode
+import org.apache.lucene.search.SearcherFactory
+import org.apache.lucene.search.SearcherManager
 import org.apache.lucene.search.TermQuery
 import org.apache.lucene.util.QueryBuilder
 import org.apache.lucene.store.FSDirectory
@@ -31,8 +40,11 @@ import org.apache.lucene.store.NIOFSDirectory
 import org.apache.lucene.document.IntPoint
 import org.jsoup.Jsoup
 import org.jsoup.safety.Safelist
-import java.io.Closeable
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Lucene-based implementation of SearchEngine for full-text search.
@@ -46,6 +58,58 @@ private const val MAX_SYNONYM_BOOST_TERMS: Int = 256
 // Constants for snippet source building (must match indexer)
 private const val SNIPPET_NEIGHBOR_WINDOW = 4
 private const val SNIPPET_MIN_LENGTH = 280
+private const val FIELD_BOOK_ID = "book_id"
+private const val FIELD_ANCESTOR_CATEGORY_IDS = "ancestor_category_ids"
+// Searches run by warmUp(): one and several words, common and rarer ones, a quoted phrase, the divine name (whose
+// dictionary entry is the largest)
+val WARMUP_QUERIES = listOf("ברוך ה׳ לעולם", "אמר רבי יוחנן", "תפילין", "\"קריאת שמע\"")
+const val WARMUP_ROUNDS = 2
+const val WARMUP_PAGE_SIZE = 25
+
+// Smallest partition worth a task of its own when a segment is split across cores
+private const val MIN_DOCS_PER_SLICE = 100_000
+
+/**
+ * Searchers that split the index, even a single segment, into one partition per core and search them concurrently:
+ * a merged index is one big segment, which a plain searcher scores on one thread.
+ */
+private object PartitionedSearcherFactory : SearcherFactory() {
+    private val cores = Runtime.getRuntime().availableProcessors()
+    private val executor: ExecutorService by lazy {
+        val ids = AtomicInteger()
+        Executors.newFixedThreadPool(cores) { task ->
+            Thread(task, "lucene-search-${ids.incrementAndGet()}").apply { isDaemon = true }
+        }
+    }
+
+    override fun newSearcher(reader: IndexReader, previousReader: IndexReader?): IndexSearcher {
+        val searcher = if (cores == 1) {
+            IndexSearcher(reader)
+        } else {
+            val docsPerSlice = maxOf(MIN_DOCS_PER_SLICE, reader.maxDoc() / cores + 1)
+            object : IndexSearcher(reader, executor) {
+                override fun slices(leaves: List<LeafReaderContext>): Array<LeafSlice> =
+                    slices(leaves, docsPerSlice, Int.MAX_VALUE, true)
+            }
+        }
+        return searcher.apply { queryCachingPolicy = StableFiltersCachingPolicy }
+    }
+}
+
+/**
+ * Caches only the filters every search repeats (line documents, base books). Lucene's default policy also caches any
+ * clause seen twice, and each search builds its word filters twice (facets, then results): it would then turn them
+ * into bitsets over the whole index for a query that won't come back.
+ */
+private object StableFiltersCachingPolicy : QueryCachingPolicy {
+    override fun onUse(query: Query) = Unit
+
+    override fun shouldCache(query: Query): Boolean = when (query) {
+        is TermQuery -> query.term.field() == "type"
+        is PointRangeQuery -> query.field == "is_base_book"
+        else -> false
+    }
+}
 
 /**
  * Blacklist of hallucinated dictionary mappings.
@@ -146,10 +210,39 @@ class LuceneSearchEngine(
         loaded
     }
 
+    // One reader shared by every search: opening one per search re-reads the term index of each segment and maps,
+    // then unmaps, all the files. Refreshed when the index changes on disk (delta updates write into it).
+    private val searcherManagerLazy = lazy {
+        SearcherManager(dir, PartitionedSearcherFactory).apply {
+            addListener(
+                object : ReferenceManager.RefreshListener {
+                    override fun beforeRefresh() = Unit
+
+                    override fun afterRefresh(didRefresh: Boolean) {
+                        if (didRefresh) bookAncestors.clear()
+                    }
+                }
+            )
+        }
+    }
+
+    private val searcherManager: SearcherManager by searcherManagerLazy
+
+    // Ancestor category ids per book, for the facets: every line of a book shares them
+    private val bookAncestors = ConcurrentHashMap<Long, LongArray>()
+
+    private fun acquireSearcher(): IndexSearcher {
+        val manager = searcherManager
+        manager.maybeRefresh()
+        return manager.acquire()
+    }
+
     private inline fun <T> withSearcher(block: (IndexSearcher) -> T): T {
-        DirectoryReader.open(dir).use { reader ->
-            val searcher = IndexSearcher(reader)
+        val searcher = acquireSearcher()
+        try {
             return block(searcher)
+        } finally {
+            searcherManager.release(searcher)
         }
     }
 
@@ -165,8 +258,29 @@ class LuceneSearchEngine(
         baseBookOnly: Boolean
     ): SearchSession? {
         val context = buildSearchContext(query, near, bookFilter, categoryFilter, bookIds, lineIds, baseBookOnly) ?: return null
-        val reader = DirectoryReader.open(dir)
-        return LuceneSearchSession(context.query, context.anchorTerms, context.highlightTerms, reader)
+        return LuceneSearchSession(context.query, context.snippetTerms, acquireSearcher())
+    }
+
+    override suspend fun attachSnippets(hits: List<LineHit>, query: String, near: Int): List<LineHit> {
+        if (hits.isEmpty()) return hits
+        val context = buildSearchContext(query, near, null, null, null, null) ?: return hits
+        val sources = withContext(Dispatchers.IO) { snippetSources(hits.map { LineSnippetInfo(it.lineId, it.bookId, it.lineIndex) }) }
+        return hits.map { hit ->
+            val raw = sources[hit.lineId] ?: hit.rawText
+            hit.copy(snippet = SnippetBuilder.build(raw, context.snippetTerms), rawText = raw)
+        }
+    }
+
+    override suspend fun warmUp() {
+        withContext(Dispatchers.IO) { hashemHighlightTerms }
+        // A few searches down the whole path (facets, ranking, snippets) load the index structures and, on the JVM,
+        // get the hot code compiled before the user's first search
+        repeat(WARMUP_ROUNDS) {
+            for (query in WARMUP_QUERIES) {
+                computeFacets(query, baseBookOnly = true)
+                openSession(query, baseBookOnly = true)?.use { it.nextPage(WARMUP_PAGE_SIZE) }
+            }
+        }
     }
 
     override fun searchBooksByTitlePrefix(query: String, limit: Int): List<Long> {
@@ -216,7 +330,7 @@ class LuceneSearchEngine(
             .filter { it.isNotBlank() }
             .joinToString(" ")
         val anchorTerms = buildAnchorTerms(anchorBasis, highlightTerms)
-        return buildSnippetInternal(rawClean, anchorTerms, highlightTerms)
+        return SnippetBuilder.build(rawClean, SnippetTerms(anchorTerms, highlightTerms))
     }
 
     override fun findInBookCandidates(query: String, bookId: Long): LongArray? {
@@ -233,10 +347,12 @@ class LuceneSearchEngine(
         clauses.forEach { builder.add(it, BooleanClause.Occur.FILTER) }
 
         return withSearcher { searcher ->
-            var ids = LongArray(256)
-            var count = 0
-            // Only line_id is read per hit: no scoring, no other stored field
-            val collector = object : Collector {
+            // Only line_id is read per hit: no scoring, no other stored field. One collector per slice, as the
+            // slices may run concurrently
+            class LineIdCollector : Collector {
+                var ids = LongArray(256)
+                var count = 0
+
                 override fun getLeafCollector(leafContext: LeafReaderContext): LeafCollector {
                     val storedFields = leafContext.reader().storedFields()
                     return object : LeafCollector {
@@ -253,16 +369,25 @@ class LuceneSearchEngine(
 
                 override fun scoreMode(): ScoreMode = ScoreMode.COMPLETE_NO_SCORES
             }
-            // searcher has no executor, so slices run sequentially and can share one collector
-            searcher.search(
+            val ids = searcher.search(
                 builder.build(),
-                object : CollectorManager<Collector, Unit> {
-                    override fun newCollector(): Collector = collector
-                    override fun reduce(collectors: Collection<Collector>) = Unit
+                object : CollectorManager<LineIdCollector, LongArray> {
+                    override fun newCollector() = LineIdCollector()
+
+                    override fun reduce(collectors: Collection<LineIdCollector>): LongArray {
+                        val out = LongArray(collectors.sumOf { it.count })
+                        var at = 0
+                        for (c in collectors) {
+                            c.ids.copyInto(out, at, 0, c.count)
+                            at += c.count
+                        }
+                        return out
+                    }
                 }
             )
+            val count = ids.size
             // No candidate may mean a book the index lacks (older index, book added later): unknown, not "no match"
-            if (count == 0 && searcher.count(bookLines) == 0) null else ids.copyOf(count)
+            if (count == 0 && searcher.count(bookLines) == 0) null else ids
         }
     }
 
@@ -283,7 +408,7 @@ class LuceneSearchEngine(
         }
 
     override fun close() {
-        // Directory is closed automatically when readers are closed
+        if (searcherManagerLazy.isInitialized()) runCatching { searcherManager.close() }
     }
 
     override fun computeFacets(
@@ -299,76 +424,123 @@ class LuceneSearchEngine(
             ?: return null
 
         return withSearcher { searcher ->
-            val categoryCounts = mutableMapOf<Long, Int>()
-            val bookCounts = mutableMapOf<Long, Int>()
-            var totalHits = 0L
+            // Only book ids are read per hit (doc values when the index has them, else the first stored field);
+            // category counts follow from the book counts, as every line of a book shares its ancestors. One
+            // collector per slice, as the slices may run concurrently
+            class FacetCollector : Collector {
+                val bookCounts = HashMap<Long, Int>()
+                var totalHits = 0L
 
-            // Lightweight collector that only reads stored fields for aggregation
-            val collector = object : Collector {
                 override fun getLeafCollector(leafContext: LeafReaderContext): LeafCollector {
-                    val storedFields = leafContext.reader().storedFields()
+                    val reader = leafContext.reader()
+                    val storedFields = reader.storedFields()
+                    val bookIdValues: NumericDocValues? =
+                        reader.fieldInfos.fieldInfo(FIELD_BOOK_ID)
+                            ?.takeIf { it.docValuesType == DocValuesType.NUMERIC }
+                            ?.let { reader.getNumericDocValues(FIELD_BOOK_ID) }
+                    // Lines of a book are mostly contiguous: count runs, then fold them into the map
+                    var runBook = -1L
+                    var runCount = 0
+
+                    fun flushRun() {
+                        if (runCount > 0) bookCounts.merge(runBook, runCount, Int::plus)
+                        runCount = 0
+                    }
 
                     return object : LeafCollector {
-                        override fun setScorer(scorer: Scorable) {
-                            // No scoring needed for facet counting
-                        }
+                        override fun setScorer(scorer: Scorable) = Unit
 
                         override fun collect(doc: Int) {
                             totalHits++
-                            val luceneDoc = storedFields.document(doc)
-
-                            // Book count
-                            val bookId = luceneDoc.getField("book_id")?.numericValue()?.toLong()
-                            if (bookId != null) {
-                                bookCounts[bookId] = (bookCounts[bookId] ?: 0) + 1
-                            }
-
-                            // Category counts from ancestors (stored as comma-separated string)
-                            val ancestorStr = luceneDoc.getField("ancestor_category_ids")?.stringValue() ?: ""
-                            if (ancestorStr.isNotEmpty()) {
-                                for (idStr in ancestorStr.split(",")) {
-                                    val catId = idStr.trim().toLongOrNull() ?: continue
-                                    categoryCounts[catId] = (categoryCounts[catId] ?: 0) + 1
+                            val bookId =
+                                if (bookIdValues != null && bookIdValues.advanceExact(doc)) {
+                                    bookIdValues.longValue()
+                                } else {
+                                    readStoredBookId(storedFields, doc) ?: return
                                 }
+                            if (bookId != runBook) {
+                                flushRun()
+                                runBook = bookId
+                                if (!bookAncestors.containsKey(bookId)) loadAncestors(storedFields, doc, bookId)
                             }
+                            runCount++
                         }
+
+                        override fun finish() = flushRun()
                     }
                 }
 
                 override fun scoreMode(): ScoreMode = ScoreMode.COMPLETE_NO_SCORES
             }
 
-            // ponytail: searcher has no executor, so slices run sequentially and can share one collector
             searcher.search(
-                context.query,
-                object : CollectorManager<Collector, Unit> {
-                    override fun newCollector(): Collector = collector
-                    override fun reduce(collectors: Collection<Collector>) = Unit
+                context.matchQuery,
+                object : CollectorManager<FacetCollector, SearchFacets> {
+                    override fun newCollector() = FacetCollector()
+
+                    override fun reduce(collectors: Collection<FacetCollector>): SearchFacets {
+                        val bookCounts = HashMap<Long, Int>()
+                        collectors.forEach { c -> c.bookCounts.forEach { (book, n) -> bookCounts.merge(book, n, Int::plus) } }
+                        val categoryCounts = HashMap<Long, Int>()
+                        for ((bookId, count) in bookCounts) {
+                            bookAncestors[bookId]?.forEach { categoryCounts.merge(it, count, Int::plus) }
+                        }
+                        return SearchFacets(
+                            totalHits = collectors.sumOf { it.totalHits },
+                            categoryCounts = categoryCounts,
+                            bookCounts = bookCounts
+                        )
+                    }
                 }
             )
-
-            SearchFacets(
-                totalHits = totalHits,
-                categoryCounts = categoryCounts.toMap(),
-                bookCounts = bookCounts.toMap()
-            )
         }
+    }
+
+    private fun readStoredBookId(storedFields: StoredFields, doc: Int): Long? {
+        var bookId: Long? = null
+        storedFields.document(
+            doc,
+            object : StoredFieldVisitor() {
+                override fun needsField(fieldInfo: FieldInfo): Status = when {
+                    bookId != null -> Status.STOP
+                    fieldInfo.name == FIELD_BOOK_ID -> Status.YES
+                    else -> Status.NO
+                }
+
+                override fun longField(fieldInfo: FieldInfo, value: Long) {
+                    bookId = value
+                }
+
+                override fun intField(fieldInfo: FieldInfo, value: Int) {
+                    bookId = value.toLong()
+                }
+            }
+        )
+        return bookId
+    }
+
+    private fun loadAncestors(storedFields: StoredFields, doc: Int, bookId: Long) {
+        val ancestors = storedFields.document(doc, setOf(FIELD_ANCESTOR_CATEGORY_IDS))
+            .getField(FIELD_ANCESTOR_CATEGORY_IDS)?.stringValue()
+            ?.split(",")
+            ?.mapNotNull { it.trim().toLongOrNull() }
+            .orEmpty()
+        // Lines added by delta updates lack the field: try again on the book's next run
+        if (ancestors.isNotEmpty()) bookAncestors[bookId] = ancestors.toLongArray()
     }
 
     // --- Inner SearchSession class ---
 
     inner class LuceneSearchSession internal constructor(
         private val query: Query,
-        private val anchorTerms: List<String>,
-        private val highlightTerms: List<String>,
-        private val reader: DirectoryReader
+        private val snippetTerms: SnippetTerms,
+        private val searcher: IndexSearcher
     ) : SearchSession {
-        private val searcher = IndexSearcher(reader)
         private var after: ScoreDoc? = null
         private var finished = false
         private var totalHitsValue: Long? = null
 
-        override suspend fun nextPage(limit: Int): SearchPage? = withContext(Dispatchers.IO) {
+        override suspend fun nextPage(limit: Int, snippets: Boolean): SearchPage? = withContext(Dispatchers.IO) {
             if (finished) return@withContext null
             val top = searcher.searchAfter(after, query, limit)
             if (totalHitsValue == null) totalHitsValue = top.totalHits?.value
@@ -377,7 +549,7 @@ class LuceneSearchEngine(
                 return@withContext null
             }
             val stored = searcher.storedFields()
-            val hits = mapScoreDocs(stored, top.scoreDocs.asList(), anchorTerms, highlightTerms)
+            val hits = mapScoreDocs(stored, top.scoreDocs.asList(), snippetTerms, snippets)
             after = top.scoreDocs.last()
             val isLast = top.scoreDocs.size < limit
             if (isLast) finished = true
@@ -389,7 +561,7 @@ class LuceneSearchEngine(
         }
 
         override fun close() {
-            reader.close()
+            searcherManager.release(searcher)
         }
     }
 
@@ -409,11 +581,16 @@ class LuceneSearchEngine(
 
     // --- Private implementation ---
 
-    private data class SearchContext(
+    private class SearchContext(
         val query: Query,
+        // The required clauses only: the same matches as [query], without the ranking-only clauses (fuzzy, n-grams,
+        // synonym boosts) that cost a rewrite but can't change the hit set
+        val matchQuery: Query,
         val anchorTerms: List<String>,
         val highlightTerms: List<String>
-    )
+    ) {
+        val snippetTerms by lazy { SnippetTerms(anchorTerms, highlightTerms) }
+    }
 
     private fun buildSearchContext(
         rawQuery: String,
@@ -458,6 +635,7 @@ class LuceneSearchEngine(
 
         // Get all possible expansions for each token (a token can belong to multiple bases)
         // These expansions are used for SEARCH - we keep all of them for better recall
+        magicDict?.prefetch(analyzedStd)
         val tokenExpansions: Map<String, List<MagicDictionaryIndex.Expansion>> =
             analyzedStd.associateWith { token ->
                 // Get best expansion (prefers matching base, then largest)
@@ -508,24 +686,30 @@ class LuceneSearchEngine(
         val anchorTerms = buildAnchorTerms(anchorBasis, highlightTerms)
 
         val builder = BooleanQuery.Builder()
-        builder.add(TermQuery(Term("type", "line")), BooleanClause.Occur.FILTER)
-        if (bookFilter != null) builder.add(IntPoint.newExactQuery("book_id", bookFilter.toInt()), BooleanClause.Occur.FILTER)
-        if (categoryFilter != null) builder.add(IntPoint.newExactQuery("category_id", categoryFilter.toInt()), BooleanClause.Occur.FILTER)
+        // Mirrors every required clause of builder (the facets need only the hit set)
+        val matchBuilder = BooleanQuery.Builder()
+        fun require(query: Query, occur: BooleanClause.Occur) {
+            builder.add(query, occur)
+            matchBuilder.add(query, occur)
+        }
+        require(TermQuery(Term("type", "line")), BooleanClause.Occur.FILTER)
+        if (bookFilter != null) require(IntPoint.newExactQuery("book_id", bookFilter.toInt()), BooleanClause.Occur.FILTER)
+        if (categoryFilter != null) require(IntPoint.newExactQuery("category_id", categoryFilter.toInt()), BooleanClause.Occur.FILTER)
         // Filter by base books only (is_base_book = 1) when baseBookOnly is true
-        if (baseBookOnly) builder.add(IntPoint.newExactQuery("is_base_book", 1), BooleanClause.Occur.FILTER)
+        if (baseBookOnly) require(IntPoint.newExactQuery("is_base_book", 1), BooleanClause.Occur.FILTER)
         val bookIdsArray = bookIds?.map { it.toInt() }?.toIntArray()
         if (bookIdsArray != null && bookIdsArray.isNotEmpty()) {
-            builder.add(IntPoint.newSetQuery("book_id", *bookIdsArray), BooleanClause.Occur.FILTER)
+            require(IntPoint.newSetQuery("book_id", *bookIdsArray), BooleanClause.Occur.FILTER)
         }
         val lineIdsArray = lineIds?.map { it.toInt() }?.toIntArray()
         if (lineIdsArray != null && lineIdsArray.isNotEmpty()) {
-            builder.add(IntPoint.newSetQuery("line_id", *lineIdsArray), BooleanClause.Occur.FILTER)
+            require(IntPoint.newSetQuery("line_id", *lineIdsArray), BooleanClause.Occur.FILTER)
         }
         // Quoted phrases: each must appear verbatim as an exact, in-order, adjacent phrase.
         var exactClausesAdded = 0
         for (phrase in exactPhrasesNorm) {
             val exactQuery = buildExactPhraseQuery(phrase) ?: continue
-            builder.add(exactQuery, BooleanClause.Occur.MUST)
+            require(exactQuery, BooleanClause.Occur.MUST)
             exactClausesAdded++
             logger.d { "[DEBUG] Added exact-phrase MUST for: \"$phrase\"" }
         }
@@ -540,13 +724,12 @@ class LuceneSearchEngine(
             val mustAllTokensQuery: Query? = buildPresenceFilterForTokens(analyzedStd, near, tokenExpansions)
             val phraseQuery: Query? = buildSynonymPhraseQuery(analyzedStd, tokenExpansions, near)
             if (mustAllTokensQuery != null) {
-                builder.add(mustAllTokensQuery, BooleanClause.Occur.FILTER)
+                require(mustAllTokensQuery, BooleanClause.Occur.FILTER)
                 logger.d { "[DEBUG] Added mustAllTokensQuery as FILTER" }
             }
             if (phraseQuery != null && analyzedStd.size >= 2) {
-                val occur = if (near == 0) BooleanClause.Occur.MUST else BooleanClause.Occur.SHOULD
-                builder.add(phraseQuery, occur)
-                logger.d { "[DEBUG] Added phraseQuery with occur=$occur, near=$near" }
+                if (near == 0) require(phraseQuery, BooleanClause.Occur.MUST) else builder.add(phraseQuery, BooleanClause.Occur.SHOULD)
+                logger.d { "[DEBUG] Added phraseQuery, near=$near" }
             }
             builder.add(rankedQuery, BooleanClause.Occur.SHOULD)
             logger.d { "[DEBUG] Added rankedQuery as SHOULD" }
@@ -557,6 +740,7 @@ class LuceneSearchEngine(
 
         return SearchContext(
             query = finalQuery,
+            matchQuery = matchBuilder.build(),
             anchorTerms = anchorTerms,
             highlightTerms = highlightTerms
         )
@@ -567,8 +751,8 @@ class LuceneSearchEngine(
     private suspend fun mapScoreDocs(
         stored: StoredFields,
         scoreDocs: List<ScoreDoc>,
-        anchorTerms: List<String>,
-        highlightTerms: List<String>
+        snippetTerms: SnippetTerms,
+        snippets: Boolean = true
     ): List<LineHit> {
         if (scoreDocs.isEmpty()) return emptyList()
 
@@ -598,14 +782,8 @@ class LuceneSearchEngine(
             )
         }
 
-        // Get snippet sources: from provider if available, otherwise from index
-        val snippetSources: Map<Long, String> = if (snippetProvider != null) {
-            val lineInfos = docMetas.map { LineSnippetInfo(it.lineId, it.bookId, it.lineIndex) }
-            snippetProvider.getSnippetSources(lineInfos)
-        } else {
-            // Fallback to indexed text_raw
-            docMetas.associate { it.lineId to it.indexedRaw }
-        }
+        val snippetSources: Map<Long, String> =
+            if (snippets) snippetSources(docMetas.map { LineSnippetInfo(it.lineId, it.bookId, it.lineIndex) }) else emptyMap()
 
         val hits = docMetas.map { meta ->
             val raw = snippetSources[meta.lineId] ?: meta.indexedRaw
@@ -621,7 +799,7 @@ class LuceneSearchEngine(
                 baseScore
             }
 
-            val snippet = buildSnippetInternal(raw, anchorTerms, highlightTerms)
+            val snippet = if (snippets) SnippetBuilder.build(raw, snippetTerms) else ""
             LineHit(
                 bookId = meta.bookId,
                 bookTitle = meta.bookTitle,
@@ -637,6 +815,10 @@ class LuceneSearchEngine(
         return hits.sortedByDescending { it.score }
     }
 
+    // Snippet sources: from the provider if available, otherwise none (the indexed text_raw fallback)
+    private suspend fun snippetSources(lines: List<LineSnippetInfo>): Map<Long, String> =
+        snippetProvider?.getSnippetSources(lines) ?: emptyMap()
+
     private suspend fun doSearch(
         rawQuery: String,
         near: Int,
@@ -651,7 +833,7 @@ class LuceneSearchEngine(
                 val top = searcher.search(context.query, offset + limit)
                 val stored: StoredFields = searcher.storedFields()
                 val sliced = top.scoreDocs.drop(offset)
-                mapScoreDocs(stored, sliced, context.anchorTerms, context.highlightTerms)
+                mapScoreDocs(stored, sliced, context.snippetTerms)
             }
         }
     }
@@ -670,7 +852,7 @@ class LuceneSearchEngine(
                 val top = searcher.search(context.query, offset + limit)
                 val stored: StoredFields = searcher.storedFields()
                 val sliced = top.scoreDocs.drop(offset)
-                mapScoreDocs(stored, sliced, context.anchorTerms, context.highlightTerms)
+                mapScoreDocs(stored, sliced, context.snippetTerms)
             }
         }
     }
@@ -958,144 +1140,6 @@ class LuceneSearchEngine(
             .sortedByDescending { it.length }
     }
 
-    private fun buildSnippetInternal(raw: String, anchorTerms: List<String>, highlightTerms: List<String>, context: Int = 220): String {
-        if (raw.isEmpty()) return ""
-        val (plain, mapToOrig) = HebrewTextUtils.stripDiacriticsWithMap(raw)
-        val hasDiacritics = plain.length != raw.length
-        val effContext = if (hasDiacritics) maxOf(context, 360) else context
-        val plainSearch = HebrewTextUtils.replaceFinalsWithBase(plain)
-
-        // Find best anchor position: where most terms cluster together
-        // Optimized: limit occurrences per term, early exit on perfect score
-        var plainIdx = 0
-        var plainLen = anchorTerms.firstOrNull()?.length ?: 0
-
-        if (anchorTerms.isNotEmpty()) {
-            val maxOccPerTerm = 5 // Limit occurrences per term for perf
-            val positions = mutableListOf<Pair<Int, String>>() // (position, term)
-
-            for (term in anchorTerms) {
-                if (term.isEmpty()) continue
-                var from = 0
-                var count = 0
-                while (from <= plainSearch.length - term.length && count < maxOccPerTerm) {
-                    val idx = plainSearch.indexOf(term, startIndex = from)
-                    if (idx == -1) break
-                    positions.add(idx to term)
-                    from = idx + 1
-                    count++
-                }
-            }
-
-            if (positions.isNotEmpty()) {
-                val maxPossibleScore = anchorTerms.size
-                var bestScore = 0
-
-                for ((pos, term) in positions) {
-                    // Count unique terms in window around this position
-                    val windowStart = pos - effContext
-                    val windowEnd = pos + term.length + effContext
-                    var uniqueTerms = 0
-                    val seen = mutableSetOf<String>()
-                    for ((p, t) in positions) {
-                        if (p in windowStart..windowEnd && seen.add(t)) uniqueTerms++
-                    }
-                    val score = uniqueTerms * 100 + term.length
-
-                    if (score > bestScore) {
-                        bestScore = score
-                        plainIdx = pos
-                        plainLen = term.length
-                        // Early exit if we found all terms clustered
-                        if (uniqueTerms >= maxPossibleScore) break
-                    }
-                }
-            }
-        }
-        val plainStart = (plainIdx - effContext).coerceAtLeast(0)
-        val plainEnd = (plainIdx + plainLen + effContext).coerceAtMost(plain.length)
-        val origStart = HebrewTextUtils.mapToOrigIndex(mapToOrig, plainStart)
-        val origEnd = HebrewTextUtils.mapToOrigIndex(mapToOrig, plainEnd).coerceAtMost(raw.length)
-
-        val base = raw.substring(origStart, origEnd)
-        val basePlain = plain.substring(plainStart, plainEnd)
-        val basePlainSearch = HebrewTextUtils.replaceFinalsWithBase(basePlain)
-        val baseMap = IntArray(plainEnd - plainStart) { idx ->
-            (mapToOrig[plainStart + idx] - origStart).coerceIn(0, base.length.coerceAtLeast(1) - 1)
-        }
-
-        val pool = (highlightTerms + highlightTerms.map { it.trimEnd('$') }).distinct().filter { it.isNotBlank() }
-        val intervals = mutableListOf<IntRange>()
-        val basePlainLower = basePlainSearch.lowercase()
-
-        fun isWordBoundary(text: String, index: Int): Boolean {
-            if (index < 0 || index >= text.length) return true
-            val ch = text[index]
-            return ch.isWhitespace() || !ch.isLetterOrDigit()
-        }
-
-        for (term in pool) {
-            if (term.isEmpty()) continue
-            val t = term.lowercase()
-            var from = 0
-            while (from <= basePlainLower.length - t.length && t.isNotEmpty()) {
-                val idx = basePlainLower.indexOf(t, startIndex = from)
-                if (idx == -1) break
-
-                val isAtWordStart = isWordBoundary(basePlainLower, idx - 1)
-                val isAtWordEnd = isWordBoundary(basePlainLower, idx + t.length)
-                val isWholeWord = isAtWordStart && isAtWordEnd
-                val shouldHighlight = isWholeWord
-
-                if (shouldHighlight) {
-                    val startOrig = HebrewTextUtils.mapToOrigIndex(baseMap, idx)
-                    val endOrig = HebrewTextUtils.mapToOrigIndex(baseMap, (idx + t.length - 1)) + 1
-                    if (startOrig in 0 until endOrig && endOrig <= base.length) {
-                        intervals += (startOrig until endOrig)
-                    }
-                }
-                from = idx + 1
-            }
-        }
-
-        val merged = mergeIntervals(intervals.sortedBy { it.first })
-        val highlighted = insertBoldTags(base, merged)
-        val prefix = if (origStart > 0) "..." else ""
-        val suffix = if (origEnd < raw.length) "..." else ""
-        return prefix + highlighted + suffix
-    }
-
-    private fun mergeIntervals(ranges: List<IntRange>): List<IntRange> {
-        if (ranges.isEmpty()) return ranges
-        val out = mutableListOf<IntRange>()
-        var cur = ranges[0]
-        for (i in 1 until ranges.size) {
-            val r = ranges[i]
-            if (r.first <= cur.last + 1) {
-                cur = cur.first .. maxOf(cur.last, r.last)
-            } else {
-                out += cur
-                cur = r
-            }
-        }
-        out += cur
-        return out
-    }
-
-    private fun insertBoldTags(text: String, intervals: List<IntRange>): String {
-        if (intervals.isEmpty()) return text
-        val sb = StringBuilder(text)
-        for (r in intervals.asReversed()) {
-            val start = r.first.coerceIn(0, sb.length)
-            val end = (r.last + 1).coerceIn(0, sb.length)
-            if (end > start) {
-                sb.insert(end, "</b>")
-                sb.insert(start, "<b>")
-            }
-        }
-        return sb.toString()
-    }
-
     private fun buildNgramTerms(tokens: List<String>, gram: Int = 4): List<String> {
         if (gram <= 0) return emptyList()
         val out = mutableListOf<String>()
@@ -1149,7 +1193,12 @@ class LuceneSearchEngine(
         }
     }
 
-    private fun loadHashemHighlightTerms(): List<String> {
+    // The divine name's forms never change: read once from the dictionary, not on every search
+    private val hashemHighlightTerms: List<String> by lazy { readHashemHighlightTerms() }
+
+    private fun loadHashemHighlightTerms(): List<String> = hashemHighlightTerms
+
+    private fun readHashemHighlightTerms(): List<String> {
         val dict = magicDict ?: return emptyList()
         val raw = dict.loadHashemSurfaces()
         if (raw.isEmpty()) return emptyList()

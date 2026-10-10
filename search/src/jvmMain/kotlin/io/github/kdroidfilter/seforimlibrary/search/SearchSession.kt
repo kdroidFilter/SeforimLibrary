@@ -8,7 +8,7 @@ import java.io.Closeable
  * Sessions maintain internal cursor state for efficient pagination using
  * Lucene's searchAfter mechanism. Must be closed when no longer needed
  * to release underlying index reader resources.
- *oui
+ *
  * ## Usage
  * ```kotlin
  * engine.openSession("שלום")?.use { session ->
@@ -34,9 +34,21 @@ interface SearchSession : Closeable {
      * Returns null when all results have been exhausted.
      *
      * @param limit Maximum number of results to return in this page
+     * @param snippets False to skip loading the snippet sources and building the snippets: the hits then carry
+     *   empty `snippet` and `rawText` (cheap ranking, e.g. for fusion or to skip pages); see [SearchEngine.attachSnippets]
      * @return [SearchPage] containing hits and metadata, or null if no more results
      */
-    suspend fun nextPage(limit: Int): SearchPage?
+    suspend fun nextPage(
+        limit: Int,
+        snippets: Boolean = true,
+    ): SearchPage?
+
+    /**
+     * Snippets better than those of [hits] (from this session's pages) but too costly to build before showing the
+     * page, e.g. the passage closest in meaning: lineId to snippet, for the hits that have one. Callers swap them in
+     * once ready; empty when the session has none.
+     */
+    suspend fun refinedSnippets(hits: List<LineHit>): Map<Long, String> = emptyMap()
 }
 
 /**
