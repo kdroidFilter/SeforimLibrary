@@ -809,19 +809,8 @@ internal class SefariaBookPayloadReader(
 
         val prefixesLeaf = addressTypes.getOrNull(addressTypes.size - depth) != "Integer" || numbersIntegerLeaf
 
-        // Prefixing a self-numbered array would double its printed markers.
-        // Guarded by the same conditions as nextLinePrefix so no wasted scan.
-        val sourceNumbered = depth == 1 && nonEmptyCount > 1 &&
-            (referenceableSections.getOrNull(sectionNames.size - depth) ?: true) &&
-            prefixesLeaf &&
-            when (sourceMarkerRun(text)) {
-                MarkerRun.CONSECUTIVE -> true
-                MarkerRun.BROKEN -> {
-                    logger.d { "Partially numbered leaf array in '$bookHeTitle' ($refPrefix); keeping generated prefixes except on self-labelled items" }
-                    false
-                }
-                MarkerRun.NONE -> false
-            }
+        // Their segments open with their own printed marker (upstream 641666f4).
+        val selfLabeledBook = hasSelfLabeledSegments(bookEnTitle)
 
         // Items that drop the generated prefix because they already carry their own
         // label for that same number. Most shapes are enough alone. Two can also be
@@ -829,7 +818,7 @@ internal class SefariaBookPayloadReader(
         // "יש אומרים", "<b>  לא  </b> פלוג") and a label after an opening heading
         // ("<br>א." opens a list of topics). Those count only when another item of
         // the array carries its own label too.
-        val ownLabelled: BooleanArray? = if (depth == 1 && nonEmptyCount > 1 && prefixesLeaf && !sourceNumbered) {
+        val ownLabelled: BooleanArray? = if (depth == 1 && nonEmptyCount > 1 && prefixesLeaf && !selfLabeledBook) {
             val found = text.mapIndexed { idx, item -> ownLabel(item, idx + 1, labels.variants) }
             val corroborated = found.count { it != null } >= 2
             BooleanArray(text.size) { idx -> found[idx]?.let { it == LabelKind.PLAIN || corroborated } == true }
@@ -858,8 +847,7 @@ internal class SefariaBookPayloadReader(
             val isReferenceable = referenceableSections.getOrNull(sectionIndex) ?: true
             // An item that already carries its own label for this very number keeps
             // that label alone: "(נח) [נח]" is noise. Any other number keeps the prefix.
-            val numbered = depth == 1 && isReferenceable && prefixesLeaf && nonEmptyCount > 1 && !sourceNumbered &&
-                !hasSelfLabeledSegments(bookEnTitle)
+            val numbered = depth == 1 && isReferenceable && prefixesLeaf && nonEmptyCount > 1 && !selfLabeledBook
             val selfLabelled = numbered && currentAddressType != "Talmud" && ownLabelled?.get(idx) == true
             if (numbered) labels.count(selfLabelled)
             val nextLinePrefix = if (numbered && !selfLabelled) "($letter) " else ""
@@ -1007,10 +995,6 @@ private val UNNUMBERED_INTEGER_LEAF_NAMES = setOf("פסקה", "פירוש", "פ�
 /** `match_templates[].scope` values that make an alt-struct node citable alone. */
 private val ALONE_MATCH_TEMPLATE_SCOPES = setOf("any", "alone")
 
-// Leading printed marker that makes a whole array self-numbered: "(אות) " or
-// "{אות} " (unchanged since 491a4619; an intro-shifted run of these still counts).
-private val SOURCE_MARKER_REGEX = Regex("""^\s*[({]([א-ת"׳״]{1,5})[)}]\s""")
-
 // A label an item may open with, after any opening tags, for the number [LABEL_TOKEN]:
 // "(אות)", "( אות )" (נהר מצרים), "{אות}", "[אות]" (אליה רבה) and "[אות X]" (אליה
 // רבה קסב:ה), which may be glued to a tag or take a colon, "[ב]:"; "אות)" (ביאור על
@@ -1117,39 +1101,6 @@ private fun ownLabel(item: JsonElement, number: Int, variants: Boolean): LabelKi
 
 // Inverse of toGematria, for validating printed markers.
 private val gematriaToInt: Map<String, Int> = (1..999).associateBy { toGematria(it) }
-
-private enum class MarkerRun { NONE, CONSECUTIVE, BROKEN }
-
-// CONSECUTIVE = contiguous block of >=2 markers rising by 1, first value <= its
-// 1-based position, unmarked items only as one leading intro or a trailing tail.
-private fun sourceMarkerRun(items: JsonArray): MarkerRun {
-    var next = -1
-    var pre = 0
-    var post = 0
-    var block = 0
-    items.forEachIndexed { idx, item ->
-        val content = (item as? JsonPrimitive)?.contentOrNull ?: return@forEachIndexed
-        if (content.isBlank()) return@forEachIndexed
-        val token = labelToken(SOURCE_MARKER_REGEX, content)
-        if (token == null) {
-            if (block == 0) pre++ else post++
-            return@forEachIndexed
-        }
-        if (post > 0) return MarkerRun.BROKEN
-        val value = markerValue(token) ?: return MarkerRun.BROKEN
-        when {
-            next < 0 -> if (value > idx + 1) return MarkerRun.BROKEN else next = value + 1
-            value != next -> return MarkerRun.BROKEN
-            else -> next++
-        }
-        block++
-    }
-    return when {
-        block == 0 -> MarkerRun.NONE
-        block >= 2 && pre <= 1 && (pre == 0 || post == 0) -> MarkerRun.CONSECUTIVE
-        else -> MarkerRun.BROKEN
-    }
-}
 
 /** מבנה סכמה שהמייבא לא יודע לפרש — נפילה רועשת במקום דילוג שקט על הספר. */
 internal class SefariaSchemaException(message: String) : IllegalStateException(message)

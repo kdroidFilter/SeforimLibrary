@@ -45,7 +45,7 @@ class SefariaSelfLabeledSegmentsTest {
         // Otzaria: an item that carries its own label for the number keeps it alone.
         assertEquals("(א) נהגו לתייג", payload.lines[2])
         assertEquals("(ב) <b>משנת סופרים</b>", payload.lines[3])
-        // Otzaria: sourceMarkerRun treats a consecutive "{N}" run as the book's own numbering.
+        // Otzaria: "{N}" is the item's own label for its number, kept alone as well.
         assertEquals("{א} אין מראין", payload.lines[6])
     }
 
