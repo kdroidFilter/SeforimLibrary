@@ -25,8 +25,9 @@ class SefariaSelfLabeledSegmentsTest {
                 "<b>משנת סופרים</b>",
                 "תפילין ומזוזות",
                 "<h2>סימן ב</h2>",
-                "(א) אין מראין",
-                "(ב) לראות",
+                // Otzaria: the "{N}" markers are kept (see SefariaBookPayloadReader).
+                "{א} אין מראין",
+                "{ב} לראות",
             ),
             payload.lines,
         )

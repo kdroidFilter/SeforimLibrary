@@ -732,10 +732,11 @@ internal class SefariaBookPayloadReader(
             if (!content.isNullOrEmpty()) {
                 val collapseBreaks = collapsesInlineBreaks(bookEnTitle)
                 val stripFootnotes = hasTranslatorFootnotes(refPrefix)
-                val selfLabeled = hasSelfLabeledSegments(bookEnTitle)
+                // Otzaria: Mishnah Berurah's "{א}" markers stay as Sefaria prints them. Line ids
+                // are content-keyed here, so normalizing them would re-key 1,011 lines and move
+                // the Shaar HaTziyun anchors stored in otzaria-library.
                 fun clean(collapse: Boolean) =
                     cleanSefariaLine(content, collapseInlineBreaks = collapse, stripFootnotes = stripFootnotes)
-                        .let { if (selfLabeled) normalizeSegmentMarker(it) else it }
                 val normalized = clean(collapseBreaks)
                 // A second walk of the book repeats the same separations: count them once.
                 val cleaned = SefariaDashlessDibburim.separate(bookHeTitle, normalized, recordStats = !labels.repeatedWalk)
