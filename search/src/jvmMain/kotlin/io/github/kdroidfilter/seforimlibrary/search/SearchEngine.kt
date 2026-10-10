@@ -86,6 +86,25 @@ interface SearchEngine : Closeable {
     fun buildSnippet(rawText: String, query: String, near: Int): String
 
     /**
+     * The words that stand for [query] in [text] (plain, diacritics allowed), as ranges of [text]: the one rule every
+     * view highlights a search with (results' snippets, their preview, the reader's smart find). A query word counts
+     * as itself (prefixed, or inside a longer word from 4 letters) or as one of its inflections; consecutive matched
+     * words form one range.
+     */
+    fun highlightRanges(text: String, query: String): List<IntRange> = emptyList()
+
+    /**
+     * What to highlight of [query] in found lines [texts] (plain): [highlightRanges] where the query's words show,
+     * else, for engines that search by meaning, the passage closest in meaning to the query (the whole line when it
+     * is a single clause). One batch, as the meaning takes a model run.
+     */
+    suspend fun highlights(texts: List<String>, query: String): List<TextHighlights> =
+        texts.map { TextHighlights(highlightRanges(it, query)) }
+
+    /** A snippet of [text] (snippet text, see [SnippetSources.clean]) laid out around [ranges], bold. */
+    fun rangeSnippet(text: String, ranges: List<IntRange>): String = text
+
+    /**
      * Fills `snippet` and `rawText` of [hits] fetched without snippets (`nextPage(limit, snippets = false)`), so
      * only the hits actually shown pay for their snippet. Order and other fields are kept.
      */
@@ -102,24 +121,9 @@ interface SearchEngine : Closeable {
     suspend fun warmUp() {}
 
     /**
-     * Returns the contiguous passage within [text] whose meaning is closest to [query],
-     * for semantic highlighting (using the same dense encoder as semantic search).
-     *
-     * The result is a verbatim substring of [text] so callers can locate it with the
-     * usual diacritic-insensitive matching and highlight that single span — instead of
-     * scattering dictionary-expanded word matches that don't reflect meaning.
-     *
-     * @return the best-matching passage, or null when dense search is unavailable or no
-     *         passage stands out (e.g. the text is a single short clause).
-     */
-    suspend fun semanticSpan(query: String, text: String): String? = null
-
-    /**
-     * Embedding-based find-in-page within a single book: returns the ids of the lines
-     * semantically closest to [query] (dense KNN over the index, scoped to [bookId]),
-     * ordered by relevance. Used by the "smart" find mode — the simple mode matches literal
-     * words instead. The per-line passage to highlight is computed by the caller via
-     * [semanticSpan] on the displayed text. Empty when dense search is unavailable.
+     * Smart find-in-page within a single book: the ids of its lines the search finds for [query] (its words, fused
+     * with the lines closest in meaning where dense search is available), best first. The simple mode matches literal
+     * words instead. Each line is highlighted with [highlights]. Empty when dense search is unavailable.
      */
     suspend fun semanticFind(query: String, bookId: Long, limit: Int): List<Long> = emptyList()
 
@@ -169,3 +173,14 @@ interface SearchEngine : Closeable {
         baseBookOnly: Boolean = false
     ): SearchFacets?
 }
+
+/**
+ * What a search highlights in a found line.
+ *
+ * @property ranges the highlighted ranges of the line's text
+ * @property byMeaning true when they are the passage closest in meaning, none of the query's words being there
+ */
+data class TextHighlights(
+    val ranges: List<IntRange>,
+    val byMeaning: Boolean = false
+)

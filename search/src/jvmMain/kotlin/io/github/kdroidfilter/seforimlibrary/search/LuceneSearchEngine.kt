@@ -38,8 +38,6 @@ import org.apache.lucene.util.QueryBuilder
 import org.apache.lucene.store.FSDirectory
 import org.apache.lucene.store.NIOFSDirectory
 import org.apache.lucene.document.IntPoint
-import org.jsoup.Jsoup
-import org.jsoup.safety.Safelist
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
@@ -59,6 +57,8 @@ private const val MAX_SYNONYM_BOOST_TERMS: Int = 256
 private const val SNIPPET_NEIGHBOR_WINDOW = 4
 private const val SNIPPET_MIN_LENGTH = 280
 private const val FIELD_BOOK_ID = "book_id"
+private const val DEFAULT_NEAR = 5
+private const val PLAN_CACHE_SIZE = 16
 private const val FIELD_ANCESTOR_CATEGORY_IDS = "ancestor_category_ids"
 // Searches run by warmUp(): one and several words, common and rarer ones, a quoted phrase, the divine name (whose
 // dictionary entry is the largest)
@@ -258,7 +258,7 @@ class LuceneSearchEngine(
         baseBookOnly: Boolean
     ): SearchSession? {
         val context = buildSearchContext(query, near, bookFilter, categoryFilter, bookIds, lineIds, baseBookOnly) ?: return null
-        return LuceneSearchSession(context.query, context.snippetTerms, acquireSearcher())
+        return LuceneSearchSession(context.query, context, acquireSearcher())
     }
 
     override suspend fun attachSnippets(hits: List<LineHit>, query: String, near: Int): List<LineHit> {
@@ -266,8 +266,8 @@ class LuceneSearchEngine(
         val context = buildSearchContext(query, near, null, null, null, null) ?: return hits
         val sources = withContext(Dispatchers.IO) { snippetSources(hits.map { LineSnippetInfo(it.lineId, it.bookId, it.lineIndex) }) }
         return hits.map { hit ->
-            val raw = sources[hit.lineId] ?: hit.rawText
-            hit.copy(snippet = SnippetBuilder.build(raw, context.snippetTerms), rawText = raw)
+            val source = sources[hit.lineId] ?: SnippetSource(hit.rawText, 0, hit.rawText.length)
+            hit.copy(snippet = SnippetBuilder.build(source.text, context.highlightPlan, source.lineStart, source.lineEnd), rawText = source.text)
         }
     }
 
@@ -310,27 +310,51 @@ class LuceneSearchEngine(
         }
     }
 
-    override fun buildSnippet(rawText: String, query: String, near: Int): String {
-        val parsed = SearchQueryParser.parse(query)
-        val norm = HebrewTextUtils.normalizeHebrew(parsed.freeText)
-        val exactPhrasesNorm = parsed.exactPhrases
-            .map { HebrewTextUtils.normalizeHebrew(it) }
+    override fun buildSnippet(rawText: String, query: String, near: Int): String =
+        SnippetBuilder.build(SnippetSources.clean(rawText), planFor(query, near))
+
+    override fun highlightRanges(text: String, query: String): List<IntRange> =
+        mergedRanges(text, planFor(query, DEFAULT_NEAR).highlights(text))
+
+    override fun rangeSnippet(text: String, ranges: List<IntRange>): String =
+        SnippetBuilder.build(text, ranges.map { Occurrence(it.first, it.last + 1, 0, EvidenceLevel.LITERAL) })
+
+    // The highlight plans of the latest queries: a results page and its preview ask for the same one many times
+    private val planCache = object : LinkedHashMap<String, HighlightPlan>(PLAN_CACHE_SIZE, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, HighlightPlan>?): Boolean =
+            size > PLAN_CACHE_SIZE
+    }
+
+    private fun planFor(query: String, near: Int): HighlightPlan {
+        synchronized(planCache) { planCache[query]?.let { return it } }
+        val plan = buildSearchContext(query, near, null, null, null, null)?.highlightPlan ?: HighlightPlan.EMPTY
+        synchronized(planCache) { planCache[query] = plan }
+        return plan
+    }
+
+    /**
+     * What a query highlights: each word with its inflections, from the dictionary entries it truly is a form of and
+     * that aren't blacklisted for it. With ה׳ in the query, the lone ה is the divine name.
+     */
+    private fun buildHighlightPlan(
+        tokens: List<String>,
+        hasHashem: Boolean,
+        exactPhrases: List<String>
+    ): HighlightPlan {
+        val forms = tokens.distinct().map { token ->
+            if (hasHashem && highlightKey(token) == "ה") {
+                return@map TokenForms(token, extraLiterals = loadHashemHighlightTerms())
+            }
+            val key = highlightKey(token)
+            val inflections = magicDict?.expansionsFor(listOf(token)).orEmpty()
+                .filter { exp -> exp.inflections.any { highlightKey(it) == key } && !isHallucinatedExpansion(token, exp) }
+                .flatMap { it.inflections }
+            TokenForms(token, inflections)
+        }
+        val phrases = exactPhrases
+            .map { analyzeToTerms(stdAnalyzer, it).orEmpty().joinToString(" ") }
             .filter { it.isNotBlank() }
-        if (norm.isBlank() && exactPhrasesNorm.isEmpty()) return Jsoup.clean(rawText, Safelist.none())
-        val rawClean = Jsoup.clean(rawText, Safelist.none())
-        val analyzedStd = (analyzeToTerms(stdAnalyzer, norm) ?: emptyList())
-        val hasHashem = query.contains("ה׳") || query.contains("ה'")
-        val hashemTerms = if (hasHashem) loadHashemHighlightTerms() else emptyList()
-        // Verbatim tokens from the quoted phrases must be highlighted too (no expansion).
-        val exactPhraseTokens = exactPhrasesNorm.flatMap { analyzeToTerms(stdAnalyzer, it) ?: emptyList() }
-        val highlightTerms = filterTermsForHighlight(
-            analyzedStd + buildNgramTerms(analyzedStd, gram = 4) + hashemTerms + exactPhraseTokens
-        )
-        val anchorBasis = (sequenceOf(norm) + exactPhrasesNorm.asSequence())
-            .filter { it.isNotBlank() }
-            .joinToString(" ")
-        val anchorTerms = buildAnchorTerms(anchorBasis, highlightTerms)
-        return SnippetBuilder.build(rawClean, SnippetTerms(anchorTerms, highlightTerms))
+        return HighlightPlan.build(forms, phrases)
     }
 
     override fun findInBookCandidates(query: String, bookId: Long): LongArray? {
@@ -531,9 +555,9 @@ class LuceneSearchEngine(
 
     // --- Inner SearchSession class ---
 
-    inner class LuceneSearchSession internal constructor(
+    private inner class LuceneSearchSession(
         private val query: Query,
-        private val snippetTerms: SnippetTerms,
+        private val context: SearchContext,
         private val searcher: IndexSearcher
     ) : SearchSession {
         private var after: ScoreDoc? = null
@@ -549,7 +573,7 @@ class LuceneSearchEngine(
                 return@withContext null
             }
             val stored = searcher.storedFields()
-            val hits = mapScoreDocs(stored, top.scoreDocs.asList(), snippetTerms, snippets)
+            val hits = mapScoreDocs(stored, top.scoreDocs.asList(), context, snippets)
             after = top.scoreDocs.last()
             val isLast = top.scoreDocs.size < limit
             if (isLast) finished = true
@@ -586,10 +610,9 @@ class LuceneSearchEngine(
         // The required clauses only: the same matches as [query], without the ranking-only clauses (fuzzy, n-grams,
         // synonym boosts) that cost a rewrite but can't change the hit set
         val matchQuery: Query,
-        val anchorTerms: List<String>,
-        val highlightTerms: List<String>
+        private val plan: Lazy<HighlightPlan>
     ) {
-        val snippetTerms by lazy { SnippetTerms(anchorTerms, highlightTerms) }
+        val highlightPlan: HighlightPlan get() = plan.value
     }
 
     private fun buildSearchContext(
@@ -648,42 +671,8 @@ class LuceneSearchEngine(
             }
         }
 
-        // For HIGHLIGHTING, filter out hallucinated expansions to avoid highlighting unrelated words
-        val tokenExpansionsForHighlight: Map<String, List<MagicDictionaryIndex.Expansion>> =
-            tokenExpansions.mapValues { (token, exps) ->
-                exps.filter { exp ->
-                    val isHallucination = isHallucinatedExpansion(token, exp)
-                    if (isHallucination) {
-                        logger.d { "[DEBUG] Token '$token' -> BLOCKED for highlight (hallucination): base=${exp.base}" }
-                    }
-                    !isHallucination
-                }
-            }
-
-        val allExpansionsForHighlight = tokenExpansionsForHighlight.values.flatten()
-        // Filter out 2-letter terms from dictionary expansions for highlighting
-        // (2-letter words should only be highlighted if explicitly in the query)
-        val expandedTerms = allExpansionsForHighlight
-            .flatMap { it.surface + it.variants + it.base }
-            .filter { it.length > 2 }
-            .distinct()
-        // Add 4-gram terms used in the query (matches text_ng4 clauses) so highlighting can
-        // reflect matches that were found via the n-gram branch.
-        val ngramTerms = buildNgramTerms(analyzedStd, gram = 4)
-        // For highlighting/snippets, use the actual query tokens plus the concrete
-        // terms that the search query uses (expansions + n-grams), and if the query
-        // mentions Hashem explicitly, also include dictionary-based variants of the
-        // divine name from the lexical DB
-        val hashemTerms = if (hasHashem) loadHashemHighlightTerms() else emptyList()
-        // Verbatim tokens from the quoted phrases must be highlighted too (no expansion).
-        val exactPhraseTokens = exactPhrasesNorm.flatMap { analyzeToTerms(stdAnalyzer, it) ?: emptyList() }
-        val highlightTerms = filterTermsForHighlight(
-            analyzedStd + expandedTerms + ngramTerms + hashemTerms + exactPhraseTokens
-        )
-        val anchorBasis = (sequenceOf(norm) + exactPhrasesNorm.asSequence())
-            .filter { it.isNotBlank() }
-            .joinToString(" ")
-        val anchorTerms = buildAnchorTerms(anchorBasis, highlightTerms)
+        // What the snippets highlight: built on first use (facets need none)
+        val highlightPlan = lazy { buildHighlightPlan(analyzedStd, hasHashem, exactPhrasesNorm) }
 
         val builder = BooleanQuery.Builder()
         // Mirrors every required clause of builder (the facets need only the hit set)
@@ -741,8 +730,7 @@ class LuceneSearchEngine(
         return SearchContext(
             query = finalQuery,
             matchQuery = matchBuilder.build(),
-            anchorTerms = anchorTerms,
-            highlightTerms = highlightTerms
+            plan = highlightPlan
         )
     }
 
@@ -751,7 +739,7 @@ class LuceneSearchEngine(
     private suspend fun mapScoreDocs(
         stored: StoredFields,
         scoreDocs: List<ScoreDoc>,
-        snippetTerms: SnippetTerms,
+        context: SearchContext,
         snippets: Boolean = true
     ): List<LineHit> {
         if (scoreDocs.isEmpty()) return emptyList()
@@ -782,11 +770,12 @@ class LuceneSearchEngine(
             )
         }
 
-        val snippetSources: Map<Long, String> =
+        val snippetSources: Map<Long, SnippetSource> =
             if (snippets) snippetSources(docMetas.map { LineSnippetInfo(it.lineId, it.bookId, it.lineIndex) }) else emptyMap()
 
         val hits = docMetas.map { meta ->
-            val raw = snippetSources[meta.lineId] ?: meta.indexedRaw
+            val source = snippetSources[meta.lineId] ?: SnippetSource(meta.indexedRaw, 0, meta.indexedRaw.length)
+            val raw = source.text
             val baseScore = meta.sd.score
 
             // Calculate boost: lower orderIndex = higher boost (only for base books)
@@ -799,7 +788,7 @@ class LuceneSearchEngine(
                 baseScore
             }
 
-            val snippet = if (snippets) SnippetBuilder.build(raw, snippetTerms) else ""
+            val snippet = if (snippets) SnippetBuilder.build(raw, context.highlightPlan, source.lineStart, source.lineEnd) else ""
             LineHit(
                 bookId = meta.bookId,
                 bookTitle = meta.bookTitle,
@@ -816,7 +805,7 @@ class LuceneSearchEngine(
     }
 
     // Snippet sources: from the provider if available, otherwise none (the indexed text_raw fallback)
-    private suspend fun snippetSources(lines: List<LineSnippetInfo>): Map<Long, String> =
+    private suspend fun snippetSources(lines: List<LineSnippetInfo>): Map<Long, SnippetSource> =
         snippetProvider?.getSnippetSources(lines) ?: emptyMap()
 
     private suspend fun doSearch(
@@ -833,7 +822,7 @@ class LuceneSearchEngine(
                 val top = searcher.search(context.query, offset + limit)
                 val stored: StoredFields = searcher.storedFields()
                 val sliced = top.scoreDocs.drop(offset)
-                mapScoreDocs(stored, sliced, context.snippetTerms)
+                mapScoreDocs(stored, sliced, context)
             }
         }
     }
@@ -852,7 +841,7 @@ class LuceneSearchEngine(
                 val top = searcher.search(context.query, offset + limit)
                 val stored: StoredFields = searcher.storedFields()
                 val sliced = top.scoreDocs.drop(offset)
-                mapScoreDocs(stored, sliced, context.snippetTerms)
+                mapScoreDocs(stored, sliced, context)
             }
         }
     }
@@ -1110,50 +1099,6 @@ class LuceneSearchEngine(
             b.add(FuzzyQuery(Term("text", t), 1), BooleanClause.Occur.MUST)
         }
         return b.build()
-    }
-
-    private fun buildAnchorTerms(normQuery: String, analyzedTerms: List<String>): List<String> {
-        val qTokens = normQuery.split("\\s+".toRegex())
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-        val combined = (qTokens + analyzedTerms.map { it.trimEnd('$') })
-        val filtered = filterTermsForHighlight(combined)
-        if (filtered.isNotEmpty()) return filtered
-        val qFiltered = filterTermsForHighlight(qTokens)
-        return qFiltered.ifEmpty { qTokens }
-    }
-
-    private fun filterTermsForHighlight(terms: List<String>): List<String> {
-        if (terms.isEmpty()) return emptyList()
-
-        fun useful(t: String): Boolean {
-            val s = t.trim()
-            if (s.isEmpty()) return false
-            if (s.length < 2) return false
-            if (s.none { it.isLetterOrDigit() }) return false
-            return true
-        }
-        return terms
-            .map { it.trim() }
-            .filter { useful(it) }
-            .distinct()
-            .sortedByDescending { it.length }
-    }
-
-    private fun buildNgramTerms(tokens: List<String>, gram: Int = 4): List<String> {
-        if (gram <= 0) return emptyList()
-        val out = mutableListOf<String>()
-        tokens.forEach { t ->
-            val trimmed = t.trim()
-            if (trimmed.length >= gram) {
-                var i = 0
-                while (i + gram <= trimmed.length) {
-                    out += trimmed.substring(i, i + gram)
-                    i += 1
-                }
-            }
-        }
-        return out.distinct()
     }
 
     private fun buildLimitedTermsForToken(

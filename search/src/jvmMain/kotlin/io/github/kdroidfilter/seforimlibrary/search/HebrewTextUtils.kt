@@ -54,12 +54,22 @@ object HebrewTextUtils {
      * @param text The input text
      * @return Text with final letters replaced
      */
-    fun replaceFinalsWithBase(text: String): String = text
-        .replace('\u05DA', '\u05DB') // ך -> כ
-        .replace('\u05DD', '\u05DE') // ם -> מ
-        .replace('\u05DF', '\u05E0') // ן -> נ
-        .replace('\u05E3', '\u05E4') // ף -> פ
-        .replace('\u05E5', '\u05E6') // ץ -> צ
+    fun replaceFinalsWithBase(text: String): String {
+        if (text.none { it != baseLetter(it) }) return text
+        val sb = StringBuilder(text.length)
+        for (c in text) sb.append(baseLetter(c))
+        return sb.toString()
+    }
+
+    /** [c] with a final letter (sofit) as its base form: ך כ, ם מ, ן נ, ף פ, ץ צ. */
+    fun baseLetter(c: Char): Char = when (c) {
+        '\u05DA' -> '\u05DB'
+        '\u05DD' -> '\u05DE'
+        '\u05DF' -> '\u05E0'
+        '\u05E3' -> '\u05E4'
+        '\u05E5' -> '\u05E6'
+        else -> c
+    }
 
     /**
      * Checks if a character is a Hebrew diacritic (nikud or teamim).
@@ -71,7 +81,10 @@ object HebrewTextUtils {
         val code = c.code
         return (code in 0x0591..0x05AF) || // teamim
                (code in 0x05B0..0x05BD) || // nikud + meteg
-               (c == '\u05C1') || (c == '\u05C2') || (c == '\u05C7')
+               (c == '\u05BF') || // rafe
+               (c == '\u05C1') || (c == '\u05C2') || // shin and sin dots
+               (c == '\u05C4') || (c == '\u05C5') || // upper and lower dots
+               (c == '\u05C7')
     }
 
     /**
