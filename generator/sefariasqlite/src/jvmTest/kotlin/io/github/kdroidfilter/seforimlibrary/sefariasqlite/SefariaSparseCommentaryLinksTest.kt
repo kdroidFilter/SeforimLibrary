@@ -4,6 +4,7 @@ import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
 import io.github.kdroidfilter.seforimlibrary.core.models.Link
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 /**
  * Regression for Zayit issue #462: Sefaria links most Darkhei Moshe seifim to the Beit Yosef
@@ -21,14 +22,16 @@ class SefariaSparseCommentaryLinksTest {
             RefEntry("Beit Yosef, Orach Chayim 1:1:1", "", "by", 1),
             RefEntry("Darkhei Moshe, Orach Chayim 1:2:1", "", "dm", 2),
             RefEntry("Darkhei Moshe (Amiel) 1:1", "", "amiel", 1),
+            RefEntry("Darkhei Moshe, Choshen Mishpat 1:1:1", "", "dm", 3), // Otzaria: left out
         )
         val lineKeyToId = mapOf(
             ("tur" to 0) to 10L,
             ("by" to 0) to 20L,
             ("dm" to 1) to 30L,
             ("amiel" to 0) to 40L,
+            ("dm" to 2) to 31L,
         )
-        val lineIdToBookId = mapOf(10L to tur, 20L to beitYosef, 30L to darkheiMoshe, 40L to 9L)
+        val lineIdToBookId = mapOf(10L to tur, 20L to beitYosef, 30L to darkheiMoshe, 31L to darkheiMoshe, 40L to 9L)
 
         val commentary = collectSparseCommentaries(refs, lineKeyToId, lineIdToBookId).single()
 
@@ -37,6 +40,20 @@ class SefariaSparseCommentaryLinksTest {
         })
         assertEquals(listOf(SectionLine(30L, 1, "orach chayim 1", "orach chayim 1:2")), commentary.commentaryLines)
         assertEquals(listOf(SectionLine(10L, 0, "orach chayim 1", "orach chayim 1")), commentary.baseLines)
+    }
+
+    // Otzaria: a title missing from an export that has the others fails the build.
+    @Test
+    fun aMissingBookOfTheTrioFailsLoudly() {
+        val refs = listOf(
+            RefEntry("Tur, Orach Chayim, 1:1", "", "tur", 1),
+            RefEntry("Darkhei Moshe, Orach Chayim 1:2:1", "", "dm", 1),
+        )
+        val lineKeyToId = mapOf(("tur" to 0) to 10L, ("dm" to 0) to 30L)
+        val lineIdToBookId = mapOf(10L to tur, 30L to darkheiMoshe)
+
+        assertFailsWith<IllegalArgumentException> { collectSparseCommentaries(refs, lineKeyToId, lineIdToBookId) }
+        assertEquals(emptyList(), collectSparseCommentaries(emptyList(), emptyMap(), emptyMap()))
     }
 
     @Test

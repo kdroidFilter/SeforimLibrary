@@ -18,6 +18,12 @@ private val sparselyLinkedCommentaries = listOf(
     SparseCommentaryTitles(commentary = "Darkhei Moshe", intermediate = "Beit Yosef", base = "Tur"),
 )
 
+// Otzaria: commentary sections left out of the anchoring. Sefaria links the Tur's Choshen
+// Mishpat to the Beit Yosef by paragraph position, not by seif (2,568 of 3,554 links in
+// v32 disagree with the Tur's own Beit Yosef markers), so anchors through it land on the
+// wrong Tur line. Those seifim keep only the links Sefaria gives them.
+private val unanchoredSections = mapOf("Darkhei Moshe" to "choshen mishpat ")
+
 /**
  * A content line of a book with its top-level section (e.g. "orach chayim 5") and its
  * segment address (e.g. "orach chayim 5:2" for "5:2:1").
@@ -61,9 +67,22 @@ internal fun collectSparseCommentaries(
     }
 
     return sparselyLinkedCommentaries.mapNotNull { titles ->
-        val (commentaryBookId, commentaryLines) = linesOf(titles.commentary) ?: return@mapNotNull null
-        val (intermediateBookId, _) = linesOf(titles.intermediate) ?: return@mapNotNull null
-        val (baseBookId, baseLines) = linesOf(titles.base) ?: return@mapNotNull null
+        // Otzaria: a renamed title must not silently drop the anchoring. All three books or
+        // none (test exports carry none).
+        val found = listOf(titles.commentary, titles.intermediate, titles.base).associateWith { linesOf(it) }
+        if (found.values.all { it == null }) return@mapNotNull null
+        val missing = found.filterValues { it == null }.keys
+        require(missing.isEmpty()) { "Sparse commentary ${titles.commentary}: no lines for $missing in the export" }
+        val (commentaryBookId, allCommentaryLines) = found.getValue(titles.commentary)!!
+        val (intermediateBookId, _) = found.getValue(titles.intermediate)!!
+        val (baseBookId, baseLines) = found.getValue(titles.base)!!
+        val commentaryLines = unanchoredSections[titles.commentary]?.let { prefix ->
+            val kept = allCommentaryLines.filterNot { it.section.startsWith(prefix) }
+            require(kept.size < allCommentaryLines.size) {
+                "Sparse commentary ${titles.commentary}: no line in section '${prefix.trim()}' to leave out"
+            }
+            kept
+        } ?: allCommentaryLines
         SparseCommentary(commentaryBookId, intermediateBookId, baseBookId, commentaryLines, baseLines)
     }
 }
