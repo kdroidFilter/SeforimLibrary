@@ -19,6 +19,8 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.sql.Connection
+import java.sql.DriverManager
 
 /**
  * Phase-2 LINKER importer (stage 5): turns LinkerToOtzaria's ref-based artifacts into
@@ -96,6 +98,7 @@ fun main(args: Array<String>) = runBlocking {
         expectedConnectionTypeId = linkerTypeId,
         minimumNextId = maxLinkId + 1L,
     )
+    var sourceLineConnection: Connection? = null
 
     try {
         repository.executeRawQuery("PRAGMA foreign_keys = OFF")
@@ -217,28 +220,27 @@ fun main(args: Array<String>) = runBlocking {
             """.trimIndent()
         }
         data class SourceLine(val id: Long, val content: String, val contextRef: String)
+        // One persistent read-only connection: outside a transaction the driver opens a new
+        // connection per statement, re-loading the schema and sqlite_stat1/stat4 every lookup.
+        val sourceLineDb = DriverManager.getConnection("jdbc:sqlite:$dbPath").also { sourceLineConnection = it }
+        sourceLineDb.createStatement().use { it.execute("PRAGMA query_only = ON") }
+        val sourceLineStatement = sourceLineDb.prepareStatement(sourceLineSql)
         var cachedSourceBookId = Long.MIN_VALUE
         var cachedSourceLineIndex = Int.MIN_VALUE
         var cachedSourceLine: SourceLine? = null
         fun sourceLineFor(bookId: Long, lineIndex: Int): SourceLine? {
             if (bookId != cachedSourceBookId || lineIndex != cachedSourceLineIndex) {
                 var found: SourceLine? = null
-                driver.executeQuery(if (lineContentSplit) 1002 else 1001,
-                    sourceLineSql,
-                    { c ->
-                        if (c.next().value) {
-                            found = SourceLine(
-                                id = c.getLong(0)!!,
-                                content = c.getString(1) ?: "",
-                                contextRef = c.getString(2) ?: "",
-                            )
-                        }
-                        QueryResult.Value(Unit)
-                    },
-                    2,
-                ) {
-                    bindLong(0, bookId)
-                    bindLong(1, lineIndex.toLong())
+                sourceLineStatement.setLong(1, bookId)
+                sourceLineStatement.setLong(2, lineIndex.toLong())
+                sourceLineStatement.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        found = SourceLine(
+                            id = rs.getLong(1),
+                            content = rs.getString(2) ?: "",
+                            contextRef = rs.getString(3) ?: "",
+                        )
+                    }
                 }
                 cachedSourceBookId = bookId
                 cachedSourceLineIndex = lineIndex
@@ -392,6 +394,7 @@ fun main(args: Array<String>) = runBlocking {
             }
         }
         flush()
+        sourceLineDb.close()
         driver.executeQuery(
             null,
             "SELECT COUNT(*) FROM link WHERE connectionTypeId = ?",
@@ -458,6 +461,7 @@ fun main(args: Array<String>) = runBlocking {
         logger.e(e) { "Error generating LINKER links" }
         throw e
     } finally {
+        sourceLineConnection?.let { runCatching { it.close() } }
         allocator.close()
         repository.close()
     }
