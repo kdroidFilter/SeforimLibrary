@@ -255,3 +255,13 @@ private fun joins(text: String, from: Int, until: Int): Boolean {
     for (i in from until until) if (!text[i].isWhitespace() && text[i] != '־') return false
     return true
 }
+
+/** [ranges] merged where they overlap or touch, sorted. */
+internal fun unionRanges(ranges: List<IntRange>): List<IntRange> {
+    val out = ArrayList<IntRange>()
+    for (r in ranges.sortedBy { it.first }) {
+        val last = out.lastOrNull()
+        if (last != null && r.first <= last.last + 1) out[out.lastIndex] = last.first..maxOf(last.last, r.last) else out += r
+    }
+    return out
+}

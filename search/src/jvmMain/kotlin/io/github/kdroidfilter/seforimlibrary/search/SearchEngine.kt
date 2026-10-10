@@ -96,10 +96,33 @@ interface SearchEngine : Closeable {
     /**
      * What to highlight of [query] in found lines [texts] (plain): [highlightRanges] where the query's words show,
      * else, for engines that search by meaning, the passage closest in meaning to the query (the whole line when it
-     * is a single clause). One batch, as the meaning takes a model run.
+     * is a single clause). With [alwaysByMeaning] (a find by meaning), that passage shows beside the words in every
+     * line. One batch, as the meaning takes a model run.
      */
-    suspend fun highlights(texts: List<String>, query: String): List<TextHighlights> =
-        texts.map { TextHighlights(highlightRanges(it, query)) }
+    suspend fun highlights(
+        texts: List<String>,
+        query: String,
+        alwaysByMeaning: Boolean = false
+    ): List<TextHighlights> {
+        val words = texts.map { highlightRanges(it, query) }
+        val wanted = texts.indices.filter { (alwaysByMeaning || words[it].isEmpty()) && texts[it].isNotBlank() }
+        val passages = if (wanted.isEmpty()) null else passagesByMeaning(query, wanted.map { texts[it] })
+        if (passages == null) return words.map { TextHighlights(it) }
+        val passageOf = wanted.indices.associate { wanted[it] to passages[it] }
+        return texts.mapIndexed { i, text ->
+            if (i !in passageOf) return@mapIndexed TextHighlights(words[i])
+            // A single clause is the passage itself
+            val passage = passageOf[i] ?: text.trim()
+            val at = text.indexOf(passage)
+            if (at < 0) TextHighlights(words[i]) else TextHighlights(unionRanges(words[i] + listOf(at until at + passage.length)), byMeaning = true)
+        }
+    }
+
+    /**
+     * For engines that search by meaning, the passage of each of [texts] closest in meaning to [query] (a verbatim
+     * part of it; null when the text is a single clause), in one batch; null when the engine has no meaning search.
+     */
+    suspend fun passagesByMeaning(query: String, texts: List<String>): List<String?>? = null
 
     /** A snippet of [text] (snippet text, see [SnippetSources.clean]) laid out around [ranges], bold. */
     fun rangeSnippet(text: String, ranges: List<IntRange>): String = text
@@ -178,7 +201,7 @@ interface SearchEngine : Closeable {
  * What a search highlights in a found line.
  *
  * @property ranges the highlighted ranges of the line's text
- * @property byMeaning true when they are the passage closest in meaning, none of the query's words being there
+ * @property byMeaning true when they include the passage closest in meaning
  */
 data class TextHighlights(
     val ranges: List<IntRange>,
