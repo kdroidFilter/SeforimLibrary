@@ -21,10 +21,16 @@ class MagicDictionaryIndex private constructor(
     private val norm: (String) -> String,
     private val dbFile: Path
 ) {
+    /**
+     * The forms a token expands to. [surface] holds every form (inflections, then the dictionary's variants, then
+     * the base) as the ranking uses them; [inflections] only the base's inflected forms and the base itself: the
+     * variants also hold loose associations (יום for הוא), so they don't count as the same word.
+     */
     data class Expansion(
         val surface: List<String>,
         val variants: List<String>,
-        val base: List<String>
+        val base: List<String>,
+        val inflections: List<String> = emptyList()
     )
 
     private val url = "jdbc:sqlite:${dbFile.toAbsolutePath()}"
@@ -81,8 +87,12 @@ class MagicDictionaryIndex private constructor(
         }
         if (matchingBase != null) return matchingBase
 
-        // Otherwise, prefer the largest expansion (more terms = more complete paradigm)
-        return expansions.maxByOrNull { it.surface.size }
+        // Then the entries the token truly is a form of: one reached only through a dictionary variant (loose
+        // associations: לעולם to יום) isn't the token's paradigm, however large
+        val ownEntries = expansions.filter { exp -> exp.inflections.any { it == normalized } }
+
+        // The largest of them (more terms = more complete paradigm)
+        return ownEntries.ifEmpty { expansions }.maxByOrNull { it.surface.size }
     }
 
     private fun expansionsForToken(token: String): List<Expansion> = lookup(token, async = false).join()
@@ -118,7 +128,8 @@ class MagicDictionaryIndex private constructor(
                     val surfaces = (existing.surface + exp.surface).distinct()
                     val variants = (existing.variants + exp.variants).distinct()
                     val base = (existing.base + exp.base).distinct()
-                    mergedByBase[baseId] = Expansion(surfaces, variants, base)
+                    val inflections = (existing.inflections + exp.inflections).distinct()
+                    mergedByBase[baseId] = Expansion(surfaces, variants, base, inflections)
                 }
             }
         }
@@ -170,7 +181,8 @@ class MagicDictionaryIndex private constructor(
                     val exp = Expansion(
                         surface = allTerms,
                         variants = emptyList(),
-                        base = baseTerms
+                        base = baseTerms,
+                        inflections = (surfaceN + baseTerms).distinct()
                     )
 
                     synchronized(baseCache) {

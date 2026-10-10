@@ -283,6 +283,29 @@ class MagicDictionaryIndexTest {
         }
     }
 
+    @Test
+    fun `expansion prefers an entry the token is a form of over a larger one reached by a variant`() {
+        val tempFile = createValidTestDatabase()
+        try {
+            DriverManager.getConnection("jdbc:sqlite:${tempFile.toAbsolutePath()}").use { conn ->
+                conn.createStatement().use { stmt ->
+                    // לעולם is a form of עולם, and a variant of a form of the much larger יום
+                    stmt.execute("INSERT INTO base (id, value) VALUES (1, 'עולם'), (2, 'יום')")
+                    stmt.execute("INSERT INTO surface (id, value, base_id) VALUES (1, 'לעולם', 1), (2, 'עולם', 1)")
+                    stmt.execute(
+                        "INSERT INTO surface (id, value, base_id) VALUES (3, 'ימים', 2), (4, 'יומא', 2), (5, 'ביום', 2), (6, 'יום', 2)"
+                    )
+                    stmt.execute("INSERT INTO variant (id, value) VALUES (1, 'לעולם')")
+                    stmt.execute("INSERT INTO surface_variant (surface_id, variant_id) VALUES (3, 1)")
+                }
+            }
+            val index = assertNotNull(MagicDictionaryIndex.load(simpleNorm, tempFile))
+            assertEquals(listOf("עולם"), assertNotNull(index.expansionFor("לעולם")).base)
+        } finally {
+            Files.deleteIfExists(tempFile)
+        }
+    }
+
     // --- Caching tests ---
 
     @Test
