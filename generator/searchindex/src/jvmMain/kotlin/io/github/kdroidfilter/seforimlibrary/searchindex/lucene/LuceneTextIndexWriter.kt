@@ -3,17 +3,24 @@ package io.github.kdroidfilter.seforimlibrary.searchindex.lucene
 import io.github.kdroidfilter.seforimlibrary.searchindex.TextIndexWriter
 import org.apache.lucene.analysis.Analyzer
 import org.apache.lucene.analysis.standard.StandardAnalyzer
+import org.apache.lucene.codecs.KnnVectorsFormat
+import org.apache.lucene.codecs.lucene104.Lucene104Codec
+import org.apache.lucene.codecs.lucene104.Lucene104HnswScalarQuantizedVectorsFormat
 import org.apache.lucene.document.Document
 import org.apache.lucene.document.Field
 import org.apache.lucene.document.IntPoint
 import org.apache.lucene.document.KnnFloatVectorField
+import org.apache.lucene.document.NumericDocValuesField
 import org.apache.lucene.document.StoredField
 import org.apache.lucene.document.StringField
 import org.apache.lucene.document.TextField
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.index.IndexWriterConfig
 import org.apache.lucene.store.FSDirectory
+import org.apache.lucene.util.quantization.QuantizedByteVectorValues
 import java.nio.file.Path
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * Lucene-backed implementation of [TextIndexWriter].
@@ -29,12 +36,17 @@ class LuceneTextIndexWriter(
     // Optional dense embeddings: if provided, each line doc also gets a
     // KnnFloatVectorField("vec", COSINE) -> SINGLE index holding text + vectors.
     private val vectorProvider: ((Long) -> FloatArray?)? = null,
+    // Merge to a single segment on close: one HNSW graph and one term dictionary to search instead of dozens
+    private val forceMerge: Boolean = true,
 ) : TextIndexWriter {
     companion object Fields {
         const val FIELD_TYPE = "type"
         const val TYPE_LINE = "line"
         const val TYPE_BOOK_TITLE = "book_title"
+        // Base-book lines get their own vector field: the default search is restricted to base books (~4% of the
+        // lines), which a filter on one shared graph serves badly; a search over all lines queries both fields
         const val FIELD_VEC = "vec"
+        const val FIELD_VEC_BASE = "vec_base"
 
         const val FIELD_BOOK_ID = "book_id"
         const val FIELD_CATEGORY_ID = "category_id"
@@ -53,10 +65,26 @@ class LuceneTextIndexWriter(
 
     private val dir = FSDirectory.open(indexDir)
     private val writer: IndexWriter
+    private val mergeWorkers = Runtime.getRuntime().availableProcessors()
+    private val mergeExecutor: ExecutorService = Executors.newFixedThreadPool(mergeWorkers)
 
     init {
+        // int8 vectors (optimized scalar quantization): the graph search reads a quarter of the float bytes, so the
+        // hot part of the index fits the RAM of a modest machine; the raw floats stay on disk for the merges
+        val vectorsFormat = Lucene104HnswScalarQuantizedVectorsFormat(
+            QuantizedByteVectorValues.ScalarEncoding.UNSIGNED_BYTE,
+            16,
+            100,
+            mergeWorkers,
+            mergeExecutor,
+        )
         val cfg = IndexWriterConfig(analyzer).apply {
             openMode = IndexWriterConfig.OpenMode.CREATE
+            codec = object : Lucene104Codec() {
+                override fun getKnnVectorsFormatForField(field: String): KnnVectorsFormat = vectorsFormat
+            }
+            // Fewer, larger flushed segments: every merge of vector segments rebuilds a graph
+            ramBufferSizeMB = 1024.0
         }
         writer = IndexWriter(dir, cfg)
     }
@@ -79,6 +107,8 @@ class LuceneTextIndexWriter(
 
             add(StoredField(FIELD_BOOK_ID, bookId))
             add(IntPoint(FIELD_BOOK_ID, bookId.toInt()))
+            // Doc values: the search facets count hits per book without reading stored fields
+            add(NumericDocValuesField(FIELD_BOOK_ID, bookId))
             add(StoredField(FIELD_CATEGORY_ID, categoryId))
             add(IntPoint(FIELD_CATEGORY_ID, categoryId.toInt()))
             add(StoredField(FIELD_BOOK_TITLE, bookTitle))
@@ -114,7 +144,8 @@ class LuceneTextIndexWriter(
 
             // Dense embedding (single fused index): attach the line's vector if available.
             vectorProvider?.invoke(lineId)?.let { vec ->
-                add(KnnFloatVectorField(FIELD_VEC, vec, org.apache.lucene.index.VectorSimilarityFunction.COSINE))
+                val field = if (isBaseBook) FIELD_VEC_BASE else FIELD_VEC
+                add(KnnFloatVectorField(field, vec, org.apache.lucene.index.VectorSimilarityFunction.COSINE))
             }
         }
         writer.addDocument(doc)
@@ -125,6 +156,8 @@ class LuceneTextIndexWriter(
             add(StringField(FIELD_TYPE, TYPE_BOOK_TITLE, Field.Store.NO))
             add(StoredField(FIELD_BOOK_ID, bookId))
             add(IntPoint(FIELD_BOOK_ID, bookId.toInt()))
+            // Same schema as the line documents (Lucene requires one per field)
+            add(NumericDocValuesField(FIELD_BOOK_ID, bookId))
             add(StoredField(FIELD_CATEGORY_ID, categoryId))
             add(IntPoint(FIELD_CATEGORY_ID, categoryId.toInt()))
             add(StoredField(FIELD_BOOK_TITLE, displayTitle))
@@ -145,7 +178,15 @@ class LuceneTextIndexWriter(
     }
 
     override fun close() {
-        writer.close()
-        dir.close()
+        try {
+            if (forceMerge) {
+                writer.forceMerge(1)
+                writer.commit()
+            }
+            writer.close()
+        } finally {
+            mergeExecutor.shutdown()
+            dir.close()
+        }
     }
 }
