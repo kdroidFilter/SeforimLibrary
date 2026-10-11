@@ -207,8 +207,12 @@ class InMemoryIdAllocator private constructor(
 
     override fun registerBookAlias(oldKey: BookKey, newKey: BookKey, atVersion: Int) {
         val existing = books[oldKey] ?: return
-        // Move the id under the new natural key so subsequent lookups hit.
-        books.putIfAbsent(newKey, existing)
+        // Move (not copy) the id under the new natural key: id_book.id is UNIQUE,
+        // so keeping it under both keys fails the snapshot. The alias still
+        // resolves the old key.
+        val held = books.putIfAbsent(newKey, existing)
+        check(held == null || held == existing) { "Book alias $oldKey -> $newKey: $newKey already holds id $held" }
+        books.remove(oldKey, existing)
         bookAliases[oldKey] = BookAlias(oldKey, newKey, atVersion)
         logger.i { "Registered book alias: $oldKey -> $newKey (id=$existing, version=$atVersion)" }
     }
