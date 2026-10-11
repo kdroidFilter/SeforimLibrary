@@ -315,7 +315,11 @@ class InMemoryIdAllocator private constructor(
     override fun registerBookAlias(oldKey: BookKey, newKey: BookKey, atVersion: Int) {
         val existing = books[oldKey] ?: return
         // Move the id under the new natural key so subsequent lookups hit.
-        books.putIfAbsent(newKey, existing)
+        // Otzaria: move, not copy. id_book holds one key per id (UNIQUE), so a copy failed
+        // the snapshot; the alias still resolves the old key.
+        val held = books.putIfAbsent(newKey, existing)
+        check(held == null || held == existing) { "Book alias $oldKey -> $newKey: $newKey already holds id $held" }
+        books.remove(oldKey, existing)
         bookAliases[oldKey] = BookAlias(oldKey, newKey, atVersion)
         logger.i { "Registered book alias: $oldKey -> $newKey (id=$existing, version=$atVersion)" }
     }
@@ -327,7 +331,9 @@ class InMemoryIdAllocator private constructor(
     override fun previousSourceHash(key: BookKey): BookSourceHash? =
         previousSourceHashes[key]
 
-    override fun knownBookKeys(): Map<BookKey, Long> = books.toMap()
+    // Otzaria: an aliased key left [books] for its new key, and still names that book.
+    override fun knownBookKeys(): Map<BookKey, Long> =
+        books.toMap() + bookAliases.values.mapNotNull { alias -> books[alias.newKey]?.let { alias.oldKey to it } }
 
     override fun lineContentHashes(bookIds: Set<Long>): Map<Long, List<ByteArray>> {
         if (bookIds.isEmpty()) return emptyMap()
