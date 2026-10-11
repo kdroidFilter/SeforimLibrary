@@ -1581,8 +1581,8 @@ jobs:
             bash .pipeline-control/.github/scripts/wait_for_relink_run.sh
           # E2: there is no early upload to reap here any more — this step no
           # longer starts one (see the A2/E2 note above). The 'buildstate' label
-          # the patch fan starts is reaped in that step, before the publish step
-          # can race it on the same release.
+          # the patch fan starts is reaped first thing in the publish step, before
+          # it touches the same release.
           # The exact child is terminal now. Reacquire before this job touches the DB
           # again; if another heavy phase won the race, fail rather than overlap.
           python3 .pipeline-control/.github/scripts/host_lease.py start \
@@ -1938,6 +1938,7 @@ jobs:
       # everything so disk peak stays bounded; PATCH_FAN_PARALLELISM anchors
       # are in flight at once.
       - name: Produce + verify patch fan
+        id: patch_fan
         if: steps.discover.outputs.has_prev == 'true'
         env:
           # Patch compression level. At L22 zstd's job size exceeds a whole
@@ -2101,9 +2102,6 @@ jobs:
             echo "=== anchor prefetch log ==="
             cat "$PREFETCH_DIR/.log"
           fi
-          # Never leave an upload in flight for the publish step to race.
-          bash .pipeline-control/.github/scripts/upload_early_release_assets.sh \
-            wait buildstate 3600
           echo "=== Final patch artefacts ==="
           ls -lh patches/ || true
           # Barriers are patch-*.db.zst too: a barrier-only fan is a publishable full-only release.
@@ -2333,8 +2331,16 @@ jobs:
           RELEASE_TAG: ${{ steps.release_meta.outputs.release_tag }}
           PRERELEASE: ${{ inputs.prerelease }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
+          # 'success' exactly when the step that starts the early upload ran.
+          EARLY_UPLOAD_STEP: ${{ steps.patch_fan.outcome }}
         run: |
           set -euo pipefail
+          # Reap the early buildstate upload before anything here touches the
+          # draft, so no upload is in flight once this step talks to the release.
+          if [ "$EARLY_UPLOAD_STEP" = success ]; then
+            bash .pipeline-control/.github/scripts/upload_early_release_assets.sh \
+              wait buildstate 3600
+          fi
           # One implementation of create/adopt/reconcile/upload, shared with the
           # early upload that runs during the relink wait and the patch fan — so
           # the draft this step adopts and the draft they created cannot drift.
