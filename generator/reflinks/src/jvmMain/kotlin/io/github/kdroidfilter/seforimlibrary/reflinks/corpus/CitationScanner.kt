@@ -8,12 +8,14 @@ import io.github.kdroidfilter.seforimlibrary.reflinks.Family
 import io.github.kdroidfilter.seforimlibrary.reflinks.HebrewText
 import io.github.kdroidfilter.seforimlibrary.reflinks.ParsedCitation
 import io.github.kdroidfilter.seforimlibrary.reflinks.Precision
+import io.github.kdroidfilter.seforimlibrary.reflinks.SefariaRefParser
 import io.github.kdroidfilter.seforimlibrary.reflinks.Section
 import io.github.kdroidfilter.seforimlibrary.reflinks.ShulchanArukhCommentators
 import io.github.kdroidfilter.seforimlibrary.reflinks.arbitration.Antecedent
 import io.github.kdroidfilter.seforimlibrary.reflinks.arbitration.ArbitrationCase
 import io.github.kdroidfilter.seforimlibrary.reflinks.arbitration.Candidate
 import io.github.kdroidfilter.seforimlibrary.reflinks.arbitration.CaseKind
+import java.net.URLDecoder
 
 /** How a link was decided, kept with the link so the app can filter by confidence without a rebuild. */
 enum class Method {
@@ -31,6 +33,12 @@ enum class Method {
 
     /** "(שם …)" whose antecedent is in the same line. */
     IBID_SAME_LINE,
+
+    /** `<a href="otzaria://inline-link?path=…&index=…">` already in the text. */
+    OTZARIA_ANCHOR,
+
+    /** `<a class="refLink" data-ref="…">` left by Sefaria in its texts. */
+    SEFARIA_ANCHOR,
 }
 
 /** Which kind of ambiguity produced an arbitration case (reporting only). */
@@ -62,11 +70,17 @@ sealed interface Occurrence {
  * - a folio alone resolves through the name written before it, a chapter name, or the commentary's own tractate,
  *   never through "the last tractate cited" in previous lines.
  */
-class CitationScanner(private val index: HeRefIndex) {
+class CitationScanner(private val index: HeRefIndex, private val sefariaRefs: SefariaRefParser? = null) {
 
     private val parser = CitationParser(index.rambamTitles())
     private val group = Regex("[(\\[]([^()\\[\\]]{1,80})[)\\]]")
     private val tags = Regex("<[^>]+>")
+    private val anchor = Regex("<a\\b([^>]*)>(.*?)</a>", RegexOption.DOT_MATCHES_ALL)
+    private val otzariaHref = Regex("href=\"otzaria://inline-link\\?([^\"]+)\"")
+    private val sefariaDataRef = Regex("data-ref=\"([^\"]+)\"")
+
+    /** "(דף עד)", "(קיח.)", "(כא ע\"ב)": a bare "(ב)" after a chapter name is a note marker, not a folio. */
+    private val explicitFolio = Regex("^(?:דף|ד')\\s|[.:](?:\\s|$)|ע\"[אב]")
     private val baseTractate = Regex("על (?:מסכת )?(" + BookAliases.bavli.sortedByDescending { it.length }.joinToString("|") + ")$")
 
     private data class Ante(val citation: Citation, val target: LineRef?, val lineId: Long, val raw: String, val excerpt: String)
@@ -79,16 +93,51 @@ class CitationScanner(private val index: HeRefIndex) {
                 currentBook = bookId
                 last = null
             }
-            if ('(' !in content && '[' !in content) return@forEachLine
+            if ('(' !in content && '[' !in content && "<a" !in content) return@forEachLine
             val text = tags.replace(content, "")
             val bookTitle = index.bookTitles[bookId].orEmpty()
+            // Links already in the text win over the citation written inside them
+            val anchored = if ("<a" in content) anchors(content, lineId, bookId).onEach(onOccurrence).map { it.start until it.end } else emptyList()
             for (m in group.findAll(text)) {
+                if (anchored.any { it.first < m.range.last + 1 && m.range.first < it.last + 1 }) continue
                 val inside = HebrewText.stripNikud(m.groups[1]!!.value).trim()
                 if (inside.none { it in 'א'..'ת' } || inside.split(' ').size > 8) continue
                 val occ = OccurrenceContext(text, m.range.first, m.range.last + 1, inside, lineId, bookId, bookTitle)
                 last = handle(occ, last, onOccurrence) ?: last
             }
         }
+    }
+
+    /** Otzaria inline links and Sefaria refLinks; offsets are those of the anchor text in the tag-stripped line. */
+    private fun anchors(content: String, lineId: Long, bookId: Long): List<Occurrence.Linked> = anchor.findAll(content).mapNotNull { m ->
+        val attributes = m.groupValues[1].replace("&amp;", "&")
+        val target = otzariaTarget(attributes) ?: sefariaTarget(attributes) ?: return@mapNotNull null
+        val start = tags.replace(content.substring(0, m.groups[2]!!.range.first), "").length
+        val end = start + tags.replace(m.groupValues[2], "").length
+        Occurrence.Linked(lineId, bookId, start, end, target.first, target.second)
+    }.toList()
+
+    /** "otzaria://inline-link?path=<book>.txt&index=<1-based line>" */
+    private fun otzariaTarget(attributes: String): Pair<LineRef, Method>? {
+        val href = otzariaHref.find(attributes)?.groupValues?.get(1) ?: return null
+        val params = href.split('&').associate { it.substringBefore('=') to URLDecoder.decode(it.substringAfter('='), Charsets.UTF_8) }
+        val title = params["path"]?.substringAfterLast('/')?.removeSuffix(".txt") ?: return null
+        val lineIndex = params["index"]?.toIntOrNull()?.minus(1) ?: return null
+        val bookId = index.bookIds[title] ?: return null
+        return index.lineAt(bookId, lineIndex)?.let { it to Method.OTZARIA_ANCHOR }
+    }
+
+    private fun sefariaTarget(attributes: String): Pair<LineRef, Method>? {
+        val dataRef = sefariaDataRef.find(attributes)?.groupValues?.get(1) ?: return null
+        val ref = sefariaRefs?.parse(dataRef) ?: return null
+        val target = if (ref.sections.isEmpty()) {
+            index.bookIds[ref.heTitle]?.let { index.lineAt(it, 0) }
+        } else {
+            // A Sefaria ref may stop at a deeper level than the heRef (or the reverse): take the longest known prefix
+            val book = index.book(ref.heTitle)
+            (ref.sections.size downTo 1).firstNotNullOfOrNull { book[ref.sections.take(it)] }
+        }
+        return target?.let { it to Method.SEFARIA_ANCHOR }
     }
 
     private data class OccurrenceContext(
@@ -170,7 +219,7 @@ class CitationScanner(private val index: HeRefIndex) {
 
         // "בפ' מרובה (דף עד)" / "בפרק כל כתבי (קיח.)"
         val chapterAt = words.indexOfLast { it.trimStart('ו', 'ב') in setOf("פרק", "פ'", "פר'") }
-        if (chapterAt >= 0 && chapterAt < words.size - 1) {
+        if (chapterAt >= 0 && chapterAt < words.size - 1 && explicitFolio.containsMatchIn(o.inside)) {
             val name = HebrewText.nameKey(words.drop(chapterAt + 1).joinToString(" ").trimEnd(',', ':'))
             index.bavliChapterNames[name]?.let { tractate ->
                 parser.parse("$tractate ${o.inside}")?.takeIf { it.citation.family == Family.BAVLI && it.citation.trailingTokens == 0 }

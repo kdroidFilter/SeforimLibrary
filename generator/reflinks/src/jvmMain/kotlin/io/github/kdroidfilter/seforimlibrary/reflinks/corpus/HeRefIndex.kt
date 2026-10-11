@@ -1,5 +1,6 @@
 package io.github.kdroidfilter.seforimlibrary.reflinks.corpus
 
+import io.github.kdroidfilter.seforimlibrary.reflinks.BookAliases
 import io.github.kdroidfilter.seforimlibrary.reflinks.Citation
 import io.github.kdroidfilter.seforimlibrary.reflinks.Family
 import io.github.kdroidfilter.seforimlibrary.reflinks.HebrewText
@@ -54,6 +55,14 @@ class HeRefIndex(dbPath: String) : AutoCloseable {
         else -> book(citation.title)[citation.sections]
     }
 
+    /** The line at [lineIndex] (0-based) of a book. */
+    fun lineAt(bookId: Long, lineIndex: Int): LineRef? =
+        db.prepareStatement("SELECT id, heRef FROM line WHERE bookId = ? AND lineIndex = ?").use { ps ->
+            ps.setLong(1, bookId)
+            ps.setInt(2, lineIndex)
+            ps.executeQuery().use { rs -> if (rs.next()) LineRef(bookId, rs.getLong(1), lineIndex, rs.getString(2).orEmpty()) else null }
+        }
+
     /** First [words] words of a line, as plain text (no tags, no nikud). */
     fun snippet(lineId: Long, words: Int = 30): String =
         db.prepareStatement("SELECT content FROM line WHERE id = ?").use { ps ->
@@ -98,7 +107,11 @@ class HeRefIndex(dbPath: String) : AutoCloseable {
         val seen = HashMap<String, MutableSet<String>>()
         db.createStatement().use { st ->
             st.executeQuery(sql).use { rs ->
-                while (rs.next()) seen.getOrPut(HebrewText.nameKey(rs.getString(1))) { mutableSetOf() } += rs.getString(2)
+                while (rs.next()) {
+                    // Mishna and Yerushalmi share the chapter names: keep the Bavli only
+                    if (rs.getString(2) !in BookAliases.bavli) continue
+                    seen.getOrPut(HebrewText.nameKey(rs.getString(1))) { mutableSetOf() } += rs.getString(2)
+                }
             }
         }
         seen.filterValues { it.size == 1 }.mapValues { it.value.single() }

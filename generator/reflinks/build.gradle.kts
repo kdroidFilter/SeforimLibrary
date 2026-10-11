@@ -49,6 +49,7 @@ tasks.register<JavaExec>("arbitrateRefs") {
     args = buildList {
         add("--db=" + ((project.findProperty("seforimDb") as String?) ?: defaultDb))
         add("--decisions=$decisionsFile")
+        add("--sefaria-schemas=" + rootProject.layout.projectDirectory.dir("generator/sefariasqlite/build/sefaria/export/schemas").asFile.absolutePath)
         (project.findProperty("llmKeyFile") as String?)?.let { add("--key-file=$it") }
         (project.findProperty("llmModel") as String?)?.let { add("--model=$it") }
         (project.findProperty("maxSpend") as String?)?.let { add("--max-spend=$it") }

@@ -10,7 +10,9 @@ import io.github.kdroidfilter.seforimlibrary.reflinks.arbitration.Prompts
 import io.github.kdroidfilter.seforimlibrary.reflinks.corpus.CaseClass
 import io.github.kdroidfilter.seforimlibrary.reflinks.corpus.CitationScanner
 import io.github.kdroidfilter.seforimlibrary.reflinks.corpus.HeRefIndex
+import io.github.kdroidfilter.seforimlibrary.reflinks.corpus.Method
 import io.github.kdroidfilter.seforimlibrary.reflinks.corpus.Occurrence
+import io.github.kdroidfilter.seforimlibrary.reflinks.corpus.SefariaSchemas
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
 import java.nio.file.Path
@@ -26,6 +28,8 @@ private val CLASS_PRIORITY = listOf(
     CaseClass.PEREK_OR_DAF,
     CaseClass.IBID_BARE,
 )
+
+private const val DEFAULT_SEFARIA_SCHEMAS = "generator/sefariasqlite/build/sefaria/export/schemas"
 
 private const val DEFAULT_MODEL = "meta/muse-spark-1.3-contributor"
 
@@ -64,8 +68,11 @@ fun main(args: Array<String>): Unit = runBlocking {
     val cases = LinkedHashMap<String, ArbitrationCase>()
     val classOf = HashMap<String, CaseClass>()
     val byClass = mutableMapOf<CaseClass, Int>()
+    val linkedBy = mutableMapOf<Method, Int>()
+    val sefariaRefs = SefariaRefParser(SefariaSchemas.load(Path.of(opts["sefaria-schemas"] ?: DEFAULT_SEFARIA_SCHEMAS)))
     HeRefIndex(dbPath).use { index ->
-        CitationScanner(index).scan { occ ->
+        CitationScanner(index, sefariaRefs).scan { occ ->
+            if (occ is Occurrence.Linked) linkedBy.merge(occ.method, 1, Int::plus)
             if (occ is Occurrence.Ambiguous && (classes == null || occ.caseClass in classes)) {
                 val key = occ.case.cacheKey(model, Prompts.VERSION)
                 cases.putIfAbsent(key, occ.case)
@@ -83,6 +90,7 @@ fun main(args: Array<String>): Unit = runBlocking {
         .associate { it.key to it.value }
     val toSend = minOf(missing.size, maxCases)
     val estimate = toSend * COST_PER_CASE_USD
+    log.i { "Deterministic links by method: $linkedBy (total ${linkedBy.values.sum()})" }
     log.i { "Ambiguous occurrences by class: $byClass" }
     log.i { "Distinct cases: ${cases.size}, already decided: ${cases.size - missing.size}, missing: ${missing.size}" }
     log.i { "This run: $toSend case(s) with $model, prompt ${Prompts.VERSION}, estimated ≈ ${"%.2f".format(estimate)} USD" }
