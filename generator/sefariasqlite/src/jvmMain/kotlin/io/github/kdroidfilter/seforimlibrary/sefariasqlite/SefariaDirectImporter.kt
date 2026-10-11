@@ -610,7 +610,12 @@ class SefariaDirectImporter(
             val charLevelPending = java.util.concurrent.ConcurrentLinkedQueue<PendingCharLevelAnchor>()
             // Commentary links between the books of sparsely linked commentaries (see
             // SefariaSparseCommentaryLinks.kt). Filled by the single inserter coroutine.
-            val sparseCommentaries = collectSparseCommentaries(allRefsWithPath, lineKeyToId, lineIdToBookId)
+            val sparseCommentaries = collectSparseCommentaries(
+                allRefsWithPath,
+                lineKeyToId,
+                lineIdToBookId,
+                anchorBookInputs.associate { it.bookPath to it.lines },
+            )
             val sparseLinks = sparseCommentaries.associateWith { SparseCommentaryLinks() }
             linksImporter.processLinksInParallel(
                 linksDir = linksDir,
