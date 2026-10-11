@@ -5,22 +5,24 @@ import org.apache.lucene.analysis.Analyzer
 import org.apache.lucene.analysis.standard.StandardAnalyzer
 import org.apache.lucene.codecs.KnnVectorsFormat
 import org.apache.lucene.codecs.lucene104.Lucene104Codec
-import org.apache.lucene.codecs.lucene104.Lucene104HnswScalarQuantizedVectorsFormat
+import org.apache.lucene.codecs.lucene99.Lucene99HnswVectorsFormat
 import org.apache.lucene.document.Document
 import org.apache.lucene.document.Field
 import org.apache.lucene.document.IntPoint
-import org.apache.lucene.document.KnnFloatVectorField
+import org.apache.lucene.document.KnnByteVectorField
 import org.apache.lucene.document.NumericDocValuesField
 import org.apache.lucene.document.StoredField
 import org.apache.lucene.document.StringField
 import org.apache.lucene.document.TextField
 import org.apache.lucene.index.IndexWriter
 import org.apache.lucene.index.IndexWriterConfig
+import org.apache.lucene.index.VectorSimilarityFunction
 import org.apache.lucene.store.FSDirectory
-import org.apache.lucene.util.quantization.QuantizedByteVectorValues
 import java.nio.file.Path
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Lucene-backed implementation of [TextIndexWriter].
@@ -33,8 +35,8 @@ class LuceneTextIndexWriter(
     analyzer: Analyzer = StandardAnalyzer(),
     private val indexHebrewField: Boolean = false,
     private val indexPrimaryText: Boolean = true,
-    // Optional dense embeddings: if provided, each line doc also gets a
-    // KnnFloatVectorField("vec", COSINE) -> SINGLE index holding text + vectors.
+    // Optional dense embeddings: if provided, each line doc also gets an int8
+    // KnnByteVectorField("vec", COSINE) -> SINGLE index holding text + vectors.
     private val vectorProvider: ((Long) -> FloatArray?)? = null,
     // Merge to a single segment on close: one HNSW graph and one term dictionary to search instead of dozens
     private val forceMerge: Boolean = true,
@@ -69,15 +71,9 @@ class LuceneTextIndexWriter(
     private val mergeExecutor: ExecutorService = Executors.newFixedThreadPool(mergeWorkers)
 
     init {
-        // int8 vectors (optimized scalar quantization): the graph search reads a quarter of the float bytes, so the
-        // hot part of the index fits the RAM of a modest machine; the raw floats stay on disk for the merges
-        val vectorsFormat = Lucene104HnswScalarQuantizedVectorsFormat(
-            QuantizedByteVectorValues.ScalarEncoding.UNSIGNED_BYTE,
-            16,
-            100,
-            mergeWorkers,
-            mergeExecutor,
-        )
+        // Plain HNSW over byte vectors: the vectors are quantized to int8 before indexing, so the index holds only
+        // the bytes (Lucene's quantized formats would keep the raw floats next to them, 4x the size)
+        val vectorsFormat = Lucene99HnswVectorsFormat(16, 100, mergeWorkers, mergeExecutor)
         val cfg = IndexWriterConfig(analyzer).apply {
             openMode = IndexWriterConfig.OpenMode.CREATE
             codec = object : Lucene104Codec() {
@@ -142,10 +138,10 @@ class LuceneTextIndexWriter(
             add(TextField(FIELD_TEXT_NG4, normalizedText, Field.Store.NO))
             // rawPlainText is no longer stored - snippet source is fetched from DB at query time
 
-            // Dense embedding (single fused index): attach the line's vector if available.
+            // Dense embedding (single fused index): attach the line's int8 vector if available.
             vectorProvider?.invoke(lineId)?.let { vec ->
                 val field = if (isBaseBook) FIELD_VEC_BASE else FIELD_VEC
-                add(KnnFloatVectorField(field, vec, org.apache.lucene.index.VectorSimilarityFunction.COSINE))
+                add(KnnByteVectorField(field, quantizeInt8(vec), VectorSimilarityFunction.COSINE))
             }
         }
         writer.addDocument(doc)
@@ -175,6 +171,13 @@ class LuceneTextIndexWriter(
 
     override fun commit() {
         writer.commit()
+    }
+
+    // Scales each vector so its largest component maps to 127: COSINE ignores the scale, so every vector gets the
+    // full int8 range (cosine to the float vector >= 0.9999 on the corpus)
+    private fun quantizeInt8(vec: FloatArray): ByteArray {
+        val max = vec.maxOf { abs(it) }.takeIf { it > 0f } ?: return ByteArray(vec.size)
+        return ByteArray(vec.size) { i -> (vec[i] * 127f / max).roundToInt().toByte() }
     }
 
     override fun close() {

@@ -79,7 +79,7 @@ tasks.register<JavaExec>("buildLuceneIndexDefault") {
         systemProperty("inMemoryDb", "true")
     }
 
-    // Dense vectors (dir with ids.i64+vecs.f32+meta.txt) → SINGLE fused index (text + KnnFloatVectorField per line):
+    // Dense vectors (dir with ids.i64+vecs.f32+meta.txt) → SINGLE fused index (text + int8 KnnByteVectorField per line):
     // -PvectorsBin=/path, or the corpus embedded by embedCorpus
     explicitVectors?.let { systemProperty("vectorsBin", it) }
     if (embedVectors) {

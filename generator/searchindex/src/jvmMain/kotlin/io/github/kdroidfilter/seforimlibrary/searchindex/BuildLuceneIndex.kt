@@ -63,7 +63,7 @@ fun main() = runBlocking {
 
     // Optional dense embeddings -> SINGLE fused index. -DvectorsBin points to a dir
     // with ids.i64 + vecs.f32 + meta.txt (produced by embed_corpus_bin.py against this
-    // same DB). Each line then also gets a KnnFloatVectorField in the text index.
+    // same DB). Each line then also gets an int8 KnnByteVectorField in the text index.
     val vectorProvider: ((Long) -> FloatArray?)? =
         System.getProperty("vectorsBin")?.let { loadVectorProvider(Paths.get(it), logger) }
 
@@ -309,7 +309,7 @@ private fun sanitizeAcronymTerm(raw: String): String {
 /**
  * Loads dense embeddings produced by embed_corpus_bin.py (ids.i64 + vecs.f32 + meta.txt,
  * little-endian) into RAM and returns a thread-safe lineId -> vector lookup, used by
- * LuceneTextIndexWriter to attach a KnnFloatVectorField per line (single fused index).
+ * LuceneTextIndexWriter to attach an int8 KnnByteVectorField per line (single fused index).
  */
 private fun loadVectorProvider(dir: Path, logger: co.touchlab.kermit.Logger): ((Long) -> FloatArray?) {
     val meta = File(dir.toFile(), "meta.txt").readText().trim().split(" ")
