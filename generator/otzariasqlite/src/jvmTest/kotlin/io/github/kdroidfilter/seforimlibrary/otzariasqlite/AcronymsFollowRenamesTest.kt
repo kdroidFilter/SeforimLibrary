@@ -397,7 +397,8 @@ class AcronymsFollowRenamesTest {
         val log = Capture()
         val after = build(state, acronyms, mapOf("ספר" to textTwice("ספר")), log)
         assertEquals(setOf("סמח", "ספר - מחבר"), after.getValue("ספר"))
-        assertContains(log.renames().single(), "2 terms carried to 1 books: 'ספר - מחבר' → 'ספר' (2, same content)")
+        // Otzaria: the renamed file keeps its id (BookIdContinuity), so the old key names it.
+        assertContains(log.renames().single(), "2 terms carried to 1 books: 'ספר - מחבר' → 'ספר' (2, same id)")
     }
 
     @Test

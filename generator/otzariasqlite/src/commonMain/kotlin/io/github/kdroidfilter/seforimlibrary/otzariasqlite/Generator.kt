@@ -214,6 +214,10 @@ class DatabaseGenerator(
     private val skippedBlacklistedFileTitles = mutableSetOf<String>()
     private val skippedUncategorizedTitles = mutableSetOf<String>()
 
+    // Otzaria: the keys [collectCurrentBooks] planned, and the key each book id went to.
+    private var plannedBookKeys: Set<BookKey> = emptySet()
+    private val importedBookKeys = HashMap<Long, BookKey>()
+
     // Manual-link drop accounting (finding: 643 of 2,932 links silently dropped,
     // 642 of them for one missing book, logged as two INFO lines per link).
     private class DroppedLinkTarget(var links: Int, val firstPath: String)
@@ -236,6 +240,7 @@ class DatabaseGenerator(
         skippedSefariaShadowedTitles.clear()
         skippedBlacklistedFileTitles.clear()
         skippedUncategorizedTitles.clear()
+        importedBookKeys.clear()
         progress.start(total)
     }
 
@@ -640,6 +645,7 @@ class DatabaseGenerator(
                 preloadAllBookContents(libraryPath)
                 processDirectory(libraryPath, null, 0, metadata)
                 assertAllHearotMergesApplied()
+                checkPlannedBooksImported()
                 logger.i { bookImportSummary("Otzaria book import (phase 1)") }
                 carryAcronymsAcrossRenames()
 
@@ -1208,6 +1214,11 @@ class DatabaseGenerator(
 
         // Assign a stable ID via IdAllocator so cross-build reproducibility holds.
         val currentBookId = allocator.bookId(srcName, title)
+        // Otzaria: an alias must never give one id to two books (an old key back beside its new one).
+        val bookKey = BookKey(srcName, title)
+        importedBookKeys.putIfAbsent(currentBookId, bookKey)?.let { other ->
+            check(other == bookKey) { "Book id $currentBookId went to both $other and $bookKey (book alias)" }
+        }
         currentBook = "$currentBookId '$title' file=$filename categoryId=$categoryId"
         logger.d { "Assigning ID $currentBookId to book '$title' (source=$srcName) with categoryId: $categoryId" }
 
@@ -1711,36 +1722,57 @@ class DatabaseGenerator(
     /**
      * Keys of every book this import will allocate, with their file. Mirrors the
      * skips of [processDirectory] and [createAndProcessBook].
+     * Otzaria: our skips (only the companion notes merged into their base, root-level files);
+     * [checkPlannedBooksImported] fails the build if the import ends up elsewhere.
      */
     private suspend fun collectCurrentBooks(): Map<BookKey, Path> {
         val files = Files.walk(libraryRoot).use { s ->
-            s.filter { Files.isRegularFile(it) && it.extension == "txt" && it.parent != libraryRoot }.toList()
+            s.filter { Files.isRegularFile(it) && it.extension == "txt" && it.parent != libraryRoot }.sorted().toList()
         }
         val out = HashMap<BookKey, Path>()
         for (path in files) {
             val fileName = path.fileName.toString()
             val rawTitle = fileName.substringBeforeLast('.')
-            if (rawTitle.startsWith("הערות על ") && !rawTitle.startsWith("הערות על חברותא")) continue
             if (fileName in fileNameBlacklist) continue
+            val title = normalizeBookTitle(rawTitle)
+            if (title in mergedHearotTitles) continue
             val source = getSourceNameFor(path)
             if (source in sourceBlacklist) continue
-            val title = normalizeBookTitle(rawTitle)
             if (existsFromSefaria(title)) continue
             out.putIfAbsent(BookKey(source, title), path)
         }
         return out
     }
 
+    /** Otzaria: the books imported are exactly the ones [collectCurrentBooks] planned. */
+    private fun checkPlannedBooksImported() {
+        val imported = importedBookKeys.values.toSet()
+        val unplanned = imported - plannedBookKeys
+        val missing = plannedBookKeys - imported
+        check(unplanned.isEmpty() && missing.isEmpty()) {
+            "Book-id continuity planned other books than the import made: " +
+                "imported but not planned ${unplanned.take(MAX_NAMES_PER_SUMMARY_LINE)}, " +
+                "planned but not imported ${missing.take(MAX_NAMES_PER_SUMMARY_LINE)}"
+        }
+    }
+
     /** Keeps the previous id of books Otzaria moved to another source or renamed. */
     private suspend fun registerBookAliases(continuity: BookIdContinuity) {
         val currentBooks = collectCurrentBooks()
+        plannedBookKeys = currentBooks.keys
         continuity.registerAliases(
             currentKeys = currentBooks.keys,
             inScope = { it.sourceName != SEFARIA_SOURCE },
             atVersion = buildVersion,
             currentLineHashes = { key ->
                 // Same hash as stableLineId, so it compares with the previous line keys.
+                // Otzaria: on the lines as processBookContent stores them (BOM off, notes merged).
                 currentBooks[key]?.readText(Charsets.UTF_8)?.lines()
+                    ?.let(Utf8Bom::stripFirstLine)
+                    ?.let { lines ->
+                        hearotMergePlans[key.canonicalHeTitle]
+                            ?.let { HearotCompanionMerge.mergeLines(key.canonicalHeTitle, lines, it) } ?: lines
+                    }
                     ?.map(IdAllocatorBindings::normalisedContentHash)
             },
         )
