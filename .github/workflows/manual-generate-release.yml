@@ -2604,13 +2604,20 @@ jobs:
           }
           # Drafts are invisible to /releases/tags/{tag}, so resolve through the
           # paginated collection. `.draft == true` is the whole safety property.
-          release_id=$(list_matching_releases | jq -er \
-            --arg tag "$RELEASE_TAG" --arg target "$SOURCE_COMMIT" '
-              select(length == 1) | .[0] |
-              select(.tag_name == $tag and .name == $tag and
-                     .target_commitish == $target and .draft == true) | .id |
-              select(type == "number" and . > 0)
-            ') || release_id=""
+          # A draft created seconds before the failure can lag the listing: an
+          # empty or failed listing is re-polled within the shared bound.
+          listing="$RUNNER_TEMP/delete-draft-$$.json"
+          release_id=""
+          if list_matching_releases_settled "$listing"; then
+            release_id=$(jq -er \
+              --arg tag "$RELEASE_TAG" --arg target "$SOURCE_COMMIT" '
+                select(length == 1) | .[0] |
+                select(.tag_name == $tag and .name == $tag and
+                       .target_commitish == $target and .draft == true) | .id |
+                select(type == "number" and . > 0)
+              ' "$listing") || release_id=""
+          fi
+          rm -f "$listing"
           if [ -z "$release_id" ]; then
             echo "no unpublished draft release for $RELEASE_TAG — nothing to delete."
             exit 0

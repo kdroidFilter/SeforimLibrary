@@ -2330,6 +2330,322 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
         )
         self.assertEqual(len(lines), 4, lines)
 
+    # Stub server for the draft listing: a release created by the stub stays
+    # out of the listing for `lag` further list calls, as GitHub's did.
+    _LISTING_STUB = textwrap.dedent(
+        """\
+        import json, sys
+        from pathlib import Path
+        state = Path(sys.argv[1])
+        doc = json.loads((state / "server.json").read_text())
+        verb = sys.argv[2]
+        if verb == "list":
+            doc["list_calls"] += 1
+            (state / "server.json").write_text(json.dumps(doc))
+            if doc["list_mode"] == "fail":
+                raise SystemExit(1)
+            if doc["list_mode"] == "garbage":
+                print("<html>Bad gateway</html>")
+                raise SystemExit(0)
+            print(json.dumps([r for r in doc["releases"] if doc["list_calls"] > r["hidden_until"]]))
+        elif verb == "delete":
+            doc["deleted"].append(int(sys.argv[3]))
+        elif verb == "create":
+            tag, target = sys.argv[3], sys.argv[4]
+            doc["creates"].append(doc["list_calls"])
+            plan = doc["create_plan"].pop(0)
+            if plan["records"]:
+                doc["releases"].append({
+                    "id": 100 + len(doc["creates"]), "tag_name": tag, "name": tag,
+                    "target_commitish": target, "draft": True, "assets": [],
+                    "hidden_until": doc["list_calls"] + plan["lag"],
+                })
+            (state / "server.json").write_text(json.dumps(doc))
+            raise SystemExit(plan["rc"])
+        (state / "server.json").write_text(json.dumps(doc))
+        """
+    )
+
+    def _run_draft_listing(self, call, releases=(), create_plan=(), lag=0,
+                           list_mode="ok", step=None):
+        """Run one release_draft.sh call (or a workflow step body as ./step.sh)
+        against the stub; return (rc, out, err, server). server["temp"] lists
+        what was left in RUNNER_TEMP."""
+        bash = shutil.which("bash")
+        jq = shutil.which("jq")
+        if bash is None or jq is None:  # pragma: no cover - only on a bare host
+            self.skipTest("bash/jq unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copy(RELEASE_DRAFT, root / "release_draft.sh")
+            if step is not None:
+                if yaml is None:  # pragma: no cover - only without PyYAML
+                    self.skipTest("PyYAML unavailable")
+                control = root / ".pipeline-control" / ".github" / "scripts"
+                control.mkdir(parents=True)
+                shutil.copy(RELEASE_DRAFT, control / "release_draft.sh")
+                doc = yaml.safe_load(self.workflow)
+                body = [
+                    item["run"] for item in doc["jobs"]["build-and-release"]["steps"]
+                    if item.get("name") == step
+                ]
+                self.assertEqual(len(body), 1, step)
+                (root / "step.sh").write_text(body[0], encoding="utf-8")
+            (root / "stub.py").write_text(self._LISTING_STUB, encoding="utf-8")
+            (root / "server.json").write_text(json.dumps({
+                "list_calls": 0, "sleeps": 0, "creates": [], "deleted": [],
+                "list_mode": list_mode,
+                "releases": [dict(r, hidden_until=lag) for r in releases],
+                "create_plan": list(create_plan),
+            }))
+            script = textwrap.dedent(
+                """
+                set -uo pipefail
+                if command -v cygpath > /dev/null 2>&1; then
+                  PYBIN="$(cygpath -u "$REAL_PYTHON")"
+                else
+                  PYBIN="$REAL_PYTHON"
+                fi
+                export RUNNER_TEMP="$PWD/runner-temp"
+                mkdir -p "$RUNNER_TEMP"
+                export GITHUB_REPOSITORY=Otzaria/SeforimLibrary
+                export RELEASE_TAG=v99-sandbox
+                export SOURCE_COMMIT=0123456789abcdef0123456789abcdef01234567
+                export RELEASE_AUTOMATIC_WRITABLE=true
+                export RELEASE_CROSS_REPO_WRITABLE=true
+                export AUTOMATIC_TOKEN=stub
+                export CROSS_REPO_TOKEN=stub
+                python3() { "$PYBIN" "$@"; }
+                sleep() {
+                  "$PYBIN" -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["sleeps"]+=1; json.dump(d,open(p,"w"))' "$PWD/server.json"
+                }
+                gh() {
+                  case "$*" in
+                    "api --paginate repos/$GITHUB_REPOSITORY/releases?per_page=100")
+                      "$PYBIN" "$PWD/stub.py" "$PWD" list; return ;;
+                    "release create $RELEASE_TAG --target $SOURCE_COMMIT --title $RELEASE_TAG --draft")
+                      "$PYBIN" "$PWD/stub.py" "$PWD" create "$RELEASE_TAG" "$SOURCE_COMMIT"; return ;;
+                    "api -X DELETE repos/$GITHUB_REPOSITORY/releases/"*)
+                      "$PYBIN" "$PWD/stub.py" "$PWD" delete "${4##*/}"; return ;;
+                  esac
+                  echo "stub gh: unexpected invocation: $*" >&2
+                  return 90
+                }
+                source ./release_draft.sh
+                use_token automatic
+                """
+            ) + call + "\n"
+            env = dict(os.environ, REAL_PYTHON=sys.executable)
+            result = subprocess.run(
+                [bash, "-c", script], cwd=tmp, env=env, capture_output=True, text=True
+            )
+            server = json.loads((root / "server.json").read_text())
+            server["temp"] = sorted(path.name for path in (root / "runner-temp").iterdir())
+        return result.returncode, result.stdout, result.stderr, server
+
+    def _draft(self, release_id=7, **overrides):
+        value = {
+            "id": release_id, "tag_name": "v99-sandbox", "name": "v99-sandbox",
+            "target_commitish": "0123456789abcdef0123456789abcdef01234567",
+            "draft": True, "assets": [],
+        }
+        value.update(overrides)
+        return value
+
+    def test_draft_id_lookup_waits_out_a_lagging_listing_without_relaxing(self):
+        # 27/09 and 10/10: the create succeeded, the listing right after it was
+        # empty. A lag inside the window now resolves the same exact draft.
+        rc, out, err, server = self._run_draft_listing(
+            "resolve_release_id", releases=[self._draft()], lag=3
+        )
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(out.strip(), "7")
+        self.assertEqual((server["list_calls"], server["sleeps"]), (4, 3))
+        self.assertIn("release v99-sandbox listed after 4 polls", err)
+        self.assertNotIn("release-id-", " ".join(server["temp"]))
+
+        # Never listed: fails after exactly the bound, not one poll more, and
+        # says whether the listing was empty or failed.
+        for mode, reason in (
+            ("ok", "listing failed 0 times, was empty 12 times"),
+            ("fail", "listing failed 12 times, was empty 0 times"),
+            ("garbage", "listing failed 12 times, was empty 0 times"),
+        ):
+            with self.subTest(list_mode=mode):
+                rc, out, err, server = self._run_draft_listing(
+                    "resolve_release_id", list_mode=mode
+                )
+                self.assertNotEqual(rc, 0)
+                self.assertEqual(out, "")
+                self.assertEqual((server["list_calls"], server["sleeps"]), (12, 11))
+                self.assertIn(
+                    "release v99-sandbox not listed after 12 polls: " + reason, err
+                )
+                self.assertNotIn("release-id-", " ".join(server["temp"]))
+
+        # Two drafts with this tag, or one that is not exactly ours, fail on the
+        # first listing: the retry only ever waits out an EMPTY listing.
+        for releases in (
+            [self._draft(7), self._draft(8)],
+            [self._draft(target_commitish="f" * 40)],
+            [self._draft(draft=False)],
+            [self._draft(name="other")],
+            [self._draft(assets=[{"name": "seforim.db.zst"}])],
+        ):
+            with self.subTest(releases=releases):
+                rc, out, err, server = self._run_draft_listing(
+                    "resolve_release_id", releases=releases
+                )
+                self.assertNotEqual(rc, 0)
+                self.assertEqual(out, "")
+                self.assertEqual((server["list_calls"], server["sleeps"]), (1, 0))
+                self.assertNotIn("release-id-", " ".join(server["temp"]))
+
+        # The early asset alone is still adopted, on the first listing.
+        rc, out, err, server = self._run_draft_listing(
+            "resolve_release_id",
+            releases=[self._draft(assets=[{"name": "seforim.db.buildstate.zst"}])],
+        )
+        self.assertEqual((rc, out.strip(), server["list_calls"]), (0, "7", 1))
+
+    def test_a_lost_create_response_never_creates_a_second_draft(self):
+        # The create succeeded but its response was lost, and the listing lags:
+        # the draft is adopted once it shows up; no second create is sent.
+        rc, out, err, server = self._run_draft_listing(
+            "ensure_draft",
+            create_plan=[{"rc": 1, "records": True, "lag": 4}],
+        )
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(server["creates"], [1])
+        self.assertEqual(len(server["releases"]), 1)
+        self.assertEqual((server["list_calls"], server["sleeps"]), (6, 4))
+
+        # A create that really did nothing: "absent" is trusted only after the
+        # whole 12-poll window, then the other credential creates exactly once.
+        rc, out, err, server = self._run_draft_listing(
+            "ensure_draft",
+            create_plan=[
+                {"rc": 1, "records": False, "lag": 0},
+                {"rc": 0, "records": True, "lag": 0},
+            ],
+        )
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(server["creates"], [1, 14])
+        self.assertEqual(len(server["releases"]), 1)
+
+        # Two drafts with this tag — before a create, or surfacing after a lost
+        # one — still fail closed, and nothing further is created.
+        rc, out, err, server = self._run_draft_listing(
+            "ensure_draft", releases=[self._draft(7), self._draft(8)]
+        )
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(server["creates"], [])
+        self.assertIn("conflicting identity or assets", out)
+        rc, out, err, server = self._run_draft_listing(
+            "ensure_draft",
+            releases=[self._draft(8)],
+            lag=3,
+            create_plan=[{"rc": 1, "records": True, "lag": 2}],
+        )
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(server["creates"], [1])
+
+    def test_release_state_adopts_only_this_builds_exact_draft(self):
+        # Every immutable field is checked: a draft that differs in any of them
+        # is a conflict, so ensure_draft neither adopts it nor creates another.
+        rc, out, err, server = self._run_draft_listing(
+            "release_state", releases=[self._draft()]
+        )
+        self.assertEqual((rc, out.strip()), (0, "exact-draft"), err)
+        for overrides in (
+            {"target_commitish": "f" * 40},
+            {"name": "other"},
+            {"draft": False},
+            {"assets": [{"name": "seforim.db.zst"}]},
+            {"assets": [{"name": "seforim.db.buildstate.zst"}] * 2},
+        ):
+            with self.subTest(overrides=overrides):
+                rc, out, err, server = self._run_draft_listing(
+                    "release_state", releases=[self._draft(**overrides)]
+                )
+                self.assertEqual((rc, out.strip()), (0, "conflict"), err)
+                rc, out, err, server = self._run_draft_listing(
+                    "ensure_draft", releases=[self._draft(**overrides)]
+                )
+                self.assertNotEqual(rc, 0)
+                self.assertEqual(server["creates"], [])
+                self.assertIn("conflicting identity or assets", out)
+
+    def test_settled_release_state_waits_only_on_an_empty_listing(self):
+        # A conflict or this build's exact draft is final on the first listing;
+        # only "absent" (or a failed query) is polled.
+        for releases, state in (
+            ([self._draft(target_commitish="f" * 40)], "conflict"),
+            ([self._draft(7), self._draft(8)], "conflict"),
+            ([self._draft()], "exact-draft"),
+        ):
+            with self.subTest(releases=releases):
+                rc, out, err, server = self._run_draft_listing(
+                    "settled_release_state", releases=releases
+                )
+                self.assertEqual((rc, out.strip()), (0, state), err)
+                self.assertEqual((server["list_calls"], server["sleeps"]), (1, 0))
+        rc, out, err, server = self._run_draft_listing(
+            "settled_release_state", releases=[self._draft()], lag=2
+        )
+        self.assertEqual(
+            (out.strip(), server["list_calls"], server["sleeps"]), ("exact-draft", 3, 2)
+        )
+        rc, out, err, server = self._run_draft_listing("settled_release_state")
+        self.assertEqual(
+            (out.strip(), server["list_calls"], server["sleeps"]), ("absent", 12, 11)
+        )
+
+    def test_failure_cleanup_finds_a_draft_the_listing_has_not_caught_up_with(self):
+        # A build that fails seconds after the early upload created its draft
+        # must still delete it, not report "nothing to delete" off a lagging
+        # listing. The exact-identity `.draft == true` filter is unchanged.
+        step = "Delete this build's unpublished draft release on failure"
+        marked = "export RELEASE_TOKEN_KIND=automatic DRAFT_RELEASE_CREATED=1\nsource ./step.sh"
+        rc, out, err, server = self._run_draft_listing(
+            marked, releases=[self._draft()], lag=3, step=step
+        )
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(server["deleted"], [7])
+        self.assertEqual((server["list_calls"], server["sleeps"]), (4, 3))
+        self.assertIn("deleted the unpublished draft release v99-sandbox (7).", out)
+        self.assertNotIn("delete-draft-", " ".join(server["temp"]))
+
+        # Nothing ever listed: the whole bound, then "nothing to delete", green.
+        rc, out, err, server = self._run_draft_listing(marked, step=step)
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(server["deleted"], [])
+        self.assertEqual(server["list_calls"], 12)
+        self.assertIn("nothing to delete", out)
+        self.assertNotIn("delete-draft-", " ".join(server["temp"]))
+
+        # A published release, a foreign target or two releases are never
+        # deleted, and are decided on the first listing.
+        for releases in (
+            [self._draft(draft=False)],
+            [self._draft(target_commitish="f" * 40)],
+            [self._draft(7), self._draft(8)],
+        ):
+            with self.subTest(releases=releases):
+                rc, out, err, server = self._run_draft_listing(
+                    marked, releases=releases, step=step
+                )
+                self.assertEqual(rc, 0, out + err)
+                self.assertEqual(server["deleted"], [])
+                self.assertEqual(server["list_calls"], 1)
+
+        # Without the marker the listing is never even read.
+        rc, out, err, server = self._run_draft_listing(
+            "export RELEASE_TOKEN_KIND=automatic\nsource ./step.sh",
+            releases=[self._draft()], step=step,
+        )
+        self.assertEqual((rc, server["list_calls"], server["deleted"]), (0, 0, []))
+
     def test_provenance_validators_each_print_one_positive_line(self):
         build = VALIDATOR.read_text(encoding="utf-8")
         otzaria = OTZARIA_VALIDATOR.read_text(encoding="utf-8")

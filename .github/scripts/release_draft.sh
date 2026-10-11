@@ -117,7 +117,7 @@ ensure_draft() {
     return 0
   fi
   echo "::warning::Release create failed with ${CURRENT_TOKEN_KIND:-}; reconciling before retry."
-  state=$(release_state) || state=query-error
+  state=$(settled_release_state)
   [ "$state" != conflict ] || return 1
   if [ "$state" = exact-draft ]; then return 0; fi
   switch_token || {
@@ -131,22 +131,69 @@ ensure_draft() {
       if gh release create "$RELEASE_TAG" --target "$SOURCE_COMMIT" --title "$RELEASE_TAG" --draft; then
         return 0
       fi
-      state=$(release_state) || return 1
+      state=$(settled_release_state)
       [ "$state" = exact-draft ]
       ;;
     *) echo "::error::Release tag is conflicting after credential fallback."; return 1 ;;
   esac
 }
 
+# The release listing can lag a create (27/09 and 10/10 listed nothing right
+# after one). Only an empty or failed listing is re-polled: 12 polls, 5 s apart.
+RELEASE_LISTING_POLLS=12
+
+# release_state after a create whose response was lost: "absent" is trusted only
+# once the whole window has passed, so a lagging listing never causes a 2nd draft.
+settled_release_state() {
+  local attempt state
+  for attempt in $(seq 1 "$RELEASE_LISTING_POLLS"); do
+    state=$(release_state) || state=query-error
+    case "$state" in
+      absent|query-error) ;;
+      *) break ;;
+    esac
+    [ "$attempt" -eq "$RELEASE_LISTING_POLLS" ] || sleep 5
+  done
+  printf '%s\n' "$state"
+}
+
+# Write the listing of this tag to $1 once it names a release; only an empty or
+# failed listing is re-polled. Says which of the two it saw when it gives up.
+list_matching_releases_settled() {
+  local output="$1" attempt failed=0 empty=0
+  for attempt in $(seq 1 "$RELEASE_LISTING_POLLS"); do
+    if ! list_matching_releases > "$output" || ! jq -e 'type == "array"' "$output" > /dev/null 2>&1; then
+      failed=$((failed + 1))
+    elif jq -e 'length == 0' "$output" > /dev/null; then
+      empty=$((empty + 1))
+    else
+      [ "$attempt" -eq 1 ] || echo "release $RELEASE_TAG listed after $attempt polls" >&2
+      return 0
+    fi
+    [ "$attempt" -eq "$RELEASE_LISTING_POLLS" ] || sleep 5
+  done
+  echo "release $RELEASE_TAG not listed after $RELEASE_LISTING_POLLS polls: listing failed $failed times, was empty $empty times" >&2
+  return 1
+}
+
+# Same strict filter as ever, applied to the first listing that names a release:
+# a duplicate tag or a non-matching release still fails at once.
 resolve_release_id() {
-  list_matching_releases | jq -er \
-    --arg tag "$RELEASE_TAG" --arg target "$SOURCE_COMMIT" --arg allowed "$EARLY_RELEASE_ASSETS" '
-      select(length == 1) | .[0] |
-      select(.tag_name == $tag and .name == $tag and .target_commitish == $target and
-             .draft == true and
-             (([.assets[].name] - ($allowed | split(" "))) | length) == 0) | .id |
-      select(type == "number" and . > 0)
-    '
+  local output="$RUNNER_TEMP/release-id-$$.json" rc=0
+  if list_matching_releases_settled "$output"; then
+    jq -er \
+      --arg tag "$RELEASE_TAG" --arg target "$SOURCE_COMMIT" --arg allowed "$EARLY_RELEASE_ASSETS" '
+        select(length == 1) | .[0] |
+        select(.tag_name == $tag and .name == $tag and .target_commitish == $target and
+               .draft == true and
+               (([.assets[].name] - ($allowed | split(" "))) | length) == 0) | .id |
+        select(type == "number" and . > 0)
+      ' "$output" || rc=$?
+  else
+    rc=1
+  fi
+  rm -f "$output"
+  return "$rc"
 }
 
 release_assets_json() {
