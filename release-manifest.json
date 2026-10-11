@@ -1,69 +1,102 @@
 {
-  "generatedAt": "2026-10-11T19:22:48Z",
+  "generatedAt": "2026-10-11T19:38:20Z",
   "latest": {
     "assets": [
       {
-        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/435221738",
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/631624194",
         "contentType": "application/octet-stream",
-        "createdAt": "2026-06-01T11:50:23Z",
-        "digest": "sha256:679ac0ab32ddfbcadd9aaa668f45ae63441dceb6cfe850ad3e02fc591e392948",
-        "downloadCount": 44,
-        "id": "RA_kwDOPFZ3eM4Z8PTq",
+        "createdAt": "2026-10-11T19:36:21Z",
+        "digest": "sha256:827eaa8753b453156f2e09583c33291ec61c8fcf89a8d22dcf42b8e61100659e",
+        "downloadCount": 0,
+        "id": "RA_kwDOPFZ3eM4lpdIC",
         "label": "",
         "name": "catalog.pb",
-        "size": 669539,
+        "size": 772952,
         "state": "uploaded",
-        "updatedAt": "2026-06-01T11:50:24Z",
-        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v1-20260601094341/catalog.pb"
+        "updatedAt": "2026-10-11T19:36:23Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20261011170830/catalog.pb"
       },
       {
-        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/435221737",
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/631624133",
         "contentType": "application/octet-stream",
-        "createdAt": "2026-06-01T11:50:23Z",
-        "digest": "sha256:6fdd05b6a5c8cbb675184bf488f6c4de0a21b985d9ede7f13b0677e667fdf1c1",
-        "downloadCount": 52,
-        "id": "RA_kwDOPFZ3eM4Z8PTp",
+        "createdAt": "2026-10-11T19:36:20Z",
+        "digest": "sha256:632af5df085adadc166fe33d8ca926dadffdc27342db8ab391ab204c3246ffbb",
+        "downloadCount": 0,
+        "id": "RA_kwDOPFZ3eM4lpdHF",
         "label": "",
         "name": "seforim.db.buildstate",
-        "size": 933068800,
+        "size": 1171480576,
         "state": "uploaded",
-        "updatedAt": "2026-06-01T11:51:00Z",
-        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v1-20260601094341/seforim.db.buildstate"
+        "updatedAt": "2026-10-11T19:37:20Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20261011170830/seforim.db.buildstate"
       },
       {
-        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/435221740",
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/631599258",
+        "contentType": "application/json",
+        "createdAt": "2026-10-11T19:23:37Z",
+        "digest": "sha256:8f7e5e1ffffdfec4b084666530d360d590dfea29d6b7c3ba90fdc1a56f367c20",
+        "downloadCount": 0,
+        "id": "RA_kwDOPFZ3eM4lpXCa",
+        "label": "",
+        "name": "seforim_bundle.tar.zst.manifest.json",
+        "size": 621,
+        "state": "uploaded",
+        "updatedAt": "2026-10-11T19:23:38Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20261011170830/seforim_bundle.tar.zst.manifest.json"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/631599180",
         "contentType": "application/octet-stream",
-        "createdAt": "2026-06-01T11:50:23Z",
-        "digest": "sha256:cfa4b07ca92dc46436b68f60963b2c75700bdb472d2030fd94d82bceb9abce57",
-        "downloadCount": 3574,
-        "id": "RA_kwDOPFZ3eM4Z8PTs",
+        "createdAt": "2026-10-11T19:23:35Z",
+        "digest": "sha256:8bf1f9c7d81661dc2bb135aafd51501f4eac34db7b92ff8731a5e5c1891e72df",
+        "downloadCount": 0,
+        "id": "RA_kwDOPFZ3eM4lpXBM",
         "label": "",
         "name": "seforim_bundle.tar.zst.part01",
         "size": 2040109465,
         "state": "uploaded",
-        "updatedAt": "2026-06-01T11:51:41Z",
-        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v1-20260601094341/seforim_bundle.tar.zst.part01"
+        "updatedAt": "2026-10-11T19:25:28Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20261011170830/seforim_bundle.tar.zst.part01"
       },
       {
-        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/435221742",
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/631602841",
         "contentType": "application/octet-stream",
-        "createdAt": "2026-06-01T11:50:24Z",
-        "digest": "sha256:56f5d9cba85d3d4558976e98f41ae149678318927af746e59d43e53ab9857291",
-        "downloadCount": 2186,
-        "id": "RA_kwDOPFZ3eM4Z8PTu",
+        "createdAt": "2026-10-11T19:25:28Z",
+        "digest": "sha256:e159c2263457d3f1d86ca63b574fa41a9dbd56856ab42075d4c3f3a3f6252700",
+        "downloadCount": 0,
+        "id": "RA_kwDOPFZ3eM4lpX6Z",
         "label": "",
         "name": "seforim_bundle.tar.zst.part02",
-        "size": 1691337533,
+        "size": 2040109465,
         "state": "uploaded",
-        "updatedAt": "2026-06-01T11:51:28Z",
-        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v1-20260601094341/seforim_bundle.tar.zst.part02"
+        "updatedAt": "2026-10-11T19:27:16Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20261011170830/seforim_bundle.tar.zst.part02"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/631606391",
+        "contentType": "application/octet-stream",
+        "createdAt": "2026-10-11T19:27:16Z",
+        "digest": "sha256:4b3be6cecec292e6ba42b475763890a479119d4c7291e2c563805e99ffe24711",
+        "downloadCount": 0,
+        "id": "RA_kwDOPFZ3eM4lpYx3",
+        "label": "",
+        "name": "seforim_bundle.tar.zst.part03",
+        "size": 1500116323,
+        "state": "uploaded",
+        "updatedAt": "2026-10-11T19:28:39Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20261011170830/seforim_bundle.tar.zst.part03"
       }
     ],
-    "name": "v1-20260601094341",
-    "publishedAt": "2026-06-01T11:50:22Z",
-    "tagName": "v1-20260601094341"
+    "name": "v2-20261011170830",
+    "publishedAt": "2026-10-11T19:38:10Z",
+    "tagName": "v2-20261011170830"
   },
   "releases": [
+    {
+      "name": "v2-20261011170830",
+      "publishedAt": "2026-10-11T19:38:10Z",
+      "tagName": "v2-20261011170830"
+    },
     {
       "name": "v1-20260601094341",
       "publishedAt": "2026-06-01T11:50:22Z",
