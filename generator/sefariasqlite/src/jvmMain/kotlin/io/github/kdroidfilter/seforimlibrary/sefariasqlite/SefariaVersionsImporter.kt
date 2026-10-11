@@ -182,7 +182,7 @@ internal class SefariaVersionsImporter(
                     segmentsUnmatched++
                     return@forEach
                 }
-                val content = walk.lines[ref.lineIndex - 1]
+                val content = SefariaSameTractateRefs.strip(walk.lines[ref.lineIndex - 1], payload.sameTractateHeTitle)
                 rows += VersionLine(
                     versionId = versionId,
                     lineId = lineId,

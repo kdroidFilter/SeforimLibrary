@@ -148,6 +148,8 @@ internal data class BookPayload(
     val boldDashDibburim: Boolean = false,
     // Top-level Sefaria category is `Reference` (dictionaries, lexicons, bibliographies).
     val isReferenceWork: Boolean = false,
+    // Base tractate whose name is dropped after לקמן/לעיל — see SefariaSameTractateRefs.
+    val sameTractateHeTitle: String? = null,
 ) {
     /**
      * Text-only per-line derivations for this book: computed on the parallel
@@ -260,8 +262,11 @@ internal fun BookPayload.precomputeLineData(): BookPayload {
  * the prefixed text would renumber all of their ids (issue #1211).
  * Segments with preserved breaks use the reader's historic-key override above.
  */
-private fun BookPayload.rawSegmentForKey(lineIndex: Int, content: String): String {
-    val encodedShift = cleanShiftByLineIndex[lineIndex] ?: return content
+private fun BookPayload.rawSegmentForKey(lineIndex: Int, content: String): String =
+    rawSegmentForKey(content, cleanShiftByLineIndex[lineIndex])
+
+internal fun rawSegmentForKey(content: String, encodedShift: Int?): String {
+    if (encodedShift == null) return content
     val prefixLength = generatedPrefixLength(encodedShift)
     return if (prefixLength in 1..content.length) content.substring(prefixLength) else content
 }

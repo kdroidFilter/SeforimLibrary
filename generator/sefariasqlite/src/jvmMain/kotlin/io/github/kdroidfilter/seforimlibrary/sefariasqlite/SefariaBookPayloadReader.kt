@@ -249,12 +249,16 @@ internal class SefariaBookPayloadReader(
                 listOf(he) + authorTitles.allNameForms(slug)
             }.distinct()
 
-            val (lines, refs, headings, cleanShifts, lineKeyHashOverrides, simanTopicLines) = buildBookContent(
-                schemaObj = schemaObj,
-                textElement = textElement,
-                bookHeTitle = hebrewTitle,
-                bookEnTitle = englishTitle,
-                authors = authors
+            val sameTractateHeTitle = sameTractateHeTitle(schemaJson, schemaObj, schemaDir, schemaLookup)
+            val (lines, refs, headings, cleanShifts, lineKeyHashOverrides, simanTopicLines) = SefariaSameTractateRefs.apply(
+                buildBookContent(
+                    schemaObj = schemaObj,
+                    textElement = textElement,
+                    bookHeTitle = hebrewTitle,
+                    bookEnTitle = englishTitle,
+                    authors = authors
+                ),
+                sameTractateHeTitle,
             )
             // merged.json "versions" is a list of [title, url] pairs. A single
             // entry means the merged text IS that version verbatim — the
@@ -323,6 +327,7 @@ internal class SefariaBookPayloadReader(
                 categoriesEn = categoriesEn,
                 boldDashDibburim = SefariaTalmudDibburBold.appliesTo(categoriesEn, dependence, lines),
                 isReferenceWork = isReferenceWork,
+                sameTractateHeTitle = sameTractateHeTitle,
             )
         }.onFailure { e ->
             // גרסה מוצהרת שחסרה בייצוא היא שגיאת קלט — לא בולעים אותה.
@@ -416,6 +421,27 @@ internal class SefariaBookPayloadReader(
         "targum" -> Dependence.TARGUM
         "midrash" -> Dependence.MIDRASH
         else -> Dependence.OTHER_DEPENDANT
+    }
+
+    /** The Hebrew title of the single Bavli tractate this book comments on, or null. */
+    private fun sameTractateHeTitle(
+        schemaJson: JsonObject,
+        schemaObj: JsonObject,
+        schemaDir: Path,
+        schemaLookup: Map<String, Path>,
+    ): String? {
+        val base = (schemaJson["base_text_titles"] ?: schemaObj["base_text_titles"]) as? JsonArray ?: return null
+        val baseTitle = when (val el = base.singleOrNull()) {
+            is JsonPrimitive -> el.contentOrNull
+            is JsonObject -> el["en"]?.stringOrNull()
+            else -> null
+        } ?: return null
+        val basePath = resolveSchemaPath(baseTitle, null, null, schemaDir, schemaLookup) ?: return null
+        val baseJson = json.parseToJsonElement(basePath.readText()).jsonObject
+        val categories = (baseJson["categories"] as? JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty()
+        if (categories.take(2) != listOf("Talmud", "Bavli")) return null
+        return (baseJson["heTitle"]?.stringOrNull() ?: baseJson["schema"]?.jsonObject?.get("heTitle")?.stringOrNull())
+            ?.takeIf { it.isNotBlank() }
     }
 
     private fun extractBaseTextTitleKeys(schemaJson: JsonObject, schemaObj: JsonObject): List<String> {
