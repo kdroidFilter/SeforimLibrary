@@ -140,6 +140,8 @@ fun main(args: Array<String>) {
         Files.newOutputStream(bundleOutputPath).use { fos ->
             BufferedOutputStream(fos, 1 shl 20).use { bos ->
                 ZstdOutputStream(bos, zstdLevel).use { zstd ->
+                    // Frame checksum: the decoder detects a corrupted or misordered bundle by itself
+                    zstd.setChecksum(true)
                     runCatching { zstd.setWorkers(workers) }
                         .onFailure { logger.w(it) { "zstd setWorkers($workers) failed; continuing single-threaded" } }
                     TarArchiveOutputStream(zstd).use { tar ->
