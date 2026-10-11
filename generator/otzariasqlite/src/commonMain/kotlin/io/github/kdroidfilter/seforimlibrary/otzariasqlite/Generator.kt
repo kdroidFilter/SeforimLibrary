@@ -382,15 +382,21 @@ class DatabaseGenerator(
 
     /** Public hook called by the importer once all Otzaria books are inserted. */
     internal fun recordSourceHashesAtEndOfImport() {
+        // Otzaria: only books this import made, not skipped ones holding an old id, so the
+        // next build can tell which books this one had (see [previousImportKeys]). A book
+        // without a hash would look gone to it, and its key free to take.
+        val imported = importedBookKeys.values.toHashSet()
+        val unhashed = imported - otzariaSourceHashes.keys
+        check(unhashed.isEmpty()) {
+            "${unhashed.size} imported books have no source hash in files_manifest.json: " +
+                unhashed.take(MAX_NAMES_PER_SUMMARY_LINE)
+        }
         if (otzariaSourceHashes.isEmpty()) return
         var recorded = 0
         // A hash with no allocated book id is a book that will be fully
         // reprocessed on every future cycle, so the gap is worth naming rather
         // than leaving as a bare "N / M".
         val unrecorded = LinkedHashMap<String, MutableList<String>>()
-        // Otzaria: only books this import made, not skipped ones holding an old id, so the
-        // next build can tell which books this one had (see [previousImportKeys]).
-        val imported = importedBookKeys.values.toHashSet()
         for ((key, hash) in otzariaSourceHashes) {
             if (key in imported) {
                 allocator.recordSourceHash(key, hash)
@@ -1787,8 +1793,9 @@ class DatabaseGenerator(
 
     /**
      * Otzaria: the Otzaria keys the previous import brought in, i.e. whose source hash it
-     * recorded. The build state keeps every key it ever saw (v32 held 12 dead keys whose
-     * title lives on under another id), so only these are aliased or reported lost.
+     * recorded (it records one for every book it imports). The build state keeps every key
+     * it ever saw (v32 held 12 dead keys whose title lives on under another id), so only
+     * these are aliased or reported lost.
      */
     private fun previousImportKeys(): Set<BookKey> {
         val previous = allocator.bookIds().keys.filter { it.sourceName != SEFARIA_SOURCE }
@@ -1798,6 +1805,10 @@ class DatabaseGenerator(
                 "(files_manifest.json), so the books of the previous build are unknown"
         }
         val last = recorded.maxOfOrNull { it.second } ?: return emptySet()
+        // Older builds' books are told apart by an older version only.
+        check(last < buildVersion) {
+            "Build version $buildVersion is not after the previous build's ($last), so its books are unknown"
+        }
         return recorded.filter { it.second == last }.mapTo(HashSet()) { it.first }
     }
 

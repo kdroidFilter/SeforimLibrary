@@ -38,13 +38,15 @@ class OtzariaBookIdContinuityTest {
 
     /**
      * Builds [files] against [state], on a DB already holding the Sefaria books [sefaria],
-     * and returns each book's (source, title) with its id.
+     * and returns each book's (source, title) with its id. files_manifest.json leaves out
+     * the book titled [unhashed].
      */
     private fun build(
         state: Path,
         version: Int,
         files: List<BookFile>,
         sefaria: List<String> = emptyList(),
+        unhashed: String? = null,
     ): Map<Pair<String, String>, Long> = runBlocking {
         val driver = JdbcSqliteDriver(url = "jdbc:sqlite::memory:")
         SeforimDb.Schema.create(driver)
@@ -59,6 +61,10 @@ class OtzariaBookIdContinuityTest {
             }
             val allocator = InMemoryIdAllocator.load(state.takeIf { Files.exists(it) })
             val sourceDir = library(files).also(::writeFilesManifest)
+            if (unhashed != null) {
+                val manifest = sourceDir.resolve("files_manifest.json")
+                Files.write(manifest, Files.readAllLines(manifest).filterNot { "/$unhashed.txt\"" in it })
+            }
             DatabaseGenerator(
                 sourceDirectory = sourceDir,
                 repository = repo,
@@ -139,5 +145,23 @@ class OtzariaBookIdContinuityTest {
         // The Otzaria file is skipped for Sefaria's edition; its id is gone, the build goes on.
         val after = build(state, 2, listOf(BookFile("A", "חסידות", "ספר", body)), sefaria = listOf("ספר"))
         assertEquals(setOf("Sefaria" to "ספר"), after.keys)
+    }
+
+    @Test
+    fun aBookImportedWithoutASourceHashFailsTheBuild() {
+        // The next build would take it for a book that is gone, and its key for a free one.
+        val error = assertFailsWith<IllegalStateException> {
+            build(newState(), 1, listOf(BookFile("A", "חסידות", "ספר", body)), unhashed = "ספר")
+        }
+        assertTrue("no source hash" in error.message.orEmpty(), error.message)
+    }
+
+    @Test
+    fun aBuildNotAfterThePreviousOneFailsTheBuild() {
+        val state = newState()
+        val book = BookFile("A", "חסידות", "ספר", body)
+        build(state, 2, listOf(book))
+        val error = assertFailsWith<IllegalStateException> { build(state, 2, listOf(book)) }
+        assertTrue("is not after" in error.message.orEmpty(), error.message)
     }
 }

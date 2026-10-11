@@ -19,13 +19,16 @@ class OtzariaTocParentTest {
 
     private data class ImportedBook(val toc: List<TocEntry>, val lines: List<Line>)
 
+    // Each build after the last one, as in a release.
+    private var builds = 0
+
     private suspend fun importBook(sourceDir: Path, allocator: InMemoryIdAllocator): ImportedBook {
         val driver = JdbcSqliteDriver(url = "jdbc:sqlite::memory:")
         SeforimDb.Schema.create(driver)
         val repo = SeforimRepository(":memory:", driver)
         try {
             writeFilesManifest(sourceDir)
-            DatabaseGenerator(sourceDirectory = sourceDir, repository = repo, allocator = allocator)
+            DatabaseGenerator(sourceDirectory = sourceDir, repository = repo, allocator = allocator, buildVersion = ++builds)
                 .generateLinesOnly()
             val book = repo.getAllBooks().single { it.title == "ספר" }
             return ImportedBook(repo.getBookToc(book.id), repo.getLines(book.id, 0, Int.MAX_VALUE))

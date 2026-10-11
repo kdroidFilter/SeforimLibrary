@@ -296,6 +296,9 @@ class AcronymsFollowRenamesTest {
 
     private fun text(title: String) = (listOf("<h1>$title</h1>") + body).joinToString("\n")
 
+    // Each build after the last one, as in a release.
+    private var builds = 0
+
     /** Builds [books] against [state] and returns every book's acronyms; [log] gets the build's log. */
     private fun build(
         state: Path,
@@ -317,6 +320,7 @@ class AcronymsFollowRenamesTest {
                 repository = repo,
                 acronymDbPath = acronyms.toString(),
                 allocator = allocator,
+                buildVersion = ++builds,
             ).generateLinesOnly()
             allocator.snapshotTo(state)
             repo.getAllBooks().associate { it.title to repo.getAcronymsForBook(it.id).toSet() }

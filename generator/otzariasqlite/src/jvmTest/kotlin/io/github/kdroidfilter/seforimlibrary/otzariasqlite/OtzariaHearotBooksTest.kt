@@ -43,6 +43,7 @@ class OtzariaHearotBooksTest {
             val linksDir = Files.createDirectories(sourceDir.resolve("links"))
             Files.writeString(linksDir.resolve("${baseName}_links.json"), linksJson)
         }
+        writeFilesManifest(sourceDir)
         return sourceDir
     }
 
