@@ -8,9 +8,12 @@ import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import java.io.BufferedOutputStream
 import java.io.BufferedInputStream
 import java.io.IOException
+import java.io.OutputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.security.DigestOutputStream
+import java.security.MessageDigest
 import java.time.Instant
 import java.util.Date
 import kotlin.io.path.exists
@@ -197,13 +200,15 @@ fun main(args: Array<String>) {
         logger.i { "Bundle written: $bundleOutputPath (${"%.2f".format(bundleSizeMb)} MB)" }
         println(bundleOutputPath.toAbsolutePath().toString())
 
-        // Split the bundle into parts of ~1.9 GiB (or configured size)
-        val partCount = splitFile(bundleOutputPath, splitPartBytes, logger)
-        if (partCount > 1) {
-            logger.i { "Bundle split into $partCount parts of up to ${humanSize(splitPartBytes)} each" }
+        // Split the bundle into parts of ~1.9 GiB (or configured size) and describe them
+        val manifest = splitFile(bundleOutputPath, splitPartBytes, logger)
+        if (manifest.parts.size > 1) {
+            logger.i { "Bundle split into ${manifest.parts.size} parts of up to ${humanSize(splitPartBytes)} each" }
         } else {
             logger.i { "Bundle size below split threshold; no split files created" }
         }
+        val manifestPath = manifest.writeNextTo(bundleOutputPath)
+        logger.i { "Bundle manifest written: $manifestPath" }
     } catch (e: Exception) {
         logger.e(e) { "Failed to package artifacts" }
         exitProcess(1)
@@ -260,48 +265,62 @@ private fun addFileToTar(tar: TarArchiveOutputStream, file: Path, entryName: Str
     tar.closeArchiveEntry()
 }
 
-private fun splitFile(source: Path, partSizeBytes: Long, logger: Logger): Int {
-    val size = try { Files.size(source) } catch (e: IOException) { 0L }
-    if (size <= partSizeBytes || size <= 0L) return 1
-
-    val parent = source.parent ?: Paths.get(".")
+/**
+ * Splits [source] into `.partNN` files of at most [partSizeBytes] (no split when it fits in one),
+ * hashing the bundle and each part in the same pass. Returns the manifest of the files to publish.
+ */
+internal fun splitFile(source: Path, partSizeBytes: Long, logger: Logger): BundleManifest {
+    val parent = source.toAbsolutePath().parent
     val baseName = source.fileName.toString()
+    val size = Files.size(source)
 
-    val buffer = ByteArray(8 * 1024 * 1024) // 8 MiB
-    var index = 1
-    var bytesInPart = 0L
-    var currentOut: BufferedOutputStream? = null
-
-    fun openNext(): BufferedOutputStream {
-        val suffix = String.format(".part%02d", index)
-        val outPath = parent.resolve(baseName + suffix)
-        val bos = BufferedOutputStream(Files.newOutputStream(outPath), buffer.size)
-        logger.i { "Writing part $index -> ${outPath.toAbsolutePath()}" }
-        return bos
+    // Parts left by a previous run (possibly more of them) must not be published with the new ones
+    Files.list(parent).use { files ->
+        files
+            .filter { file ->
+                val name = file.fileName.toString()
+                name.startsWith(baseName) && PART_NAME.matches(name.removePrefix(baseName))
+            }.forEach(Files::delete)
     }
 
+    val bundleDigest = MessageDigest.getInstance("SHA-256")
+    if (size <= partSizeBytes) {
+        Files.newInputStream(source).use { input -> input.copyTo(DigestOutputStream(OutputStream.nullOutputStream(), bundleDigest)) }
+        val sha = bundleDigest.digest().toHex()
+        return BundleManifest(baseName, size, sha, listOf(BundleManifest.Part(baseName, size, sha)))
+    }
+
+    val parts = mutableListOf<BundleManifest.Part>()
+    val buffer = ByteArray(8 * 1024 * 1024) // 8 MiB
     BufferedInputStream(Files.newInputStream(source), buffer.size).use { input ->
-        currentOut = openNext()
-        while (true) {
-            val remainingInPart = partSizeBytes - bytesInPart
-            val toRead = if (remainingInPart < buffer.size) remainingInPart.toInt() else buffer.size
-            val read = input.read(buffer, 0, toRead)
-            if (read <= 0) break
-            currentOut!!.write(buffer, 0, read)
-            bytesInPart += read
-            if (bytesInPart >= partSizeBytes) {
-                currentOut!!.flush()
-                currentOut!!.close()
-                index += 1
-                bytesInPart = 0
-                currentOut = openNext()
+        var remaining = size
+        while (remaining > 0) {
+            val partName = baseName + String.format(".part%02d", parts.size + 1)
+            val outPath = parent.resolve(partName)
+            val partDigest = MessageDigest.getInstance("SHA-256")
+            val partSize = minOf(partSizeBytes, remaining)
+            logger.i { "Writing part ${parts.size + 1} -> $outPath" }
+            BufferedOutputStream(Files.newOutputStream(outPath), buffer.size).use { out ->
+                var left = partSize
+                while (left > 0) {
+                    val read = input.read(buffer, 0, minOf(buffer.size.toLong(), left).toInt())
+                    if (read <= 0) throw IOException("Unexpected end of $source")
+                    out.write(buffer, 0, read)
+                    partDigest.update(buffer, 0, read)
+                    bundleDigest.update(buffer, 0, read)
+                    left -= read
+                }
             }
+            parts += BundleManifest.Part(partName, partSize, partDigest.digest().toHex())
+            remaining -= partSize
         }
     }
-    currentOut?.flush()
-    currentOut?.close()
-    return index
+    return BundleManifest(baseName, size, bundleDigest.digest().toHex(), parts)
 }
+
+private val PART_NAME = Regex("""\.part\d+""")
+
+private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
 private fun humanSize(bytes: Long): String {
     val kb = 1024.0

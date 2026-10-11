@@ -231,6 +231,8 @@ jobs:
           # Bundle parts (each under 2 GiB) — canonical source of the DB.
           # Future releases recompose the prev DB from these parts.
           cp generator/packaging/build/package/seforim_bundle.tar.zst.part* "$STAGE/"
+          # Part list + checksums, so clients know how many parts to expect.
+          cp generator/packaging/build/package/seforim_bundle.tar.zst.manifest.json "$STAGE/"
           cp build/seforim.db.buildstate "$STAGE/"
           cp build/catalog.pb "$STAGE/"
           # Patch fan (zero or more files; only present from release #2 on).
