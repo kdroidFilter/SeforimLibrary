@@ -605,9 +605,14 @@ internal class SefariaAltTocBuilder(
 
     /** Curated midrashim whose innermost siman level is flattened; exact title. */
     private fun isSimanAltTocBook(payload: BookPayload): Boolean {
-        normalizeTitleKey(payload.enTitle)?.let { if (it in SIMAN_ALTTOC_EN_KEYS) return true }
-        normalizeTitleKey(payload.heTitle)?.let { if (it in SIMAN_ALTTOC_HE_KEYS) return true }
-        return false
+        val listed = normalizeTitleKey(payload.enTitle)?.let { it in SIMAN_ALTTOC_EN_KEYS } == true ||
+            normalizeTitleKey(payload.heTitle)?.let { it in SIMAN_ALTTOC_HE_KEYS } == true
+        // Otzaria: a book indexed paragraph by paragraph in its main TOC would get the
+        // same navigation twice (or, its leaves now being headings, silently none).
+        check(!(listed && hasNumberedParagraphs(payload.enTitle))) {
+            "'${payload.enTitle}' is both a Simanim alt-TOC book and a numbered-paragraph book"
+        }
+        return listed
     }
 
     /** Mirror the parasha heading tree as alt-TOC containers and hang each siman
@@ -753,19 +758,15 @@ internal class SefariaAltTocBuilder(
         private const val SIMANIM_STRUCTURE_TITLE_EN = "Simanim"
         private const val SIMANIM_STRUCTURE_TITLE_HE = "סימנים"
 
-        // Curated aggadic midrashim: 10 Midrash Rabbah books + Pesikta DeRav
-        // Kahana, Midrash Shmuel, Midrash Mishlei (structures vary; builder adapts).
+        // Curated aggadic midrashim: Pesikta DeRav Kahana, Midrash Shmuel, Midrash
+        // Mishlei (structures vary; builder adapts). Otzaria: the 10 Midrash Rabbah
+        // books left this list when upstream 602d9502 gave every paragraph its own
+        // label and main TOC entry (hasNumberedParagraphs); see isSimanAltTocBook.
         private val SIMAN_ALTTOC_EN_KEYS: Set<String> = listOf(
-            "Bereishit Rabbah", "Shemot Rabbah", "Vayikra Rabbah",
-            "Bamidbar Rabbah", "Devarim Rabbah", "Ruth Rabbah",
-            "Eichah Rabbah", "Esther Rabbah", "Kohelet Rabbah",
-            "Shir HaShirim Rabbah",
             "Pesikta DeRav Kahana", "Midrash Shmuel", "Midrash Mishlei",
         ).mapNotNull { normalizeTitleKey(it) }.toSet()
 
         private val SIMAN_ALTTOC_HE_KEYS: Set<String> = listOf(
-            "בראשית רבה", "שמות רבה", "ויקרא רבה", "במדבר רבה", "דברים רבה",
-            "רות רבה", "איכה רבה", "אסתר רבה", "קוהלת רבה", "שיר השירים רבה",
             "פסיקתא דרב כהנא", "מדרש שמואל", "מדרש משלי",
         ).mapNotNull { normalizeTitleKey(it) }.toSet()
     }

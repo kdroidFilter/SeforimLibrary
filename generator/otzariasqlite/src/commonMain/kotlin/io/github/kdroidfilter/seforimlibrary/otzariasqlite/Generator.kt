@@ -3,6 +3,7 @@ package io.github.kdroidfilter.seforimlibrary.otzariasqlite
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookKey
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookSourceHash
+import io.github.kdroidfilter.seforimlibrary.common.changes.BookIdContinuity
 import io.github.kdroidfilter.seforimlibrary.common.changes.OtzariaSourceHashComputer
 import io.github.kdroidfilter.seforimlibrary.common.changes.TouchedBookDetector
 import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
@@ -41,6 +42,7 @@ import kotlin.io.path.readText
  * @property repository The repository used to store the generated data
  */
 private const val LINE_FLUSH_THRESHOLD = 1000
+private const val SEFARIA_SOURCE = "Sefaria"
 
 /**
  * otzaria-library ships `<masechet>_headings.json` inside the very same `links/`
@@ -94,6 +96,8 @@ class DatabaseGenerator(
     private val filterSourcesForLinks: Boolean = true,
     private val allocator: IdAllocator = InMemoryIdAllocator.load(path = null),
     private val buildVersion: Int = 0,
+    // Accept previous books changing id (logged instead of failing the build).
+    private val allowBookIdLoss: Boolean = false,
 ) {
 
     private val logger = Logger.withTag("DatabaseGenerator")
@@ -210,6 +214,12 @@ class DatabaseGenerator(
     private val skippedBlacklistedFileTitles = mutableSetOf<String>()
     private val skippedUncategorizedTitles = mutableSetOf<String>()
 
+    // Otzaria: the keys [collectCurrentBooks] planned, and the key each book id went to.
+    private var plannedBookKeys: Set<BookKey> = emptySet()
+    // Otzaria: the keys the previous import brought in (see [previousImportKeys]).
+    private var previousImportBookKeys: Set<BookKey> = emptySet()
+    private val importedBookKeys = HashMap<Long, BookKey>()
+
     // Manual-link drop accounting (finding: 643 of 2,932 links silently dropped,
     // 642 of them for one missing book, logged as two INFO lines per link).
     private class DroppedLinkTarget(var links: Int, val firstPath: String)
@@ -232,6 +242,7 @@ class DatabaseGenerator(
         skippedSefariaShadowedTitles.clear()
         skippedBlacklistedFileTitles.clear()
         skippedUncategorizedTitles.clear()
+        importedBookKeys.clear()
         progress.start(total)
     }
 
@@ -371,6 +382,15 @@ class DatabaseGenerator(
 
     /** Public hook called by the importer once all Otzaria books are inserted. */
     internal fun recordSourceHashesAtEndOfImport() {
+        // Otzaria: only books this import made, not skipped ones holding an old id, so the
+        // next build can tell which books this one had (see [previousImportKeys]). A book
+        // without a hash would look gone to it, and its key free to take.
+        val imported = importedBookKeys.values.toHashSet()
+        val unhashed = imported - otzariaSourceHashes.keys
+        check(unhashed.isEmpty()) {
+            "${unhashed.size} imported books have no source hash in files_manifest.json: " +
+                unhashed.take(MAX_NAMES_PER_SUMMARY_LINE)
+        }
         if (otzariaSourceHashes.isEmpty()) return
         var recorded = 0
         // A hash with no allocated book id is a book that will be fully
@@ -378,7 +398,7 @@ class DatabaseGenerator(
         // than leaving as a bare "N / M".
         val unrecorded = LinkedHashMap<String, MutableList<String>>()
         for ((key, hash) in otzariaSourceHashes) {
-            if (allocator.peekBookId(key.sourceName, key.canonicalHeTitle) != null) {
+            if (key in imported) {
                 allocator.recordSourceHash(key, hash)
                 recorded++
             } else {
@@ -563,6 +583,8 @@ class DatabaseGenerator(
      */
     suspend fun generateLinesOnly(): Unit = coroutineScope {
         logger.i { "Starting phase 1: categories/books/lines generation..." }
+        // Captures the previous build's book ids, so it must exist before any allocation.
+        val bookIdContinuity = BookIdContinuity(allocator)
         try {
             initializeIdCountersFromExistingDb()
 
@@ -616,6 +638,9 @@ class DatabaseGenerator(
                 precreateSourceEntries()
                 backfillAcronymsForExistingBooks()
 
+                // Before any book id is allocated (priority books included).
+                registerBookAliases(bookIdContinuity)
+
                 totalBooksToProcess = try {
                     Files.walk(libraryRoot).use { s ->
                         s.filter { Files.isRegularFile(it) && it.extension == "txt" }
@@ -631,6 +656,7 @@ class DatabaseGenerator(
                 preloadAllBookContents(libraryPath)
                 processDirectory(libraryPath, null, 0, metadata)
                 assertAllHearotMergesApplied()
+                checkPlannedBooksImported()
                 logger.i { bookImportSummary("Otzaria book import (phase 1)") }
                 carryAcronymsAcrossRenames()
 
@@ -639,6 +665,7 @@ class DatabaseGenerator(
                 repository.rebuildCategoryClosure()
             }
             recordSourceHashesAtEndOfImport()
+            checkNoLostBookIds(bookIdContinuity)
         } catch (e: Throwable) {
             // Rethrown unchanged — this exists only to name the book the serial
             // insert loop was on. See [bookBreadcrumb].
@@ -1188,20 +1215,21 @@ class DatabaseGenerator(
         }
 
         // Skip if a book with the same heRef already exists from Sefaria (Sefaria has priority)
-        val existingBook = repository.getBookByHeRef(title)
-        if (existingBook != null) {
-            val existingSource = repository.getSourceById(existingBook.sourceId)
-            if (existingSource?.name == "Sefaria") {
-                skippedSefariaShadowedTitles += title
-                logger.i { "⏭️ Skipping '$title' - already exists from Sefaria (priority source)" }
-                skippedBooksCount += 1
-                noteBookFinished()
-                return
-            }
+        if (existsFromSefaria(title)) {
+            skippedSefariaShadowedTitles += title
+            logger.i { "⏭️ Skipping '$title' - already exists from Sefaria (priority source)" }
+            skippedBooksCount += 1
+            noteBookFinished()
+            return
         }
 
         // Assign a stable ID via IdAllocator so cross-build reproducibility holds.
         val currentBookId = allocator.bookId(srcName, title)
+        // Otzaria: an alias must never give one id to two books (an old key back beside its new one).
+        val bookKey = BookKey(srcName, title)
+        importedBookKeys.putIfAbsent(currentBookId, bookKey)?.let { other ->
+            check(other == bookKey) { "Book id $currentBookId went to both $other and $bookKey (book alias)" }
+        }
         currentBook = "$currentBookId '$title' file=$filename categoryId=$categoryId"
         logger.d { "Assigning ID $currentBookId to book '$title' (source=$srcName) with categoryId: $categoryId" }
 
@@ -1695,6 +1723,108 @@ class DatabaseGenerator(
             put("listResource", "otzariasqlite/src/commonMain/resources/priority.txt")
             putStrings("missingEntries", missing)
         }
+    }
+
+    private suspend fun existsFromSefaria(title: String): Boolean {
+        val existing = repository.getBookByHeRef(title) ?: return false
+        return repository.getSourceById(existing.sourceId)?.name == SEFARIA_SOURCE
+    }
+
+    /**
+     * Keys of every book this import will allocate, with their file. Mirrors the
+     * skips of [processDirectory] and [createAndProcessBook].
+     * Otzaria: our skips (only the companion notes merged into their base, root-level files);
+     * [checkPlannedBooksImported] fails the build if the import ends up elsewhere.
+     */
+    private suspend fun collectCurrentBooks(): Map<BookKey, Path> {
+        val files = Files.walk(libraryRoot).use { s ->
+            s.filter { Files.isRegularFile(it) && it.extension == "txt" && it.parent != libraryRoot }.sorted().toList()
+        }
+        val out = HashMap<BookKey, Path>()
+        for (path in files) {
+            val fileName = path.fileName.toString()
+            val rawTitle = fileName.substringBeforeLast('.')
+            if (fileName in fileNameBlacklist) continue
+            val title = normalizeBookTitle(rawTitle)
+            if (title in mergedHearotTitles) continue
+            val source = getSourceNameFor(path)
+            if (source in sourceBlacklist) continue
+            if (existsFromSefaria(title)) continue
+            out.putIfAbsent(BookKey(source, title), path)
+        }
+        return out
+    }
+
+    /** Otzaria: the books imported are exactly the ones [collectCurrentBooks] planned. */
+    private fun checkPlannedBooksImported() {
+        val imported = importedBookKeys.values.toSet()
+        val unplanned = imported - plannedBookKeys
+        val missing = plannedBookKeys - imported
+        check(unplanned.isEmpty() && missing.isEmpty()) {
+            "Book-id continuity planned other books than the import made: " +
+                "imported but not planned ${unplanned.take(MAX_NAMES_PER_SUMMARY_LINE)}, " +
+                "planned but not imported ${missing.take(MAX_NAMES_PER_SUMMARY_LINE)}"
+        }
+    }
+
+    /** Keeps the previous id of books Otzaria moved to another source or renamed. */
+    private suspend fun registerBookAliases(continuity: BookIdContinuity) {
+        val currentBooks = collectCurrentBooks()
+        plannedBookKeys = currentBooks.keys
+        previousImportBookKeys = previousImportKeys()
+        continuity.registerAliases(
+            currentKeys = currentBooks.keys,
+            // Otzaria: only books the previous build had.
+            inScope = { it.sourceName != SEFARIA_SOURCE && it in previousImportBookKeys },
+            atVersion = buildVersion,
+            currentLineHashes = { key ->
+                // Same hash as stableLineId, so it compares with the previous line keys.
+                // Otzaria: on the lines as processBookContent stores them (BOM off, notes merged).
+                currentBooks[key]?.readText(Charsets.UTF_8)?.lines()
+                    ?.let(Utf8Bom::stripFirstLine)
+                    ?.let { lines ->
+                        hearotMergePlans[key.canonicalHeTitle]
+                            ?.let { HearotCompanionMerge.mergeLines(key.canonicalHeTitle, lines, it) } ?: lines
+                    }
+                    ?.map(IdAllocatorBindings::normalisedContentHash)
+            },
+        )
+    }
+
+    /**
+     * Otzaria: the Otzaria keys the previous import brought in, i.e. whose source hash it
+     * recorded (it records one for every book it imports). The build state keeps every key
+     * it ever saw (v32 held 12 dead keys whose title lives on under another id), so only
+     * these are aliased or reported lost.
+     */
+    private fun previousImportKeys(): Set<BookKey> {
+        val previous = allocator.bookIds().keys.filter { it.sourceName != SEFARIA_SOURCE }
+        val recorded = previous.mapNotNull { key -> allocator.previousSourceHash(key)?.let { key to it.lastSeenVersion } }
+        check(previous.isEmpty() || recorded.isNotEmpty()) {
+            "The build state holds ${previous.size} Otzaria books but no source hash for any of them " +
+                "(files_manifest.json), so the books of the previous build are unknown"
+        }
+        val last = recorded.maxOfOrNull { it.second } ?: return emptySet()
+        // Older builds' books are told apart by an older version only.
+        check(last < buildVersion) {
+            "Build version $buildVersion is not after the previous build's ($last), so its books are unknown"
+        }
+        return recorded.filter { it.second == last }.mapTo(HashSet()) { it.first }
+    }
+
+    /** Fails the build when a previous book is still there under another id. */
+    private suspend fun checkNoLostBookIds(continuity: BookIdContinuity) {
+        // Otzaria: books of the previous build only, and a book Sefaria now covers is left to
+        // otzaria-library's check (it changes id by design: Sefaria's edition replaces it).
+        val (coveredBySefaria, lost) = continuity
+            .findLostIds(repository.getAllBooks().associate { it.id to it.title }) { it in previousImportBookKeys }
+            .partition { it.key.canonicalHeTitle in skippedSefariaShadowedTitles }
+        coveredBySefaria.forEach { logger.w { "Book ${it.key} is now covered by Sefaria and lost id ${it.id}" } }
+        if (lost.isEmpty()) return
+        lost.forEach { logger.e { "Book ${it.key} lost id ${it.id}; its title now has ids ${it.currentIds}" } }
+        val message = "${lost.size} previous books changed id, which orphans user notes. " +
+            "Alias them, or rerun with -PallowBookIdLoss=true to accept it."
+        if (allowBookIdLoss) logger.w { message } else error(message)
     }
 
     /**

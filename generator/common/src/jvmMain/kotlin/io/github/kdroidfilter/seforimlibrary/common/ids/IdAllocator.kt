@@ -75,12 +75,26 @@ interface IdAllocator {
     /** Returns the previously-allocated id for the given key, or `null` if unknown. */
     fun peekBookId(sourceName: String, canonicalHeTitle: String): Long?
 
+    /** Copy of every known book key and its id, aliased keys included. */
+    fun bookIds(): Map<BookKey, Long>
+
+    /** Line content hashes (20-byte sha1) known for each of [bookIds]. */
+    fun lineHashesByBook(bookIds: Set<Long>): Map<Long, List<ByteArray>>
+
     /**
      * Records a book rename detected at the current build version.
      * Following calls to [bookId] with [newKey] will return the id originally
      * assigned to [oldKey].
      */
     fun registerBookAlias(oldKey: BookKey, newKey: BookKey, atVersion: Int)
+
+    /**
+     * Otzaria: drops [key], held by a book no longer there, so that a renamed book can take
+     * it. The id is not handed out again, and the aliases that led to it go with it.
+     *
+     * @return the retired id.
+     */
+    fun retireBookKey(key: BookKey): Long
 
     /**
      * Records the canonical sha256 source hash for a book observed at the

@@ -38,10 +38,14 @@ class OtzariaBomTest {
         return SeforimRepository(":memory:", driver)
     }
 
+    // Each build after the last one, as in a release.
+    private var builds = 0
+
     private suspend fun importBook(sourceDir: Path, allocator: InMemoryIdAllocator): ImportedBook {
         val repo = newRepo()
         try {
-            DatabaseGenerator(sourceDirectory = sourceDir, repository = repo, allocator = allocator)
+            writeFilesManifest(sourceDir)
+            DatabaseGenerator(sourceDirectory = sourceDir, repository = repo, allocator = allocator, buildVersion = ++builds)
                 .generateLinesOnly()
             val book = repo.getAllBooks().single { it.title == "ספר" }
             return ImportedBook(repo.getBookToc(book.id), repo.getLines(book.id, 0, Int.MAX_VALUE))
@@ -134,6 +138,7 @@ class OtzariaBomTest {
                 bom + """[{"line_index_1": 2, "heRef_2": "הערות", "path_2": "הערות על ספר.txt",
                     |"line_index_2": 1, "Conection Type": "commentary"}]""".trimMargin(),
             )
+            writeFilesManifest(sourceDir)
             val repo = newRepo()
             try {
                 val generator = DatabaseGenerator(sourceDirectory = sourceDir, repository = repo)

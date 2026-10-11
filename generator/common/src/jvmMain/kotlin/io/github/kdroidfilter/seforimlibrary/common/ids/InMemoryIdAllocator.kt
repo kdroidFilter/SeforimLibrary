@@ -176,8 +176,9 @@ class InMemoryIdAllocator private constructor(
     override fun bookId(sourceName: String, canonicalHeTitle: String): Long {
         val key = BookKey(sourceName, canonicalHeTitle)
         // Honour aliases so renamed books keep their original id.
-        bookAliases[key]?.let { alias ->
-            books[alias.newKey]?.let { return it }
+        // Otzaria: through every later rename too, not just the first.
+        currentKeyOf(key)?.let { current ->
+            books[current]?.let { return it }
         }
         books[key]?.let {
             reusedCount.getValue(IdTable.BOOK).incrementAndGet()
@@ -302,12 +303,36 @@ class InMemoryIdAllocator private constructor(
     override fun peekBookId(sourceName: String, canonicalHeTitle: String): Long? =
         books[BookKey(sourceName, canonicalHeTitle)]
 
+    override fun bookIds(): Map<BookKey, Long> = books.toMap()
+
+    override fun lineHashesByBook(bookIds: Set<Long>): Map<Long, List<ByteArray>> {
+        val out = HashMap<Long, MutableList<ByteArray>>()
+        lines.keys.forEach { key ->
+            if (key.bookId in bookIds) out.getOrPut(key.bookId) { ArrayList() } += key.contentHash
+        }
+        return out
+    }
+
     override fun registerBookAlias(oldKey: BookKey, newKey: BookKey, atVersion: Int) {
         val existing = books[oldKey] ?: return
         // Move the id under the new natural key so subsequent lookups hit.
-        books.putIfAbsent(newKey, existing)
+        // Otzaria: move, not copy. id_book holds one key per id (UNIQUE), so a copy failed
+        // the snapshot; the alias still resolves the old key.
+        val held = books.putIfAbsent(newKey, existing)
+        check(held == null || held == existing) { "Book alias $oldKey -> $newKey: $newKey already holds id $held" }
+        books.remove(oldKey, existing)
         bookAliases[oldKey] = BookAlias(oldKey, newKey, atVersion)
+        // Otzaria: newKey names a book again, so an alias it had from an older rename is stale.
+        bookAliases.remove(newKey)
         logger.i { "Registered book alias: $oldKey -> $newKey (id=$existing, version=$atVersion)" }
+    }
+
+    override fun retireBookKey(key: BookKey): Long {
+        val leadingHere = bookAliases.keys.filter { currentKeyOf(it) == key }
+        val id = checkNotNull(books.remove(key)) { "Book key $key holds no id to retire" }
+        leadingHere.forEach { bookAliases.remove(it) }
+        logger.i { "Retired book key $key (id=$id) and ${leadingHere.size} aliases to it" }
+        return id
     }
 
     override fun recordSourceHash(key: BookKey, sourceHash: BookSourceHash) {
@@ -317,7 +342,21 @@ class InMemoryIdAllocator private constructor(
     override fun previousSourceHash(key: BookKey): BookSourceHash? =
         previousSourceHashes[key]
 
-    override fun knownBookKeys(): Map<BookKey, Long> = books.toMap()
+    // Otzaria: an aliased key left [books] for its new key, and still names that book,
+    // however many times it was renamed since.
+    override fun knownBookKeys(): Map<BookKey, Long> =
+        books.toMap() + bookAliases.keys.mapNotNull { old -> currentKeyOf(old)?.let { books[it] }?.let { old to it } }
+
+    /** Otzaria: the key a renamed book has now, following each rename after [oldKey]'s. */
+    private fun currentKeyOf(oldKey: BookKey): BookKey? {
+        val seen = hashSetOf(oldKey)
+        var key = bookAliases[oldKey]?.newKey ?: return null
+        while (!books.containsKey(key)) {
+            check(seen.add(key)) { "Book aliases loop: ${seen.joinToString(" -> ")} -> $key" }
+            key = bookAliases[key]?.newKey ?: return null
+        }
+        return key
+    }
 
     override fun lineContentHashes(bookIds: Set<Long>): Map<Long, List<ByteArray>> {
         if (bookIds.isEmpty()) return emptyMap()

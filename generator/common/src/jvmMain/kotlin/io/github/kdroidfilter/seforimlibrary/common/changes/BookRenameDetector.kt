@@ -90,6 +90,10 @@ class BookRenameDetector(
             var bestKey: BookKey? = null
             var bestScore = 0.0
             for ((newKey, newHashes) in mutableAdded) {
+                // Jaccard is bounded by min/max size: skip pairs that cannot reach the threshold.
+                val sizeRatio = minOf(oldHashes.size, newHashes.size).toDouble() /
+                    maxOf(oldHashes.size, newHashes.size)
+                if (sizeRatio < maxOf(threshold, bestScore)) continue
                 val score = oldHashes.jaccard(newHashes)
                 if (score > bestScore) {
                     bestScore = score
@@ -106,6 +110,34 @@ class BookRenameDetector(
     }
 
     /**
+     * Otzaria: like [detect], but a pair is kept only when each of its books reaches
+     * [threshold] with the other alone, so neither a tie nor the iteration order decides
+     * which book keeps an id. Pairs left out are logged.
+     */
+    fun detectUnique(
+        removed: Map<BookKey, LineHashSet>,
+        added: Map<BookKey, LineHashSet>,
+    ): List<Alias> {
+        val matches = removed.flatMap { (oldKey, oldHashes) ->
+            if (oldHashes.size == 0) return@flatMap emptyList()
+            added.mapNotNull { (newKey, newHashes) ->
+                val sizeRatio = minOf(oldHashes.size, newHashes.size).toDouble() /
+                    maxOf(oldHashes.size, newHashes.size)
+                if (sizeRatio < threshold) return@mapNotNull null
+                oldHashes.jaccard(newHashes).takeIf { it >= threshold }?.let { Alias(oldKey, newKey, it) }
+            }
+        }
+        val byOld = matches.groupBy { it.oldKey }
+        val byNew = matches.groupBy { it.newKey }
+        val (unique, ambiguous) = matches
+            .sortedWith(compareBy({ it.oldKey.sourceName }, { it.oldKey.canonicalHeTitle }, { it.newKey.sourceName }, { it.newKey.canonicalHeTitle }))
+            .partition { byOld.getValue(it.oldKey).size == 1 && byNew.getValue(it.newKey).size == 1 }
+        unique.forEach { logger.i { "Rename detected: ${it.oldKey} → ${it.newKey} (jaccard=${it.jaccard})" } }
+        ambiguous.forEach { logger.w { "Ambiguous rename, no alias: ${it.oldKey} → ${it.newKey} (jaccard=${it.jaccard})" } }
+        return unique
+    }
+
+    /**
      * Convenience overload: reads `removed` line hashes from a previous
      * [BuildStateSnapshot] (via its `lines` map keyed by `bookId` lookup),
      * using the snapshot's `books` map to resolve `BookKey → bookId`.
@@ -116,6 +148,8 @@ class BookRenameDetector(
         removedKeys: Set<BookKey>,
         atVersion: Int,
     ): List<Alias> {
+        // Linear scan of every line per removed key: fine for tests, too slow on a
+        // full build state (use IdAllocator.lineHashesByBook there).
         val removed = removedKeys.associateWith { key ->
             val bookId = previous.books[key] ?: return@associateWith LineHashSet(emptySet())
             val hashes = previous.lines.entries.asSequence()

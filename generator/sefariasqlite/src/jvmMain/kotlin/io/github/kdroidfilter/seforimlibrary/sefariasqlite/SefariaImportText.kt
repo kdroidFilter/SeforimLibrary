@@ -36,8 +36,85 @@ internal fun collapsesInlineBreaks(bookEnTitle: String): Boolean =
 private val TRAILING_HTML_LINE_BREAK_REGEX =
     Regex("""(?:\s*<br\s*/?>)+\s*$""", RegexOption.IGNORE_CASE)
 
-internal fun cleanSefariaLine(raw: String, collapseInlineBreaks: Boolean = false): String {
+// Ref prefixes of sections whose footnotes are a translator's apparatus rather
+// than part of the printed sefer. Noda BiYehudah I's Orach Chaim comes from
+// Harold Landa's edition, whose footnotes mix English notes with Hebrew
+// sources followed by Sefaria's English translations (kdroidFilter/Zayit#439).
+private val TRANSLATOR_FOOTNOTE_REF_PREFIXES = listOf("Noda BiYehudah I, Orach Chaim,")
+
+internal fun hasTranslatorFootnotes(ref: String): Boolean =
+    TRANSLATOR_FOOTNOTE_REF_PREFIXES.any { ref.startsWith(it) }
+
+// Books whose segments already open with their printed marker ("(יד) נהגו לתייג"),
+// so the generated "(letter) " segment label doubles it. The Mishnah Berurah's
+// kuntresim (e.g. Mishnat Soferim in siman 36) have no seif katan at all, so a
+// generated label there is wrong rather than redundant (kdroidFilter/SeforimLibrary#73, #74).
+private val SELF_LABELED_SEGMENT_BOOKS = setOf("Mishnah Berurah")
+
+internal fun hasSelfLabeledSegments(bookEnTitle: String): Boolean = bookEnTitle in SELF_LABELED_SEGMENT_BOOKS
+
+// Books whose unnamed ("Integer") segments are the printed numbered paragraphs (אותיות)
+// readers navigate by: each segment gets its "(letter) " label and its own TOC entry
+// (kdroidFilter/Zayit#509).
+private val NUMBERED_PARAGRAPH_BOOKS = setOf(
+    "Bereshit Rabbah",
+    "Shemot Rabbah",
+    "Vayikra Rabbah",
+    "Bamidbar Rabbah",
+    "Devarim Rabbah",
+    "Ruth Rabbah",
+    "Esther Rabbah",
+    "Eikhah Rabbah",
+    "Kohelet Rabbah",
+    "Shir HaShirim Rabbah",
+)
+
+internal fun hasNumberedParagraphs(bookEnTitle: String): Boolean = bookEnTitle in NUMBERED_PARAGRAPH_BOOKS
+
+// Some simanim of the Mishnah Berurah (494-529) mark the seif katan as "{א}"
+// instead of the printed "(א)".
+private val BRACED_SEGMENT_MARKER_REGEX = Regex("""^\{([א-ת]{1,4})\}""")
+
+internal fun normalizeSegmentMarker(line: String): String = BRACED_SEGMENT_MARKER_REGEX.replace(line, "($1)")
+
+private val FOOTNOTE_MARKER_REGEX = Regex("""<sup class="footnote-marker">.*?</sup>""")
+private const val FOOTNOTE_OPEN = """<i class="footnote">"""
+private val ITALIC_TAG_REGEX = Regex("""<i\b[^>]*>|</i>""", RegexOption.IGNORE_CASE)
+
+/** Drops footnote markers and bodies; bodies may nest `<i>` tags, so closing tags are matched by depth. */
+internal fun stripSefariaFootnotes(line: String): String {
+    if (!line.contains(FOOTNOTE_OPEN)) return line
+    val withoutMarkers = FOOTNOTE_MARKER_REGEX.replace(line, "")
+    val out = StringBuilder(withoutMarkers.length)
+    var cursor = 0
+    while (true) {
+        val start = withoutMarkers.indexOf(FOOTNOTE_OPEN, cursor)
+        if (start < 0) break
+        out.append(withoutMarkers, cursor, start)
+        var depth = 0
+        var end = withoutMarkers.length
+        for (tag in ITALIC_TAG_REGEX.findAll(withoutMarkers, start)) {
+            depth += if (tag.value.startsWith("</")) -1 else 1
+            if (depth == 0) {
+                end = tag.range.last + 1
+                break
+            }
+        }
+        cursor = end
+    }
+    out.append(withoutMarkers, cursor, withoutMarkers.length)
+    return out.toString()
+}
+
+internal fun cleanSefariaLine(
+    raw: String,
+    collapseInlineBreaks: Boolean = false,
+    stripFootnotes: Boolean = false,
+): String {
     var s = if (raw.contains('\n')) raw.replace("\n", "") else raw
+    if (stripFootnotes) {
+        s = stripSefariaFootnotes(s)
+    }
     if (OTZAR_MARKUP_REGEX.containsMatchIn(s)) {
         s = OTZAR_MARKUP_REGEX.replace(s, "$1")
     }

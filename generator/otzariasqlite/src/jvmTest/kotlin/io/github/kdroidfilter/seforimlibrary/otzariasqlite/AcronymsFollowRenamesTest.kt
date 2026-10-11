@@ -296,6 +296,9 @@ class AcronymsFollowRenamesTest {
 
     private fun text(title: String) = (listOf("<h1>$title</h1>") + body).joinToString("\n")
 
+    // Each build after the last one, as in a release.
+    private var builds = 0
+
     /** Builds [books] against [state] and returns every book's acronyms; [log] gets the build's log. */
     private fun build(
         state: Path,
@@ -311,11 +314,13 @@ class AcronymsFollowRenamesTest {
                 Logger.setMinSeverity(Severity.Verbose)
             }
             val allocator = InMemoryIdAllocator.load(state.takeIf { Files.exists(it) })
+            val sourceDir = library(books).also(::writeFilesManifest)
             DatabaseGenerator(
-                sourceDirectory = library(books),
+                sourceDirectory = sourceDir,
                 repository = repo,
                 acronymDbPath = acronyms.toString(),
                 allocator = allocator,
+                buildVersion = ++builds,
             ).generateLinesOnly()
             allocator.snapshotTo(state)
             repo.getAllBooks().associate { it.title to repo.getAcronymsForBook(it.id).toSet() }
@@ -368,6 +373,21 @@ class AcronymsFollowRenamesTest {
         )))
     }
 
+    @Test
+    fun aBookRenamedTwiceKeepsTheAcronymsOfItsFirstTitle() {
+        val first = "אמת ואמונה - מנחם מנדל מקוצק"
+        val second = "אמת ואמונה - מנחם מנדל"
+        val third = "אמת ואמונה"
+        val acronyms = acronymizer(mapOf(first to listOf("קוצקי", "הקוצקי")))
+        val state = Files.createTempDirectory("otzaria-renames-state").resolve("build_state.db")
+        build(state, acronyms, mapOf(first to text(first)))
+        assertEquals(setOf("קוצקי", "הקוצקי", first), build(state, acronyms, mapOf(second to text(second))).getValue(second))
+        assertEquals(
+            setOf("קוצקי", "הקוצקי", first, second),
+            build(state, acronyms, mapOf(third to text(third))).getValue(third),
+        )
+    }
+
     private class Capture : LogWriter() {
         val lines = mutableListOf<String>()
         override fun log(severity: Severity, message: String, tag: String, throwable: Throwable?) {
@@ -397,7 +417,8 @@ class AcronymsFollowRenamesTest {
         val log = Capture()
         val after = build(state, acronyms, mapOf("ספר" to textTwice("ספר")), log)
         assertEquals(setOf("סמח", "ספר - מחבר"), after.getValue("ספר"))
-        assertContains(log.renames().single(), "2 terms carried to 1 books: 'ספר - מחבר' → 'ספר' (2, same content)")
+        // Otzaria: the renamed file keeps its id (BookIdContinuity), so the old key names it.
+        assertContains(log.renames().single(), "2 terms carried to 1 books: 'ספר - מחבר' → 'ספר' (2, same id)")
     }
 
     @Test
