@@ -29,9 +29,9 @@ private val CLASS_PRIORITY = listOf(
     CaseClass.IBID_BARE,
 )
 
-private const val DEFAULT_SEFARIA_SCHEMAS = "generator/sefariasqlite/build/sefaria/export/schemas"
+internal const val DEFAULT_SEFARIA_SCHEMAS = "generator/sefariasqlite/build/sefaria/export/schemas"
 
-private const val DEFAULT_MODEL = "meta/muse-spark-1.3-contributor"
+internal const val DEFAULT_MODEL = "meta/muse-spark-1.3-contributor"
 
 /** Average billed cost per case measured on the corpus run (Muse 1.3 contributor, prompt v4, reasoning on). */
 private const val COST_PER_CASE_USD = 0.00047

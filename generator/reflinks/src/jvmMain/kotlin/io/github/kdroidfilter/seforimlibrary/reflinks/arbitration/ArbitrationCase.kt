@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.reflinks.arbitration
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.Json
 import java.security.MessageDigest
 
@@ -11,6 +12,8 @@ data class Candidate(
     val heRef: String,
     val snippet: String,
     val note: String? = null,
+    /** Target line in the database being scanned; not part of the cache key. */
+    @Transient val lineId: Long = 0,
 ) {
     val target: String get() = "$title|$heRef"
 }

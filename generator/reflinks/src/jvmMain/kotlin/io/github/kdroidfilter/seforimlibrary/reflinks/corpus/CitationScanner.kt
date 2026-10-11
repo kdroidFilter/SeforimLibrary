@@ -255,7 +255,7 @@ class CitationScanner(private val index: HeRefIndex, private val sefariaRefs: Se
 
     private fun candidate(ref: LineRef, note: String? = null): Candidate {
         val title = index.bookTitles.getValue(ref.bookId)
-        return Candidate(title = title, heRef = ref.heRef, snippet = index.snippet(ref.lineId), note = note)
+        return Candidate(title = title, heRef = ref.heRef, snippet = index.snippet(ref.lineId), note = note, lineId = ref.lineId)
     }
 
     private fun ibidCase(o: OccurrenceContext, ante: Ante, candidates: List<Candidate>) = ArbitrationCase(

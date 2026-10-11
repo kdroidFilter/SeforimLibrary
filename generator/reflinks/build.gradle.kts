@@ -60,3 +60,23 @@ tasks.register<JavaExec>("arbitrateRefs") {
         if (project.hasProperty("retryInvalid")) add("--retry-invalid")
     }
 }
+
+/**
+ * Writes the citation links into the text of a copy of the database (no network: deterministic links + cached LLM
+ * decisions). Usage: ./gradlew :reflinks:generateRefLinks [-PseforimDb=…] [-PrefLinksOut=…]
+ */
+tasks.register<JavaExec>("generateRefLinks") {
+    group = "application"
+    description = "Write <a class=\"ref\" href=\"seforim://line/<id>\"> links into a copy of seforim.db."
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.reflinks.GenerateRefLinksKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+    jvmArgs = listOf("-Xmx8g", "--enable-native-access=ALL-UNNAMED")
+    args = listOf(
+        "--db=" + ((project.findProperty("seforimDb") as String?) ?: defaultDb),
+        "--out=" + ((project.findProperty("refLinksOut") as String?)
+            ?: rootProject.layout.buildDirectory.file("reflinks/seforim.db").get().asFile.absolutePath),
+        "--decisions=$decisionsFile",
+        "--sefaria-schemas=" + rootProject.layout.projectDirectory.dir("generator/sefariasqlite/build/sefaria/export/schemas").asFile.absolutePath,
+    )
+}
