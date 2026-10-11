@@ -1219,12 +1219,20 @@ class DatabaseGenerator(
         return out
     }
 
-    /** Keeps the previous id of books Otzaria moved to another source or renamed. */
+    /**
+     * Keeps the previous id of books Otzaria moved to another source or renamed,
+     * and of books Sefaria no longer provides (e.g. newly blacklisted) that
+     * Otzaria now does.
+     */
     private suspend fun registerBookAliases(continuity: BookIdContinuity) {
         val currentBooks = collectCurrentBooks()
+        val sefariaSourceId = repository.getSourceByName(SEFARIA_SOURCE)?.id
+        val sefariaTitles = repository.getAllBooks()
+            .filter { it.sourceId == sefariaSourceId }
+            .mapTo(HashSet()) { it.title }
         continuity.registerAliases(
             currentKeys = currentBooks.keys,
-            inScope = { it.sourceName != SEFARIA_SOURCE },
+            inScope = { it.sourceName != SEFARIA_SOURCE || it.canonicalHeTitle !in sefariaTitles },
             atVersion = buildVersion,
             currentLineHashes = { key ->
                 // Same hash as stableLineId, so it compares with the previous line keys.

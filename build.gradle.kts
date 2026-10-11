@@ -1,3 +1,7 @@
+import java.net.URI
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+
 plugins {
     alias(libs.plugins.multiplatform).apply(false)
     alias(libs.plugins.android.library).apply(false)
@@ -7,10 +11,74 @@ plugins {
     alias(libs.plugins.android.application).apply(false)
 }
 
+// Seeds the IdAllocator with the build_state of the latest GitHub release that published one, so the ids
+// (and the user notes on them) carry over. Each run starts again from that file: a previous local run rewrites
+// build/seforim.db.buildstate, and seeding from it would drift from the published ids.
+// -PbuildStateTag=<tag> picks the release; -PfreshBuildState=true starts from empty ids instead.
+val downloadBuildState = tasks.register("downloadBuildState") {
+    group = "application"
+    description = "Copies the build_state of the latest GitHub release into build/seforim.db.buildstate."
+
+    val repo = "kdroidFilter/SeforimLibrary"
+    val asset = "seforim.db.buildstate"
+    val target = layout.buildDirectory.file("seforim.db.buildstate").get().asFile
+    val cacheDir = layout.buildDirectory.dir("buildstate-cache").get().asFile
+    val fresh = providers.gradleProperty("freshBuildState").orNull == "true"
+    val explicitTag = providers.gradleProperty("buildStateTag").orNull
+    val token = providers.environmentVariable("GITHUB_TOKEN").orNull
+
+    outputs.upToDateWhen { false }
+    doLast {
+        if (fresh) {
+            target.delete()
+            logger.lifecycle("freshBuildState: starting from empty ids")
+            return@doLast
+        }
+
+        fun openApi(path: String) = (URI("https://api.github.com/repos/$repo/$path").toURL().openConnection())
+            .apply {
+                setRequestProperty("Accept", "application/vnd.github+json")
+                token?.let { setRequestProperty("Authorization", "Bearer $it") }
+            }
+            .getInputStream()
+
+        // Releases come newest first
+        @Suppress("UNCHECKED_CAST")
+        val releases = openApi("releases?per_page=100").use { groovy.json.JsonSlurper().parse(it) } as List<Map<String, Any?>>
+        val withAsset = releases.filter { release ->
+            (release["assets"] as List<Map<String, Any?>>).any { it["name"] == asset }
+        }
+        val release = if (explicitTag != null) {
+            withAsset.firstOrNull { it["tag_name"] == explicitTag }
+                ?: error("Release $explicitTag has no $asset")
+        } else {
+            withAsset.firstOrNull() ?: error("No release of $repo publishes $asset (-PfreshBuildState=true to start from empty ids)")
+        }
+        val tag = release["tag_name"] as String
+        val latestTag = releases.firstOrNull()?.get("tag_name")
+        if (explicitTag == null && tag != latestTag) {
+            logger.warn("The latest release $latestTag has no $asset: seeding from $tag instead")
+        }
+
+        val cached = cacheDir.resolve("$tag/$asset")
+        if (!cached.exists()) {
+            val url = (release["assets"] as List<Map<String, Any?>>).first { it["name"] == asset }["browser_download_url"] as String
+            logger.lifecycle("Downloading $asset of $tag")
+            cached.parentFile.mkdirs()
+            val partial = cached.resolveSibling("$asset.part")
+            URI(url).toURL().openStream().use { Files.copy(it, partial.toPath(), StandardCopyOption.REPLACE_EXISTING) }
+            Files.move(partial.toPath(), cached.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        }
+        Files.copy(cached.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        logger.lifecycle("Seeded ${target.name} from release $tag")
+    }
+}
+
 tasks.register("generateSeforimDb") {
     group = "application"
     description = "Generate build/seforim.db from Sefaria, append Otzaria, build catalog, Lucene indexes, and release info."
 
+    dependsOn(downloadBuildState)
     dependsOn(":sefariasqlite:generateSefariaSqlite")
     dependsOn(":otzariasqlite:appendOtzaria")
     dependsOn(":otzariasqlite:generateHavroutaLinks")
@@ -47,6 +115,9 @@ project(":otzariasqlite").tasks.matching {
     )
 }.configureEach {
     mustRunAfter(":sefariasqlite:renameCategories")
+}
+project(":sefariasqlite").tasks.matching { it.name == "generateSefariaSqlite" }.configureEach {
+    mustRunAfter(downloadBuildState)
 }
 project(":sefariasqlite").tasks.matching { it.name == "renameCategories" }.configureEach {
     mustRunAfter(":sefariasqlite:generateSefariaSqlite")
