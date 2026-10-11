@@ -24,6 +24,7 @@ class OtzariaTocParentTest {
         SeforimDb.Schema.create(driver)
         val repo = SeforimRepository(":memory:", driver)
         try {
+            writeFilesManifest(sourceDir)
             DatabaseGenerator(sourceDirectory = sourceDir, repository = repo, allocator = allocator)
                 .generateLinesOnly()
             val book = repo.getAllBooks().single { it.title == "ספר" }

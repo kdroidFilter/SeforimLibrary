@@ -99,13 +99,14 @@ class BookIdContinuity(
      * Books really removed upstream (title gone) are not reported.
      *
      * @param currentBooks id to title of every book in the produced DB.
+     * @param inScope Otzaria: previous keys to check (the books the previous build had).
      */
-    fun findLostIds(currentBooks: Map<Long, String>): List<LostBook> {
+    fun findLostIds(currentBooks: Map<Long, String>, inScope: (BookKey) -> Boolean = { true }): List<LostBook> {
         val currentIdsByTitle = HashMap<String, MutableSet<Long>>()
         currentBooks.forEach { (id, title) -> currentIdsByTitle.getOrPut(normalizeTitle(title)) { HashSet() } += id }
         val lostIds = previous.values.filterTo(HashSet()) { it !in currentBooks }
         return previous.mapNotNull { (key, id) ->
-            if (id !in lostIds) return@mapNotNull null
+            if (id !in lostIds || !inScope(key)) return@mapNotNull null
             val currentIds = currentIdsByTitle[normalizeTitle(key.canonicalHeTitle)] ?: return@mapNotNull null
             LostBook(key, id, currentIds)
         }

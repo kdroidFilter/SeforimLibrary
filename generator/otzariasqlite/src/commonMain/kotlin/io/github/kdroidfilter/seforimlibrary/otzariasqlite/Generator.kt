@@ -216,6 +216,8 @@ class DatabaseGenerator(
 
     // Otzaria: the keys [collectCurrentBooks] planned, and the key each book id went to.
     private var plannedBookKeys: Set<BookKey> = emptySet()
+    // Otzaria: the keys the previous import brought in (see [previousImportKeys]).
+    private var previousImportBookKeys: Set<BookKey> = emptySet()
     private val importedBookKeys = HashMap<Long, BookKey>()
 
     // Manual-link drop accounting (finding: 643 of 2,932 links silently dropped,
@@ -386,8 +388,11 @@ class DatabaseGenerator(
         // reprocessed on every future cycle, so the gap is worth naming rather
         // than leaving as a bare "N / M".
         val unrecorded = LinkedHashMap<String, MutableList<String>>()
+        // Otzaria: only books this import made, not skipped ones holding an old id, so the
+        // next build can tell which books this one had (see [previousImportKeys]).
+        val imported = importedBookKeys.values.toHashSet()
         for ((key, hash) in otzariaSourceHashes) {
-            if (allocator.peekBookId(key.sourceName, key.canonicalHeTitle) != null) {
+            if (key in imported) {
                 allocator.recordSourceHash(key, hash)
                 recorded++
             } else {
@@ -1760,9 +1765,11 @@ class DatabaseGenerator(
     private suspend fun registerBookAliases(continuity: BookIdContinuity) {
         val currentBooks = collectCurrentBooks()
         plannedBookKeys = currentBooks.keys
+        previousImportBookKeys = previousImportKeys()
         continuity.registerAliases(
             currentKeys = currentBooks.keys,
-            inScope = { it.sourceName != SEFARIA_SOURCE },
+            // Otzaria: only books the previous build had.
+            inScope = { it.sourceName != SEFARIA_SOURCE && it in previousImportBookKeys },
             atVersion = buildVersion,
             currentLineHashes = { key ->
                 // Same hash as stableLineId, so it compares with the previous line keys.
@@ -1778,9 +1785,30 @@ class DatabaseGenerator(
         )
     }
 
+    /**
+     * Otzaria: the Otzaria keys the previous import brought in, i.e. whose source hash it
+     * recorded. The build state keeps every key it ever saw (v32 held 12 dead keys whose
+     * title lives on under another id), so only these are aliased or reported lost.
+     */
+    private fun previousImportKeys(): Set<BookKey> {
+        val previous = allocator.bookIds().keys.filter { it.sourceName != SEFARIA_SOURCE }
+        val recorded = previous.mapNotNull { key -> allocator.previousSourceHash(key)?.let { key to it.lastSeenVersion } }
+        check(previous.isEmpty() || recorded.isNotEmpty()) {
+            "The build state holds ${previous.size} Otzaria books but no source hash for any of them " +
+                "(files_manifest.json), so the books of the previous build are unknown"
+        }
+        val last = recorded.maxOfOrNull { it.second } ?: return emptySet()
+        return recorded.filter { it.second == last }.mapTo(HashSet()) { it.first }
+    }
+
     /** Fails the build when a previous book is still there under another id. */
     private suspend fun checkNoLostBookIds(continuity: BookIdContinuity) {
-        val lost = continuity.findLostIds(repository.getAllBooks().associate { it.id to it.title })
+        // Otzaria: books of the previous build only, and a book Sefaria now covers is left to
+        // otzaria-library's check (it changes id by design: Sefaria's edition replaces it).
+        val (coveredBySefaria, lost) = continuity
+            .findLostIds(repository.getAllBooks().associate { it.id to it.title }) { it in previousImportBookKeys }
+            .partition { it.key.canonicalHeTitle in skippedSefariaShadowedTitles }
+        coveredBySefaria.forEach { logger.w { "Book ${it.key} is now covered by Sefaria and lost id ${it.id}" } }
         if (lost.isEmpty()) return
         lost.forEach { logger.e { "Book ${it.key} lost id ${it.id}; its title now has ids ${it.currentIds}" } }
         val message = "${lost.size} previous books changed id, which orphans user notes. " +

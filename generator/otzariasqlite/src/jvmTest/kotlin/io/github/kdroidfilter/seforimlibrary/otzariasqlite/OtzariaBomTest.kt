@@ -41,6 +41,7 @@ class OtzariaBomTest {
     private suspend fun importBook(sourceDir: Path, allocator: InMemoryIdAllocator): ImportedBook {
         val repo = newRepo()
         try {
+            writeFilesManifest(sourceDir)
             DatabaseGenerator(sourceDirectory = sourceDir, repository = repo, allocator = allocator)
                 .generateLinesOnly()
             val book = repo.getAllBooks().single { it.title == "ספר" }

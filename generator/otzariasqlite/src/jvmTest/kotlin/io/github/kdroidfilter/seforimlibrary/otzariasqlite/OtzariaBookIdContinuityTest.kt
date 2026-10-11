@@ -2,6 +2,8 @@ package io.github.kdroidfilter.seforimlibrary.otzariasqlite
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator
+import io.github.kdroidfilter.seforimlibrary.core.models.Book
+import io.github.kdroidfilter.seforimlibrary.core.models.Category
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import kotlinx.coroutines.runBlocking
@@ -10,6 +12,7 @@ import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /** Otzaria: book ids across builds of our importer (upstream #118, adapted). */
@@ -33,15 +36,31 @@ class OtzariaBookIdContinuityTest {
         return root
     }
 
-    /** Builds [files] against [state] and returns each book's (source, title) with its id. */
-    private fun build(state: Path, version: Int, files: List<BookFile>): Map<Pair<String, String>, Long> = runBlocking {
+    /**
+     * Builds [files] against [state], on a DB already holding the Sefaria books [sefaria],
+     * and returns each book's (source, title) with its id.
+     */
+    private fun build(
+        state: Path,
+        version: Int,
+        files: List<BookFile>,
+        sefaria: List<String> = emptyList(),
+    ): Map<Pair<String, String>, Long> = runBlocking {
         val driver = JdbcSqliteDriver(url = "jdbc:sqlite::memory:")
         SeforimDb.Schema.create(driver)
         val repo = SeforimRepository(":memory:", driver)
         try {
+            if (sefaria.isNotEmpty()) {
+                val sourceId = repo.insertSource("Sefaria")
+                val categoryId = repo.insertCategory(Category(title = "ספריא"))
+                sefaria.forEachIndexed { i, title ->
+                    repo.insertBook(Book(id = 500_000L + i, categoryId = categoryId, sourceId = sourceId, title = title, heRef = title))
+                }
+            }
             val allocator = InMemoryIdAllocator.load(state.takeIf { Files.exists(it) })
+            val sourceDir = library(files).also(::writeFilesManifest)
             DatabaseGenerator(
-                sourceDirectory = library(files),
+                sourceDirectory = sourceDir,
                 repository = repo,
                 allocator = allocator,
                 buildVersion = version,
@@ -89,5 +108,36 @@ class OtzariaBookIdContinuityTest {
             )
         }
         assertTrue("went to both" in error.message.orEmpty(), error.message)
+    }
+
+    @Test
+    fun aBookGoneForABuildComesBackWithANewId() {
+        val state = newState()
+        val first = build(state, 1, listOf(BookFile("A", "חסידות", "ספר", body), BookFile("A", "מוסר", "אחר", body.map { "ב $it" })))
+        build(state, 2, listOf(BookFile("A", "מוסר", "אחר", body.map { "ב $it" })))
+        val back = build(state, 3, listOf(BookFile("C", "חסידות", "ספר", body), BookFile("A", "מוסר", "אחר", body.map { "ב $it" })))
+        assertNotEquals(first.getValue("A" to "ספר"), back.getValue("C" to "ספר"))
+    }
+
+    @Test
+    fun aDeadKeyOfTheSameTitleDoesNotBlockAMove() {
+        // Without the previous build's books only, (A, ספר) and (B, ספר) would both be
+        // candidates for (C, ספר), no alias would be unique and the build would fail.
+        val state = newState()
+        val other = BookFile("A", "מוסר", "אחר", body.map { "ב $it" })
+        build(state, 1, listOf(BookFile("A", "חסידות", "ספר", body), other))
+        build(state, 2, listOf(other))
+        val returned = build(state, 3, listOf(BookFile("B", "חסידות", "ספר", body), other))
+        val moved = build(state, 4, listOf(BookFile("C", "חסידות", "ספר", body), other))
+        assertEquals(returned.getValue("B" to "ספר"), moved.getValue("C" to "ספר"))
+    }
+
+    @Test
+    fun aBookSefariaNowCoversIsLeftToTheLibraryCheck() {
+        val state = newState()
+        build(state, 1, listOf(BookFile("A", "חסידות", "ספר", body)))
+        // The Otzaria file is skipped for Sefaria's edition; its id is gone, the build goes on.
+        val after = build(state, 2, listOf(BookFile("A", "חסידות", "ספר", body)), sefaria = listOf("ספר"))
+        assertEquals(setOf("Sefaria" to "ספר"), after.keys)
     }
 }
