@@ -76,13 +76,14 @@ val downloadBuildState = tasks.register("downloadBuildState") {
 
 tasks.register("generateSeforimDb") {
     group = "application"
-    description = "Generate build/seforim.db from Sefaria, append Otzaria, build catalog, Lucene indexes, and release info."
+    description = "Generate build/seforim.db from Sefaria, append Otzaria, write citation links, build catalog, Lucene indexes, and release info."
 
     dependsOn(downloadBuildState)
     dependsOn(":sefariasqlite:generateSefariaSqlite")
     dependsOn(":otzariasqlite:appendOtzaria")
     dependsOn(":otzariasqlite:generateHavroutaLinks")
     dependsOn(":generator-common:importAuthorBios")
+    dependsOn(":reflinks:generateRefLinks")
     dependsOn(":sefariasqlite:renameCategories")
     dependsOn(":catalog:buildCatalog")
     dependsOn(":searchindex:buildLuceneIndexDefault")
@@ -129,9 +130,15 @@ project(":otzariasqlite").tasks.matching { it.name == "generateHavroutaLinks" }.
 project(":generator-common").tasks.matching { it.name == "importAuthorBios" }.configureEach {
     mustRunAfter(":otzariasqlite:generateHavroutaLinks")
 }
+// Citation links go into the text once every line exists, before anything reads the final content.
+project(":reflinks").tasks.matching { it.name == "generateRefLinks" }.configureEach {
+    mustRunAfter(":otzariasqlite:generateHavroutaLinks")
+    mustRunAfter(":generator-common:importAuthorBios")
+}
 project(":catalog").tasks.matching { it.name == "buildCatalog" }.configureEach {
     mustRunAfter(":otzariasqlite:generateHavroutaLinks")
     mustRunAfter(":generator-common:importAuthorBios")
+    mustRunAfter(":reflinks:generateRefLinks")
 }
 project(":searchindex").tasks.matching { it.name in setOf("embedCorpus", "buildLuceneIndexDefault") }.configureEach {
     mustRunAfter(":catalog:buildCatalog")

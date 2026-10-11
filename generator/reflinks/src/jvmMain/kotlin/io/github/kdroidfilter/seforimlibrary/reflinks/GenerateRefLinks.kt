@@ -15,10 +15,11 @@ import java.nio.file.StandardCopyOption
 import java.sql.DriverManager
 
 /**
- * Writes the citation links into the text of a copy of the database: `<a class="ref" href="seforim://line/<id>">`.
+ * Writes the citation links into the text of the database: `<a class="ref" href="seforim://line/<id>">`.
  * Deterministic links plus the LLM decisions already in the cache; never calls the network.
+ * Writes in place, or into a copy with `--out` (the source is then never modified).
  *
- * Usage: --db=<source seforim.db> --out=<copy to write> [--decisions=…] [--sefaria-schemas=…]
+ * Usage: --db=<seforim.db> [--out=<copy to write>] [--decisions=…] [--sefaria-schemas=…]
  */
 fun main(args: Array<String>) {
     Logger.setMinSeverity(Severity.Info)
@@ -26,10 +27,12 @@ fun main(args: Array<String>) {
     val opts = args.filter { it.startsWith("--") }
         .associate { it.removePrefix("--").substringBefore('=') to it.substringAfter('=', "") }
     val source = Path.of(requireNotNull(opts["db"]) { "--db is required" })
-    val out = Path.of(requireNotNull(opts["out"]) { "--out is required" })
+    val out = opts["out"]?.let(Path::of) ?: source
+    val inPlace = source.toAbsolutePath().normalize() == out.toAbsolutePath().normalize()
     val decisions = DecisionStore.open(Path.of(opts["decisions"] ?: "generator/data/ref-arbitration.jsonl"))
     val sefariaRefs = SefariaRefParser(SefariaSchemas.load(Path.of(opts["sefaria-schemas"] ?: DEFAULT_SEFARIA_SCHEMAS)))
-    require(source.toAbsolutePath() != out.toAbsolutePath()) { "--out must differ from --db: the source is never modified" }
+    // A second pass would scan the links of the first one as citations
+    require(!hasRefLinks(source)) { "$source already has ref links: regenerate it, or write a copy of a DB without them" }
 
     // 1. Collect the links per line
     val links = HashMap<Long, MutableList<LinkInjector.Link>>()
@@ -58,10 +61,12 @@ fun main(args: Array<String>) {
     decisions.close()
     log.i { "Links found: $counts (total ${counts.values.sum()}) in ${links.size} lines" }
 
-    // 2. Write them into a copy of the database
-    Files.createDirectories(out.toAbsolutePath().parent)
-    log.i { "Copying $source → $out" }
-    Files.copy(source, out, StandardCopyOption.REPLACE_EXISTING)
+    // 2. Write them into the database, or into its copy
+    if (!inPlace) {
+        Files.createDirectories(out.toAbsolutePath().parent)
+        log.i { "Copying $source → $out" }
+        Files.copy(source, out, StandardCopyOption.REPLACE_EXISTING)
+    }
     var written = 0
     DriverManager.getConnection("jdbc:sqlite:$out").use { db ->
         db.autoCommit = false
@@ -89,3 +94,11 @@ fun main(args: Array<String>) {
     }
     log.i { "Wrote $written links into $out" }
 }
+
+private fun hasRefLinks(db: Path): Boolean =
+    DriverManager.getConnection("jdbc:sqlite:$db").use { conn ->
+        conn.createStatement().use { st ->
+            st.executeQuery("SELECT EXISTS(SELECT 1 FROM line WHERE instr(content, 'class=\"ref\"') > 0)")
+                .use { it.next() && it.getBoolean(1) }
+        }
+    }
