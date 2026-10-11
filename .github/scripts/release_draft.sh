@@ -4,9 +4,9 @@
 # Two steps drive the SAME draft of $RELEASE_TAG and must therefore share one
 # create/reconcile/upload contract:
 #
-#   * "Produce + verify patch fan" creates the draft and pushes the assets that
-#     are already byte-final up the ~2.1 MB/s uplink while the job spends ~30
-#     minutes of pure CPU producing patches, and
+#   * "Start early buildstate upload (background)" creates the draft right
+#     after Phase-2 and pushes the byte-final buildstate up the ~2.1 MB/s uplink
+#     while the job compresses, compacts, checks and produces patches, and
 #   * "Create draft, verify every uploaded asset, then publish" adopts that same
 #     draft, uploads whatever is still missing, re-verifies EVERY asset by
 #     name+size+digest against the staged bytes, and flips draft -> published.
@@ -14,7 +14,7 @@
 # (Before E2 the relink wait also uploaded lines_snapshot.db.zst here. That asset
 # is no longer published on the DB release at all — the identical bytes live on
 # the content-addressed `lines-snapshot-sha256-<sha>` pre-release, which
-# build_provenance.json now names — so the fan is the only early uploader left.)
+# build_provenance.json now names — so that step is the only early uploader left.)
 #
 # Nothing here ever uses --clobber: an asset that already exists is verified by
 # name+size+digest and skipped, or the build fails. A create/upload whose

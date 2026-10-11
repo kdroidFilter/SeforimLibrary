@@ -600,20 +600,9 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
         )
         self.assertIn('return "$PRODUCE_RC"', lib)
 
-        # A2 is started inside this step and reaped at the top of the publish
-        # step, so it rides along the fan and the steps up to publish.
-        self.assertIn(
-            "upload_early_release_assets.sh \\\n            start buildstate "
-            "build/seforim.db.buildstate",
-            patch_fan,
-        )
-        self.assertNotIn("wait buildstate", patch_fan)
-        # …and it is started before the first anchor is dispatched, which is
-        # where the fan's ~30 minutes of pure CPU begin.
-        self.assertLess(
-            patch_fan.index("start buildstate"),
-            patch_fan.index('produce_anchor "$OFFSET"'),
-        )
+        # A2 is started right after Phase-2 and reaped at the top of the
+        # publish step; the fan neither starts nor waits for it.
+        self.assertNotIn("upload_early_release_assets.sh", patch_fan)
 
     def test_patch_fan_java_launcher_cannot_drift_from_the_gradle_task(self):
         # Two concurrent anchors cannot both go through Gradle (one project
@@ -769,7 +758,7 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
 
     def test_publisher_reconciles_and_falls_back_only_to_preflighted_credentials(self):
         # The create/reconcile/upload contract lives in ONE sourced script,
-        # because the early upload (in the patch fan) drives the very same draft
+        # because the early upload (right after Phase-2) drives the very same draft
         # release; two copies could drift apart.
         publish = self.step("Create draft, verify every uploaded asset, then publish")
         machinery = RELEASE_DRAFT.read_text(encoding="utf-8")
@@ -1158,7 +1147,7 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
 
         # E2: the relink wait no longer uploads anything. lines_snapshot.db.zst
         # is not published on the DB release at all, so the ONLY early upload
-        # left is the buildstate the patch fan starts — with the SHARED create.
+        # left is the buildstate started after Phase-2 — with the SHARED create.
         self.assertNotIn("upload_early_release_assets.sh", relink)
         self.assertNotIn(
             'cp build/lines_snapshot.db.zst', self.step("Stage release assets")
@@ -1177,18 +1166,39 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
 
         # The buildstate is NOT final before the relink wait: Phase-2 allocates
         # this build's fresh stable link ids straight into it, so it is
-        # compressed and uploaded after "Apply LINKER links (Phase-2)". It
-        # starts at the top of the fan and is reaped by the FIRST command of
-        # the publish step, so no upload is in flight once publish talks to
-        # the release.
+        # compressed and uploaded after "Apply LINKER links (Phase-2)" — right
+        # after it, so the upload overlaps compress line text, VACUUM, QA and
+        # the fan. It is reaped by the FIRST command of the publish step, so no
+        # upload is in flight once publish talks to the release.
         self.assertNotIn("build/seforim.db.buildstate", relink)
         self.assertIn("DiskBackedLinkIdAllocator", machinery)
+        early = self.step("Start early buildstate upload (background)")
         start_buildstate = (
             "upload_early_release_assets.sh \\\n"
             "            start buildstate build/seforim.db.buildstate.zst"
         )
-        self.assertIn(start_buildstate, fan)
+        self.assertIn(start_buildstate, early)
+        self.assertEqual(self.workflow.count("start buildstate"), 1)
+        self.assertNotIn("upload_early_release_assets.sh", fan)
         self.assertEqual(self.workflow.count("wait buildstate"), 1)
+        # Gated exactly like the fan that used to start it.
+        self.assertIn(
+            "        id: early_buildstate\n"
+            "        if: steps.discover.outputs.has_prev == 'true'\n",
+            early,
+        )
+        for secret in (
+            "AUTOMATIC_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+            "CROSS_REPO_TOKEN: ${{ secrets.PIPELINE_TOKEN }}",
+            "RELEASE_TAG: ${{ steps.release_meta.outputs.release_tag }}",
+            "SOURCE_COMMIT: ${{ inputs.source_commit }}",
+        ):
+            self.assertIn(secret, early)
+        # The draft it creates is deleted by any later failure, recovery included.
+        self.assertLess(
+            early.index('echo "DRAFT_RELEASE_CREATED=1" >> "$GITHUB_ENV"'),
+            early.index(start_buildstate),
+        )
         publish_run = publish.split("        run: |\n", 1)[1]
         self.assertTrue(
             publish_run.startswith(
@@ -1206,24 +1216,27 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
             publish_run.index("wait buildstate 3600"),
             publish_run.index("source .pipeline-control/.github/scripts/release_draft.sh"),
         )
-        # Waited for exactly when the step that starts it ran: a skipped fan
+        # Waited for exactly when the step that starts it ran: a skipped start
         # (no prior release) never reads another run's leftover markers.
-        self.assertIn("        id: patch_fan\n", fan)
-        self.assertIn("EARLY_UPLOAD_STEP: ${{ steps.patch_fan.outcome }}", publish)
-        self.assertLess(
-            self.workflow.index("      - name: Produce + verify patch fan\n"),
-            self.workflow.index(
-                "      - name: Create draft, verify every uploaded asset, then publish\n"
-            ),
+        self.assertIn(
+            "EARLY_UPLOAD_STEP: ${{ steps.early_buildstate.outcome }}", publish
         )
-        self.assertLess(
-            self.workflow.index("      - name: Apply LINKER links (Phase-2)\n"),
-            self.workflow.index("      - name: Compress buildstate for the release (zstd)\n"),
-        )
-        self.assertLess(
-            self.workflow.index("      - name: Compress buildstate for the release (zstd)\n"),
-            self.workflow.index("      - name: Produce + verify patch fan\n"),
-        )
+        # Phase-2 -> compress buildstate -> start upload -> compress line text,
+        # with nothing in between, and all of it before the fan and publish.
+        order = [
+            "Apply LINKER links (Phase-2)",
+            "Compress buildstate for the release (zstd)",
+            "Start early buildstate upload (background)",
+            "Compress line text (zstd dictionary)",
+            "Compact Seforim Database (VACUUM INTO)",
+            "Produce + verify patch fan",
+            "Stage release assets",
+            "Create draft, verify every uploaded asset, then publish",
+        ]
+        names = re.findall(r"\n      - name: (.+)\n", self.workflow)
+        positions = [names.index(name) for name in order]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(positions[1:4], [positions[0] + 1, positions[0] + 2, positions[0] + 3])
         # The abort sweep still covers every label the job can start.
         cleanup = self.step(
             "Clean run-scoped disk leftovers (workspace persists on self-hosted)"
