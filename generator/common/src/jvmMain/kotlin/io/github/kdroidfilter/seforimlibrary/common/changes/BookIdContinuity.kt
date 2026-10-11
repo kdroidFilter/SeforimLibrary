@@ -34,7 +34,8 @@ class BookIdContinuity(
      *  2. otherwise line-hash Jaccard via [BookRenameDetector] (real renames).
      *
      * @param currentKeys every key the importer will allocate in this build.
-     * @param inScope previous keys the importer owns (e.g. not Sefaria's).
+     * @param inScope previous keys the importer owns (e.g. not Sefaria's). Otzaria: those
+     *   of the previous build; any other previous key a current book has counts as new.
      * @param currentLineHashes sha1 of each line of a new book, as hashed by the
      *   importer for its line natural keys; `null` when unavailable.
      * @return the registered aliases, old key to new key.
@@ -50,7 +51,8 @@ class BookIdContinuity(
         val orphans = previous.entries
             .filter { (key, id) -> key !in currentKeys && id !in takenIds && inScope(key) }
             .groupBy({ it.value }, { it.key })
-        val added = currentKeys.filterTo(HashSet()) { it !in previous }
+        // Otzaria: a key only an older build had is new to this one too.
+        val added = currentKeys.filterTo(HashSet()) { it !in previous || !inScope(it) }
         if (orphans.isEmpty() || added.isEmpty()) return emptyMap()
 
         val aliases = LinkedHashMap<BookKey, BookKey>()
@@ -88,7 +90,14 @@ class BookIdContinuity(
             renameDetector.detectUnique(removed, addedHashes).forEach { aliases[it.oldKey] = it.newKey }
         }
 
-        aliases.forEach { (old, new) -> allocator.registerBookAlias(old, new, atVersion) }
+        aliases.forEach { (old, new) ->
+            // Otzaria: the renamed book takes the key; the gone book's id is retired, not reused.
+            previous[new]?.let { gone ->
+                allocator.retireBookKey(new)
+                logger.w { "Book $old renamed to $new, a key an older build gave id $gone; that id is retired" }
+            }
+            allocator.registerBookAlias(old, new, atVersion)
+        }
         logger.i { "Registered ${aliases.size} book aliases (${matchedIds.size} by title)" }
         return aliases
     }

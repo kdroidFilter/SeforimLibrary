@@ -6,6 +6,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /** Otzaria: an aliased book must survive the build state it is written to. */
 class AliasedBuildStateRoundTripTest {
@@ -75,5 +76,29 @@ class AliasedBuildStateRoundTripTest {
         val build4 = InMemoryIdAllocator.load(state)
         assertEquals(mapOf(a to id, b to id), build4.knownBookKeys())
         assertEquals(id, build4.bookId(b.sourceName, b.canonicalHeTitle))
+    }
+
+    @Test
+    fun `a retired key's id and the aliases that led to it are gone for good`() {
+        val state = tmp.newFolder().toPath().resolve("build_state.db")
+        val live = BookKey("A", "ספר חי")
+        val first = BookKey("A", "שם ראשון")
+        val gone = BookKey("A", "שם ישן")
+        val build1 = InMemoryIdAllocator.load(path = null)
+        val liveId = build1.bookId(live.sourceName, live.canonicalHeTitle)
+        val goneId = build1.bookId(first.sourceName, first.canonicalHeTitle)
+        build1.registerBookAlias(first, gone, atVersion = 1)
+        build1.snapshotTo(state)
+
+        val build2 = InMemoryIdAllocator.load(state)
+        assertEquals(goneId, build2.retireBookKey(gone))
+        build2.registerBookAlias(live, gone, atVersion = 2)
+        build2.snapshotTo(state)
+
+        val build3 = InMemoryIdAllocator.load(state)
+        assertEquals(mapOf(live to liveId, gone to liveId), build3.knownBookKeys())
+        // The old title is a key of its own again, with a fresh id.
+        val back = build3.bookId(first.sourceName, first.canonicalHeTitle)
+        assertTrue(back != goneId && back != liveId, "$back")
     }
 }

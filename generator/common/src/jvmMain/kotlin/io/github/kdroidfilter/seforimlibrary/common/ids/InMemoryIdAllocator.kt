@@ -327,6 +327,14 @@ class InMemoryIdAllocator private constructor(
         logger.i { "Registered book alias: $oldKey -> $newKey (id=$existing, version=$atVersion)" }
     }
 
+    override fun retireBookKey(key: BookKey): Long {
+        val leadingHere = bookAliases.keys.filter { currentKeyOf(it) == key }
+        val id = checkNotNull(books.remove(key)) { "Book key $key holds no id to retire" }
+        leadingHere.forEach { bookAliases.remove(it) }
+        logger.i { "Retired book key $key (id=$id) and ${leadingHere.size} aliases to it" }
+        return id
+    }
+
     override fun recordSourceHash(key: BookKey, sourceHash: BookSourceHash) {
         currentSourceHashes[key] = sourceHash
     }

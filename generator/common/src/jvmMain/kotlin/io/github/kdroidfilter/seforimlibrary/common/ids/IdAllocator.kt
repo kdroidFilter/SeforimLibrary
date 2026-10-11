@@ -89,6 +89,14 @@ interface IdAllocator {
     fun registerBookAlias(oldKey: BookKey, newKey: BookKey, atVersion: Int)
 
     /**
+     * Otzaria: drops [key], held by a book no longer there, so that a renamed book can take
+     * it. The id is not handed out again, and the aliases that led to it go with it.
+     *
+     * @return the retired id.
+     */
+    fun retireBookKey(key: BookKey): Long
+
+    /**
      * Records the canonical sha256 source hash for a book observed at the
      * current build. Persisted in build_state.db and consumed by
      * `TouchedBookDetector` on the next run.

@@ -164,4 +164,30 @@ class OtzariaBookIdContinuityTest {
         val error = assertFailsWith<IllegalStateException> { build(state, 2, listOf(book)) }
         assertTrue("is not after" in error.message.orEmpty(), error.message)
     }
+
+    @Test
+    fun aBookRenamedToAKeyAnOlderBuildHadKeepsItsId() {
+        val state = newState()
+        val live = BookFile("A", "חסידות", "ספר חי", body)
+        val gone = BookFile("A", "מוסר", "שם ישן", body.map { "אחר $it" })
+        val first = build(state, 1, listOf(live, gone))
+        build(state, 2, listOf(live))
+        val renamed = build(state, 3, listOf(live.copy(title = gone.title)))
+        assertEquals(first.getValue("A" to live.title), renamed.getValue("A" to gone.title))
+        // The gone book's id is retired: a new book does not get it.
+        val next = build(state, 4, listOf(live.copy(title = gone.title), BookFile("A", "מוסר", "ספר חדש", body.map { "חדש $it" })))
+        assertEquals(renamed.getValue("A" to gone.title), next.getValue("A" to gone.title))
+        assertTrue(first.getValue("A" to gone.title) !in next.values, "$next")
+    }
+
+    @Test
+    fun aGoneBookBackUnderItsOwnKeyKeepsItsOldId() {
+        // Not a rename: the other book is still there.
+        val state = newState()
+        val live = BookFile("A", "חסידות", "ספר חי", body)
+        val gone = BookFile("A", "מוסר", "שם ישן", body.map { "אחר $it" })
+        val first = build(state, 1, listOf(live, gone))
+        build(state, 2, listOf(live))
+        assertEquals(first, build(state, 3, listOf(live, gone)))
+    }
 }
