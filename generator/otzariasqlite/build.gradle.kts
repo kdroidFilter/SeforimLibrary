@@ -207,6 +207,10 @@ tasks.register<JavaExec>("appendOtzariaLines") {
     systemProperty("appendExistingDb", "true")
     systemProperty("baseDb", baseDb)
     systemProperty("persistDb", persistDb)
+    // Accept previous books changing id instead of failing (see BookIdContinuity).
+    if (project.hasProperty("allowBookIdLoss")) {
+        systemProperty("allowBookIdLoss", project.property("allowBookIdLoss") as String)
+    }
 
     val defaultAcronymDb = layout.buildDirectory.file("acronymizer/acronymizer.db").get().asFile.absolutePath
     if (project.hasProperty("acronymDb")) {

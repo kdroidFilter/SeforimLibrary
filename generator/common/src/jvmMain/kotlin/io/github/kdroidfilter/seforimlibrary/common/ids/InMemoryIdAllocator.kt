@@ -195,6 +195,16 @@ class InMemoryIdAllocator private constructor(
     override fun peekBookId(sourceName: String, canonicalHeTitle: String): Long? =
         books[BookKey(sourceName, canonicalHeTitle)]
 
+    override fun bookIds(): Map<BookKey, Long> = books.toMap()
+
+    override fun lineHashesByBook(bookIds: Set<Long>): Map<Long, List<ByteArray>> {
+        val out = HashMap<Long, MutableList<ByteArray>>()
+        lines.keys.forEach { key ->
+            if (key.bookId in bookIds) out.getOrPut(key.bookId) { ArrayList() } += key.contentHash
+        }
+        return out
+    }
+
     override fun registerBookAlias(oldKey: BookKey, newKey: BookKey, atVersion: Int) {
         val existing = books[oldKey] ?: return
         // Move the id under the new natural key so subsequent lookups hit.

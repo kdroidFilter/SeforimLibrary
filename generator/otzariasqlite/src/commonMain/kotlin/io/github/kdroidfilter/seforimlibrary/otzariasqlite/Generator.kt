@@ -2,6 +2,7 @@ package io.github.kdroidfilter.seforimlibrary.otzariasqlite
 
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookKey
+import io.github.kdroidfilter.seforimlibrary.common.changes.BookIdContinuity
 import io.github.kdroidfilter.seforimlibrary.common.changes.OtzariaSourceHashComputer
 import io.github.kdroidfilter.seforimlibrary.common.changes.TouchedBookDetector
 import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
@@ -36,6 +37,7 @@ import kotlin.io.path.readText
  * @property repository The repository used to store the generated data
  */
 private const val LINE_FLUSH_THRESHOLD = 1000
+private const val SEFARIA_SOURCE = "Sefaria"
 
 class DatabaseGenerator(
     private val sourceDirectory: Path,
@@ -44,6 +46,8 @@ class DatabaseGenerator(
     private val filterSourcesForLinks: Boolean = true,
     private val allocator: IdAllocator = InMemoryIdAllocator.load(path = null),
     private val buildVersion: Int = 0,
+    // Accept previous books changing id (logged instead of failing the build).
+    private val allowBookIdLoss: Boolean = false,
 ) {
 
     private val logger = Logger.withTag("DatabaseGenerator")
@@ -356,6 +360,8 @@ class DatabaseGenerator(
      */
     suspend fun generateLinesOnly(): Unit = coroutineScope {
         logger.i { "Starting phase 1: categories/books/lines generation..." }
+        // Captures the previous build's book ids, so it must exist before any allocation.
+        val bookIdContinuity = BookIdContinuity(allocator)
         try {
             initializeIdCountersFromExistingDb()
 
@@ -402,6 +408,9 @@ class DatabaseGenerator(
                 }
                 libraryRoot = libraryPath
 
+                // Before any book id is allocated (priority books included).
+                registerBookAliases(bookIdContinuity)
+
                 totalBooksToProcess = try {
                     Files.walk(libraryRoot).use { s ->
                         s.filter { Files.isRegularFile(it) && it.extension == "txt" }
@@ -423,6 +432,7 @@ class DatabaseGenerator(
                 repository.rebuildCategoryClosure()
             }
             recordSourceHashesAtEndOfImport()
+            checkNoLostBookIds(bookIdContinuity)
         } finally {
             runCatching { enableForeignKeys() }
             runCatching { repository.setSynchronousNormal() }
@@ -765,16 +775,12 @@ class DatabaseGenerator(
         }
 
         // Skip if a book with the same heRef already exists from Sefaria (Sefaria has priority)
-        val existingBook = repository.getBookByHeRef(title)
-        if (existingBook != null) {
-            val existingSource = repository.getSourceById(existingBook.sourceId)
-            if (existingSource?.name == "Sefaria") {
-                logger.i { "⏭️ Skipping '$title' - already exists from Sefaria (priority source)" }
-                processedBooksCount += 1
-                val pct = if (totalBooksToProcess > 0) (processedBooksCount * 100 / totalBooksToProcess) else 0
-                logger.i { "Books progress: $processedBooksCount/$totalBooksToProcess (${pct}%)" }
-                return
-            }
+        if (existsFromSefaria(title)) {
+            logger.i { "⏭️ Skipping '$title' - already exists from Sefaria (priority source)" }
+            processedBooksCount += 1
+            val pct = if (totalBooksToProcess > 0) (processedBooksCount * 100 / totalBooksToProcess) else 0
+            logger.i { "Books progress: $processedBooksCount/$totalBooksToProcess (${pct}%)" }
+            return
         }
 
         // Assign a stable ID via IdAllocator so cross-build reproducibility holds.
@@ -1183,6 +1189,59 @@ class DatabaseGenerator(
             // Mark as processed to avoid double insertion during full traversal
             processedPriorityBookKeys.add(key)
         }
+    }
+
+    private suspend fun existsFromSefaria(title: String): Boolean {
+        val existing = repository.getBookByHeRef(title) ?: return false
+        return repository.getSourceById(existing.sourceId)?.name == SEFARIA_SOURCE
+    }
+
+    /**
+     * Keys of every book this import will allocate, with their file. Mirrors the
+     * skips of [processDirectory] and [createAndProcessBook].
+     */
+    private suspend fun collectCurrentBooks(): Map<BookKey, Path> {
+        val files = Files.walk(libraryRoot).use { s ->
+            s.filter { Files.isRegularFile(it) && it.extension == "txt" && it.parent != libraryRoot }.toList()
+        }
+        val out = HashMap<BookKey, Path>()
+        for (path in files) {
+            val fileName = path.fileName.toString()
+            val rawTitle = fileName.substringBeforeLast('.')
+            if (rawTitle.startsWith("הערות על ") && !rawTitle.startsWith("הערות על חברותא")) continue
+            if (fileName in fileNameBlacklist) continue
+            val source = getSourceNameFor(path)
+            if (source in sourceBlacklist) continue
+            val title = normalizeBookTitle(rawTitle)
+            if (existsFromSefaria(title)) continue
+            out.putIfAbsent(BookKey(source, title), path)
+        }
+        return out
+    }
+
+    /** Keeps the previous id of books Otzaria moved to another source or renamed. */
+    private suspend fun registerBookAliases(continuity: BookIdContinuity) {
+        val currentBooks = collectCurrentBooks()
+        continuity.registerAliases(
+            currentKeys = currentBooks.keys,
+            inScope = { it.sourceName != SEFARIA_SOURCE },
+            atVersion = buildVersion,
+            currentLineHashes = { key ->
+                // Same hash as stableLineId, so it compares with the previous line keys.
+                currentBooks[key]?.readText(Charsets.UTF_8)?.lines()
+                    ?.map(IdAllocatorBindings::normalisedContentHash)
+            },
+        )
+    }
+
+    /** Fails the build when a previous book is still there under another id. */
+    private suspend fun checkNoLostBookIds(continuity: BookIdContinuity) {
+        val lost = continuity.findLostIds(repository.getAllBooks().associate { it.id to it.title })
+        if (lost.isEmpty()) return
+        lost.forEach { logger.e { "Book ${it.key} lost id ${it.id}; its title now has ids ${it.currentIds}" } }
+        val message = "${lost.size} previous books changed id, which orphans user notes. " +
+            "Alias them, or rerun with -PallowBookIdLoss=true to accept it."
+        if (allowBookIdLoss) logger.w { message } else error(message)
     }
 
     /**

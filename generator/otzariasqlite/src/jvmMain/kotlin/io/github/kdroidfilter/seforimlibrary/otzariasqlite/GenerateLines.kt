@@ -146,6 +146,7 @@ fun main(args: Array<String>) = runBlocking {
             acronymDbPath = acronymDbPath,
             allocator = allocator,
             buildVersion = buildVersion,
+            allowBookIdLoss = (System.getProperty("allowBookIdLoss") ?: System.getenv("ALLOW_BOOK_ID_LOSS")) == "true",
         )
         generator.generateLinesOnly()
         if (useMemoryDb) {
