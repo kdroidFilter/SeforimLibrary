@@ -267,9 +267,10 @@ private fun addFileToTar(tar: TarArchiveOutputStream, file: Path, entryName: Str
 
 /**
  * Splits [source] into `.partNN` files of at most [partSizeBytes] (no split when it fits in one),
- * hashing the bundle and each part in the same pass. Returns the manifest of the files to publish.
+ * all of the same size except a strictly smaller last one, hashing the bundle and each part in the same pass. Returns the manifest of the files to publish.
  */
 internal fun splitFile(source: Path, partSizeBytes: Long, logger: Logger): BundleManifest {
+    require(partSizeBytes > 1) { "splitPartBytes must be greater than 1" }
     val parent = source.toAbsolutePath().parent
     val baseName = source.fileName.toString()
     val size = Files.size(source)
@@ -290,6 +291,9 @@ internal fun splitFile(source: Path, partSizeBytes: Long, logger: Logger): Bundl
         return BundleManifest(baseName, size, sha, listOf(BundleManifest.Part(baseName, size, sha)))
     }
 
+    // Clients without the manifest (offline installs) detect a missing last part because it is the
+    // only one shorter than the others, so never let the last part be full-size.
+    val partSize = if (size % partSizeBytes == 0L) partSizeBytes - 1 else partSizeBytes
     val parts = mutableListOf<BundleManifest.Part>()
     val buffer = ByteArray(8 * 1024 * 1024) // 8 MiB
     BufferedInputStream(Files.newInputStream(source), buffer.size).use { input ->
@@ -298,10 +302,10 @@ internal fun splitFile(source: Path, partSizeBytes: Long, logger: Logger): Bundl
             val partName = baseName + String.format(".part%02d", parts.size + 1)
             val outPath = parent.resolve(partName)
             val partDigest = MessageDigest.getInstance("SHA-256")
-            val partSize = minOf(partSizeBytes, remaining)
+            val bytes = minOf(partSize, remaining)
             logger.i { "Writing part ${parts.size + 1} -> $outPath" }
             BufferedOutputStream(Files.newOutputStream(outPath), buffer.size).use { out ->
-                var left = partSize
+                var left = bytes
                 while (left > 0) {
                     val read = input.read(buffer, 0, minOf(buffer.size.toLong(), left).toInt())
                     if (read <= 0) throw IOException("Unexpected end of $source")
@@ -311,8 +315,8 @@ internal fun splitFile(source: Path, partSizeBytes: Long, logger: Logger): Bundl
                     left -= read
                 }
             }
-            parts += BundleManifest.Part(partName, partSize, partDigest.digest().toHex())
-            remaining -= partSize
+            parts += BundleManifest.Part(partName, bytes, partDigest.digest().toHex())
+            remaining -= bytes
         }
     }
     return BundleManifest(baseName, size, bundleDigest.digest().toHex(), parts)

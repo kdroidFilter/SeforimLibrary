@@ -41,13 +41,13 @@ class SplitFileTest {
     }
 
     @Test
-    fun `exact multiple produces no empty trailing part`() {
+    fun `exact multiple still ends with a strictly smaller part`() {
         Files.write(bundle, ByteArray(8))
 
         val manifest = splitFile(bundle, partSizeBytes = 4, logger = logger)
 
-        assertEquals(2, manifest.parts.size)
-        assertFalse(dir.resolve("seforim_bundle.tar.zst.part03").exists())
+        assertEquals(listOf(3L, 3L, 2L), manifest.parts.map { it.size })
+        assertFalse(dir.resolve("seforim_bundle.tar.zst.part04").exists())
     }
 
     @Test
