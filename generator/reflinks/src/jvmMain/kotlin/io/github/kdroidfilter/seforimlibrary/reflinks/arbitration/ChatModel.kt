@@ -54,7 +54,10 @@ class OpenRouterModel(
     private val requestTimeout: Duration = Duration.ofMinutes(5),
 ) : ChatModel {
 
+    // HTTP/1.1: one connection per request in flight. A single HTTP/2 connection caps the concurrent streams far below
+    // the hundreds of workers a large run uses.
     private val http: HttpClient = HttpClient.newBuilder()
+        .version(HttpClient.Version.HTTP_1_1)
         .connectTimeout(Duration.ofSeconds(30))
         .followRedirects(HttpClient.Redirect.NEVER)
         .build()
