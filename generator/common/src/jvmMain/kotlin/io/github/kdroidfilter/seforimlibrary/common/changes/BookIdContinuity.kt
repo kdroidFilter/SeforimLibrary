@@ -84,7 +84,8 @@ class BookIdContinuity(
             val addedHashes = remainingAdded.mapNotNull { key ->
                 currentLineHashes(key)?.let { key to it.toLineHashSet() }
             }.toMap()
-            renameDetector.detect(removed, addedHashes, atVersion).forEach { aliases[it.oldKey] = it.newKey }
+            // Otzaria: only a match that is unique both ways keeps an id.
+            renameDetector.detectUnique(removed, addedHashes).forEach { aliases[it.oldKey] = it.newKey }
         }
 
         aliases.forEach { (old, new) -> allocator.registerBookAlias(old, new, atVersion) }
