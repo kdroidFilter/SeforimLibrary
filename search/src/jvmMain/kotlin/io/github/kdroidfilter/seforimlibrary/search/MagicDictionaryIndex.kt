@@ -44,9 +44,12 @@ class MagicDictionaryIndex private constructor(
             // Enforce read-only queries without altering connection flags post-open
             createStatement().use { stmt -> stmt.execute("PRAGMA query_only=ON") }
         }
+        // Dictionaries since v0.4.2 list the extra lemmas of ambiguous surfaces (פנינו: פנה and פנים)
+        val sql = if (conn.hasTable(EXTRA_BASE_TABLE)) LOOKUP_WITH_EXTRA_BASES_SQL else LOOKUP_SQL
         LookupContext(
             conn = conn,
-            stmt = conn.prepareStatement(LOOKUP_SQL)
+            stmt = conn.prepareStatement(sql),
+            paramCount = sql.count { it == '?' }
         )
     }
 
@@ -145,7 +148,7 @@ class MagicDictionaryIndex private constructor(
 
         runCatching {
             synchronized(ctx) {
-                repeat(3) { idx -> ctx.stmt.setString(idx + 1, rawToken) }
+                repeat(ctx.paramCount) { idx -> ctx.stmt.setString(idx + 1, rawToken) }
                 val rs = ctx.stmt.executeQuery()
                 val accum = mutableMapOf<Long, BaseBucket>()
                 while (rs.next()) {
@@ -290,11 +293,57 @@ class MagicDictionaryIndex private constructor(
             LEFT JOIN surface_variant sv ON sv.surface_id = s.id
             LEFT JOIN variant v ON sv.variant_id = v.id
         """
+
+        private const val EXTRA_BASE_TABLE = "surface_extra_base"
+
+        /**
+         * [LOOKUP_SQL] plus the extra lemmas of ambiguous surfaces: a token matches every lemma it is a form of, and
+         * such a surface counts among the forms of each. Its variants stay with its primary lemma only, as they hold
+         * associations of that reading.
+         */
+        private const val LOOKUP_WITH_EXTRA_BASES_SQL = """
+            WITH matches AS (
+                SELECT s.base_id AS base_id FROM surface s WHERE s.value = ?
+                UNION
+                SELECT e.base_id FROM surface_extra_base e JOIN surface s ON s.id = e.surface_id WHERE s.value = ?
+                UNION
+                SELECT b.id FROM base b WHERE b.value = ?
+                UNION
+                SELECT s.base_id FROM variant v
+                JOIN surface_variant sv ON sv.variant_id = v.id
+                JOIN surface s ON sv.surface_id = s.id
+                WHERE v.value = ?
+            ),
+            members AS (
+                SELECT s.base_id AS base_id, s.id AS surface_id, 1 AS own
+                FROM surface s WHERE s.base_id IN (SELECT base_id FROM matches)
+                UNION ALL
+                SELECT e.base_id, e.surface_id, 0
+                FROM surface_extra_base e WHERE e.base_id IN (SELECT base_id FROM matches)
+            )
+            SELECT b.id as base_id,
+                   b.value as base,
+                   s.value as surface,
+                   v.value as variant
+            FROM base b
+            JOIN matches m ON m.base_id = b.id
+            LEFT JOIN members mb ON mb.base_id = b.id
+            LEFT JOIN surface s ON s.id = mb.surface_id
+            LEFT JOIN surface_variant sv ON sv.surface_id = s.id AND mb.own = 1
+            LEFT JOIN variant v ON sv.variant_id = v.id
+        """
+
+        private fun Connection.hasTable(name: String): Boolean =
+            prepareStatement("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").use { stmt ->
+                stmt.setString(1, name)
+                stmt.executeQuery().use { it.next() }
+            }
     }
 
     private data class LookupContext(
         val conn: Connection,
-        val stmt: PreparedStatement
+        val stmt: PreparedStatement,
+        val paramCount: Int
     )
 
     private data class BaseBucket(
