@@ -101,6 +101,28 @@ class RenameAliasFlowTest {
     }
 
     @Test
+    fun `aliased book keeps its id across snapshot and reload`() {
+        val statePath = tmp.newFolder().toPath().resolve("build_state.db")
+        val oldKey = BookKey("MoreBooks", "ספר")
+        val newKey = BookKey("KSK", "ספר")
+
+        val alloc1 = InMemoryIdAllocator.load(path = null)
+        val id = alloc1.bookId(oldKey.sourceName, oldKey.canonicalHeTitle)
+        alloc1.snapshotTo(statePath)
+
+        // id_book.id is UNIQUE: this snapshot failed while the id stayed under both keys.
+        val alloc2 = InMemoryIdAllocator.load(statePath)
+        alloc2.registerBookAlias(oldKey, newKey, atVersion = 2)
+        assertEquals(id, alloc2.bookId(newKey.sourceName, newKey.canonicalHeTitle))
+        assertEquals(id, alloc2.bookId(oldKey.sourceName, oldKey.canonicalHeTitle))
+        alloc2.snapshotTo(statePath)
+
+        val alloc3 = InMemoryIdAllocator.load(statePath)
+        assertEquals(id, alloc3.bookId(newKey.sourceName, newKey.canonicalHeTitle))
+        assertEquals(id, alloc3.bookId(oldKey.sourceName, oldKey.canonicalHeTitle))
+    }
+
+    @Test
     fun `source hashes round-trip through snapshot reload`() {
         val statePath = tmp.newFolder().toPath().resolve("build_state.db")
         val alloc1 = InMemoryIdAllocator.load(path = null)
