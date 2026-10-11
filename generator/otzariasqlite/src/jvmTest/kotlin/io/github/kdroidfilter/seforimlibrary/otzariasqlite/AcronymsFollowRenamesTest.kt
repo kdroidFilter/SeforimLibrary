@@ -369,6 +369,21 @@ class AcronymsFollowRenamesTest {
         )))
     }
 
+    @Test
+    fun aBookRenamedTwiceKeepsTheAcronymsOfItsFirstTitle() {
+        val first = "אמת ואמונה - מנחם מנדל מקוצק"
+        val second = "אמת ואמונה - מנחם מנדל"
+        val third = "אמת ואמונה"
+        val acronyms = acronymizer(mapOf(first to listOf("קוצקי", "הקוצקי")))
+        val state = Files.createTempDirectory("otzaria-renames-state").resolve("build_state.db")
+        build(state, acronyms, mapOf(first to text(first)))
+        assertEquals(setOf("קוצקי", "הקוצקי", first), build(state, acronyms, mapOf(second to text(second))).getValue(second))
+        assertEquals(
+            setOf("קוצקי", "הקוצקי", first, second),
+            build(state, acronyms, mapOf(third to text(third))).getValue(third),
+        )
+    }
+
     private class Capture : LogWriter() {
         val lines = mutableListOf<String>()
         override fun log(severity: Severity, message: String, tag: String, throwable: Throwable?) {
