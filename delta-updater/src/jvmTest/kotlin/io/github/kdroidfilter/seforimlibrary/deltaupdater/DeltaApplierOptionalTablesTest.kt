@@ -50,6 +50,20 @@ class DeltaApplierOptionalTablesTest {
         assertEquals(before.toList(), Files.readAllBytes(prev).toList())
     }
 
+    @Test
+    fun `line_divine_name travels the side channel and is verified by the client`() {
+        val prev = db("prev.db", banner = null, divineNames = listOf(listOf(1, 0, 4, 1, 1)))
+        val next = db("next.db", banner = null, divineNames = listOf(listOf(1, 3, 7, 5, 3), listOf(2, 0, 2, 3, 2)))
+        val patch = tmp.newFolder().toPath().resolve("patch.db")
+        PatchDbProducer().produce(prev, next, patch, fromVersion = 1, toVersion = 2, fromSchemaVersion = 6, toSchemaVersion = 6)
+
+        val hashes = optionalHashes(next, "line_divine_name")
+        val manifest = manifestFor(prev, next, patch, hashes)
+        val result = DeltaApplierClient().apply(prev, patch, manifest)
+        assertEquals(mapOf("line_divine_name" to 2), result.applied.optionalTablesReplaced)
+        assertEquals(hashes, optionalHashes(prev, "line_divine_name"))
+    }
+
     private fun manifestFor(prev: Path, next: Path, patch: Path, optional: Map<String, String>): DeltaManifest {
         val compressed = PatchCompressor.compress(patch, level = 3, workers = 1)
         val file = ReleaseManifestWriter().writeManifest(
@@ -68,12 +82,18 @@ class DeltaApplierOptionalTablesTest {
         return json.decodeFromString(DeltaManifest.serializer(), Files.readString(file))
     }
 
-    private fun db(name: String, banner: String?): Path {
+    private fun db(name: String, banner: String?, divineNames: List<List<Int>>? = null): Path {
         val path = tmp.newFolder().toPath().resolve(name)
         DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use { conn ->
             conn.createStatement().use { st ->
                 st.execute("CREATE TABLE book (id INTEGER PRIMARY KEY NOT NULL, title TEXT NOT NULL)")
                 st.execute("INSERT INTO book VALUES (1, 'א')")
+                st.execute("CREATE TABLE line (id INTEGER PRIMARY KEY NOT NULL, bookId INTEGER NOT NULL)")
+                st.execute("INSERT INTO line VALUES (1, 1), (2, 1)")
+                if (divineNames != null) {
+                    st.execute(OPTIONAL_PATCH_TABLES.single { it.name == "line_divine_name" }.ddl)
+                    for (r in divineNames) st.execute("INSERT INTO line_divine_name VALUES (${r.joinToString()})")
+                }
                 if (banner != null) {
                     st.execute(OPTIONAL_PATCH_TABLES.single { it.name == "book_banner" }.ddl)
                 }
@@ -92,8 +112,8 @@ class DeltaApplierOptionalTablesTest {
         LogicalContentHasher.forSchemaVersion(6).compute(it)
     }
 
-    private fun optionalHashes(path: Path): Map<String, String> =
+    private fun optionalHashes(path: Path, table: String = "book_banner"): Map<String, String> =
         DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use {
-            LogicalContentHasher(listOf("book_banner")).computeReport(it).tableHashes
+            LogicalContentHasher(listOf(table)).computeReport(it).tableHashes
         }
 }

@@ -204,6 +204,10 @@ fun main(args: Array<String>) {
             applyBookNotices(conn, bookNotices, logger, strict = false)
             conn.commit()
         }
+        // Warnings only: a row the build cannot read makes it ignore the whole list (Tanach → HVYH only).
+        val divineNameOverrides = DriverManager.getConnection("jdbc:sqlite:$tempDb").use {
+            validateDivineNameOverrides(it, logger)
+        }
         logger.i {
             "ForDB validation passed all real consumers: ${categoryRenames.size} category renames, " +
                 "${categoryMoves.size} category moves, ${bookRenames.size} book renames, " +
@@ -211,7 +215,8 @@ fun main(args: Array<String>) {
                 "${bulkMetadata.size} bulk metadata rows, ${descriptionOverrides.size} description overrides, " +
                 "${categoryDescriptionOverrides.size} category-description overrides, " +
                 "${authorCanonicalNames.size} author renames, ${bookNotices.banners.size} banner rows, " +
-                "${bookNotices.protections.size} protection rows. Original DB/buildstate untouched."
+                "${bookNotices.protections.size} protection rows, $divineNameOverrides divine-name override rows. " +
+                "Original DB/buildstate untouched."
         }
     } finally {
         tempDir.toFile().deleteRecursively()

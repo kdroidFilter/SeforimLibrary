@@ -69,6 +69,7 @@
 --     default_targum.targumBookId     -> book(id)                ON DELETE CASCADE
 --     book_banner.bookId              -> book(id)                ON DELETE CASCADE
 --     book_protection.bookId          -> book(id)                ON DELETE CASCADE
+--     line_divine_name.lineId         -> line(id)                ON DELETE CASCADE
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- Schema-level metadata (db_version, db_schema_version, content_hash, ...)
@@ -627,3 +628,16 @@ CREATE TABLE IF NOT EXISTS book_protection (
     bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
     level INTEGER NOT NULL CHECK (level >= 1)
 );
+
+-- Optional: verified sacred divine names of each line, in the visible-char
+-- coordinates of link_anchor, for the app's display substitution (kind/source
+-- codes in DivineNameModel.kt). Built by buildLineDivineNameIndex; outside the
+-- schema hash contract, shipped as a full snapshot (OPTIONAL_PATCH_TABLES).
+CREATE TABLE IF NOT EXISTS line_divine_name (
+    lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
+    charStart INTEGER NOT NULL,
+    charEnd INTEGER NOT NULL,
+    kind INTEGER NOT NULL,
+    source INTEGER NOT NULL,
+    PRIMARY KEY (lineId, charStart)
+) WITHOUT ROWID;

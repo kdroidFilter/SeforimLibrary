@@ -377,6 +377,46 @@ tasks.register<JavaExec>("seedBookNotices") {
     jvmArgs = listOf("-Xmx512m")
 }
 
+// Verified sacred divine names — line_divine_name, with the curated verse list from
+// the optional ForDB divine_name_overrides.csv (-PdivineNameOverridesCsv=<local file>
+// takes precedence). Reads the final line text, so it follows every content writer.
+// Usage:
+//   ./gradlew :sefariasqlite:buildLineDivineNameIndex -PseforimDb=/path/to/seforim.db
+tasks.register<JavaExec>("buildLineDivineNameIndex") {
+    group = "application"
+    description = "Rebuild line_divine_name — the verified sacred divine names of every line (visible-char spans)."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.sefariasqlite.BuildLineDivineNamesKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+    systemProperty("seforimDb", divineNameDbPath())
+    (project.findProperty("divineNameOverridesCsv") as String?)?.let { systemProperty("divineNameOverridesCsv", it) }
+    jvmArgs = listOf("-Xmx2g")
+}
+
+// Dry run of the same detection on a READ-ONLY (immutable) DB: counts and a stratified
+// review sample in -PreportDir. Never part of the pipeline.
+tasks.register<JavaExec>("reportLineDivineNames") {
+    group = "verification"
+    description = "Dry run of buildLineDivineNameIndex on a read-only DB: counts and a review sample in -PreportDir."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.sefariasqlite.BuildLineDivineNamesKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+    systemProperty("seforimDb", divineNameDbPath())
+    systemProperty(
+        "reportDir",
+        (project.findProperty("reportDir") as String?)
+            ?: layout.buildDirectory.dir("divine-name-report").get().asFile.absolutePath,
+    )
+    (project.findProperty("divineNameOverridesCsv") as String?)?.let { systemProperty("divineNameOverridesCsv", it) }
+    jvmArgs = listOf("-Xmx2g")
+}
+
+fun divineNameDbPath(): String = (project.findProperty("seforimDb") as String?)
+    ?: System.getenv("SEFORIM_DB")
+    ?: rootProject.layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+
 // Dry-run validation of EVERY ForDB rename/move rule against a real seforim.db:
 // the exact appliers in the exact build order, in a rolled-back transaction, and
 // a complete all-failures report instead of a first-row crash. The DB is never
@@ -425,6 +465,8 @@ tasks.matching {
         "seedGenerations",
         "seedAllMetadata",
         "seedBookNotices",
+        "buildLineDivineNameIndex",
+        "reportLineDivineNames",
         "validateForDbInputs",
     )
 }

@@ -56,6 +56,7 @@ tasks.register("generateSeforimDb") {
     dependsOn(":sefariasqlite:seedBookNotices")
     dependsOn(":generator-common:buildLineRefIndex")
     dependsOn(":generator-common:buildLineDhIndex")
+    dependsOn(":sefariasqlite:buildLineDivineNameIndex")
     dependsOn(":sefariasqlite:synthesizeSeifimAltToc")
     dependsOn(":sefariasqlite:synthesizeSimanNamesAltToc")
     dependsOn(":sefariasqlite:inheritChaptersAltToc")
@@ -84,6 +85,7 @@ val lineContentWriters = listOf(
     ":sefariasqlite:inheritChaptersAltToc",
     ":generator-common:buildLineRefIndex",
     ":generator-common:buildLineDhIndex",
+    ":sefariasqlite:buildLineDivineNameIndex",
 )
 project(":generator-common").tasks.matching { it.name == "splitLineContent" }.configureEach {
     lineContentWriters.forEach { mustRunAfter(it) }
@@ -185,6 +187,24 @@ project(":generator-common").tasks.matching { it.name == "buildLineDhIndex" }.co
     mustRunAfter(":generator-common:buildLineRefIndex")
 }
 
+// line_divine_name stores visible-char offsets into line.content, so it reads the
+// final text: after every stage that writes or edits lines (and after the other
+// index builders, so writers stay sequential), before splitLineContent (via
+// lineContentWriters) and long before compression.
+project(":sefariasqlite").tasks.matching { it.name == "buildLineDivineNameIndex" }.configureEach {
+    mustRunAfter(":otzariasqlite:appendOtzaria")
+    mustRunAfter(":otzariasqlite:generateHavroutaLinks")
+    mustRunAfter(":sefariasqlite:renameCategories")
+    mustRunAfter(":sefariasqlite:seedGenerations")
+    mustRunAfter(":sefariasqlite:seedAllMetadata")
+    mustRunAfter(":sefariasqlite:seedBookNotices")
+    mustRunAfter(":sefariasqlite:synthesizeSeifimAltToc")
+    mustRunAfter(":sefariasqlite:synthesizeSimanNamesAltToc")
+    mustRunAfter(":sefariasqlite:inheritChaptersAltToc")
+    mustRunAfter(":generator-common:buildLineRefIndex")
+    mustRunAfter(":generator-common:buildLineDhIndex")
+}
+
 // Ensure ordering inside the pipeline task graph
 project(":otzariasqlite").tasks.matching {
     it.name in setOf(
@@ -273,6 +293,7 @@ project(":catalog").tasks.matching { it.name == "buildCatalog" }.configureEach {
     mustRunAfter(":sefariasqlite:synthesizeSimanNamesAltToc")
     mustRunAfter(":sefariasqlite:inheritChaptersAltToc")
     mustRunAfter(":generator-common:buildLineDhIndex")
+    mustRunAfter(":sefariasqlite:buildLineDivineNameIndex")
 }
 project(":packaging").tasks.matching { it.name == "writeReleaseInfo" }.configureEach {
     mustRunAfter(":catalog:buildCatalog")

@@ -84,6 +84,7 @@
   ],
   "optionalTables": [
     { "table": "book_banner", "pk": ["bookId"], "columns": ["bookId", "text"] },
-    { "table": "book_protection", "pk": ["bookId"], "columns": ["bookId", "level"] }
+    { "table": "book_protection", "pk": ["bookId"], "columns": ["bookId", "level"] },
+    { "table": "line_divine_name", "pk": ["lineId", "charStart"], "columns": ["lineId", "charStart", "charEnd", "kind", "source"] }
   ]
 }

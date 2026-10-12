@@ -184,6 +184,22 @@ val OPTIONAL_PATCH_TABLES: List<OptionalPatchTable> = listOf(
             )
         """.trimIndent(),
     ),
+    // Built by buildLineDivineNameIndex; every patch ships the whole table.
+    OptionalPatchTable(
+        name = "line_divine_name",
+        primaryKey = listOf("lineId", "charStart"),
+        columns = listOf("lineId", "charStart", "charEnd", "kind", "source"),
+        ddl = """
+            CREATE TABLE IF NOT EXISTS line_divine_name (
+                lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
+                charStart INTEGER NOT NULL,
+                charEnd INTEGER NOT NULL,
+                kind INTEGER NOT NULL,
+                source INTEGER NOT NULL,
+                PRIMARY KEY (lineId, charStart)
+            ) WITHOUT ROWID
+        """.trimIndent(),
+    ),
 )
 
 /**

@@ -27,7 +27,8 @@ class PatchOptionalTablesTest {
     @Test
     fun `the producer ships DDL and a full snapshot of each optional table the new DB has`() {
         val prev = db("prev.db", banners = emptyMap(), protections = null)
-        val next = db("next.db", banners = mapOf(1L to "שורה א\nשורה ב", 2L to "[קישור](https://x.org)"), protections = mapOf(2L to 2))
+        val next = db("next.db", banners = mapOf(1L to "שורה א\nשורה ב", 2L to "[קישור](https://x.org)"), protections = mapOf(2L to 2),
+            divineNames = listOf(listOf(10, 4, 8, 1, 1), listOf(12, 0, 5, 5, 3)))
         val patch = path("patch.db")
 
         val output = PatchDbProducer().produce(prev, next, patch, fromVersion = 1, toVersion = 2)
@@ -41,6 +42,10 @@ class PatchOptionalTablesTest {
             query(patch, "SELECT bookId, text FROM optional_book_banner ORDER BY bookId"),
         )
         assertEquals(listOf(listOf<Any?>(2, 2)), query(patch, "SELECT bookId, level FROM optional_book_protection"))
+        assertEquals(
+            listOf(listOf<Any?>(10, 4, 8, 1, 1), listOf<Any?>(12, 0, 5, 5, 3)),
+            query(patch, "SELECT lineId, charStart, charEnd, kind, source FROM optional_line_divine_name ORDER BY lineId"),
+        )
         assertFalse(hasTable(patch, "upsert_book_banner"))
         assertFalse("book_banner" in output.upsertCounts)
     }
@@ -48,12 +53,12 @@ class PatchOptionalTablesTest {
     @Test
     fun `apply replaces the tables whole and the optional hashes match the new DB`() {
         // prev carries stale rows a client may hold after skipping an earlier patch.
-        val prev = db("prev.db", banners = mapOf(1L to "ישן", 3L to "יימחק"), protections = mapOf(1L to 1))
-        val next = db("next.db", banners = mapOf(1L to "חדש {title}"), protections = mapOf(2L to 3))
+        val prev = db("prev.db", banners = mapOf(1L to "ישן", 3L to "יימחק"), protections = mapOf(1L to 1), divineNames = listOf(listOf(11, 0, 4, 1, 1)))
+        val next = db("next.db", banners = mapOf(1L to "חדש {title}"), protections = mapOf(2L to 3), divineNames = listOf(listOf(10, 2, 6, 5, 3), listOf(12, 0, 2, 3, 2)))
         val patch = path("patch.db")
         PatchDbProducer().produce(prev, next, patch, fromVersion = 1, toVersion = 2)
         val expected = connect(next).use { optionalTableContentHashes(it) }
-        assertEquals(listOf("book_banner", "book_protection"), expected.keys.toList())
+        assertEquals(listOf("book_banner", "book_protection", "line_divine_name"), expected.keys.toList())
 
         val target = copy(prev)
         val result = connect(target).use { conn ->
@@ -66,7 +71,11 @@ class PatchOptionalTablesTest {
             )
         }
 
-        assertEquals(mapOf("book_banner" to 1, "book_protection" to 1), result.optionalTablesReplaced)
+        assertEquals(mapOf("book_banner" to 1, "book_protection" to 1, "line_divine_name" to 2), result.optionalTablesReplaced)
+        assertEquals(
+            query(next, "SELECT * FROM line_divine_name ORDER BY lineId, charStart"),
+            query(target, "SELECT * FROM line_divine_name ORDER BY lineId, charStart"),
+        )
         assertFalse("book_banner" in result.upsertCounts)
         assertEquals(query(next, "SELECT * FROM book_banner ORDER BY bookId"), query(target, "SELECT * FROM book_banner ORDER BY bookId"))
         assertEquals(query(next, "SELECT * FROM book_protection ORDER BY bookId"), query(target, "SELECT * FROM book_protection ORDER BY bookId"))
@@ -180,11 +189,12 @@ class PatchOptionalTablesTest {
 
     @Test
     fun `cross-repo golden hashes of the empty tables`() {
-        val empty = db("empty.db", banners = emptyMap(), protections = emptyMap())
+        val empty = db("empty.db", banners = emptyMap(), protections = emptyMap(), divineNames = emptyList())
         assertEquals(
             mapOf(
                 "book_banner" to "473b121ac837ac17a9627ed583981faec4074ec3217224c18bb0a6bb62752240",
                 "book_protection" to "260da62f074581043b5bf203c9790203a9ea052f9d1e14e27ecc780f66790a81",
+                "line_divine_name" to GOLDEN_DIVINE_EMPTY,
             ),
             connect(empty).use { optionalTableContentHashes(it) },
         )
@@ -223,6 +233,32 @@ class PatchOptionalTablesTest {
         assertFalse(hasTable(target, "book_banner"))
     }
 
+    @Test
+    fun `cross-repo golden hashes of line_divine_name, full and empty`() {
+        val full = db(
+            "divine.db", banners = null, protections = null,
+            divineNames = listOf(listOf(2, 20, 24, 3, 4), listOf(1, 0, 4, 1, 1), listOf(2, 3, 6, 7, 3), listOf(1, 12, 17, 5, 2)),
+        )
+        val empty = db("divine-empty.db", banners = null, protections = null, divineNames = emptyList())
+        assertEquals(mapOf("line_divine_name" to GOLDEN_DIVINE_FULL), connect(full).use { optionalTableContentHashes(it) })
+        assertEquals(mapOf("line_divine_name" to GOLDEN_DIVINE_EMPTY), connect(empty).use { optionalTableContentHashes(it) })
+    }
+
+    @Test
+    fun `a line_divine_name row whose line does not exist is refused`() {
+        val prev = db("prev.db", banners = null, protections = null)
+        val next = db("next.db", banners = null, protections = null, divineNames = listOf(listOf(10, 0, 4, 1, 1)))
+        val patch = path("patch.db")
+        PatchDbProducer().produce(prev, next, patch, fromVersion = 1, toVersion = 2)
+        connect(patch).use { conn -> conn.createStatement().use { it.execute("UPDATE optional_line_divine_name SET lineId = 99") } }
+        val target = copy(prev)
+        connect(target).use { conn ->
+            val error = assertFailsWith<IllegalStateException> { PatchApplier().apply(conn, patch) }
+            assertTrue("foreign key" in error.message.orEmpty(), error.message)
+        }
+        assertFalse(hasTable(target, "line_divine_name"))
+    }
+
     /** (table_info rows: name, type, notnull, dflt, pk) to (foreign_key_list rows: table, from, to, on_delete). */
     private fun shape(p: Path, table: String): Pair<List<List<Any?>>, List<List<Any?>>> =
         query(p, "SELECT name, type, \"notnull\", dflt_value, pk FROM pragma_table_info('$table') ORDER BY cid") to
@@ -248,19 +284,36 @@ class PatchOptionalTablesTest {
     @Test
     fun `the schema hash ignores the optional tables`() {
         val without = db("a.db", banners = null, protections = null)
-        val with = db("b.db", banners = mapOf(1L to "x"), protections = mapOf(1L to 2))
+        val with = db("b.db", banners = mapOf(1L to "x"), protections = mapOf(1L to 2), divineNames = listOf(listOf(10, 0, 4, 1, 1)))
         assertEquals(wholeHash(without), wholeHash(with))
     }
 
-    private fun db(name: String, banners: Map<Long, String>?, protections: Map<Long, Int>?): Path {
+    private fun db(
+        name: String,
+        banners: Map<Long, String>?,
+        protections: Map<Long, Int>?,
+        divineNames: List<List<Int>>? = null,
+    ): Path {
         val p = path(name)
         connect(p).use { conn ->
             conn.createStatement().use { st ->
                 st.execute("CREATE TABLE book (id INTEGER PRIMARY KEY NOT NULL, title TEXT NOT NULL)")
                 st.execute("INSERT INTO book (id, title) VALUES (1, 'א'), (2, 'ב'), (3, 'ג')")
+                st.execute("CREATE TABLE line (id INTEGER PRIMARY KEY NOT NULL, bookId INTEGER NOT NULL)")
+                st.execute("INSERT INTO line (id, bookId) VALUES (10, 1), (11, 1), (12, 2)")
             }
             if (banners != null) insertAll(conn, "book_banner", banners)
             if (protections != null) insertAll(conn, "book_protection", protections)
+            if (divineNames != null) {
+                val spec = OPTIONAL_PATCH_TABLES.single { it.name == "line_divine_name" }
+                conn.createStatement().use { it.execute(spec.ddl) }
+                conn.prepareStatement("INSERT INTO line_divine_name (lineId, charStart, charEnd, kind, source) VALUES (?, ?, ?, ?, ?)").use { ps ->
+                    for (row in divineNames) {
+                        row.forEachIndexed { i, v -> ps.setInt(i + 1, v) }
+                        ps.executeUpdate()
+                    }
+                }
+            }
         }
         return p
     }
@@ -297,5 +350,11 @@ class PatchOptionalTablesTest {
             ps.setString(1, name)
             ps.executeQuery().use { it.next() }
         }
+    }
+
+    private companion object {
+        // Shared with otzaria_library_updater: the Dart hasher must give the same hex.
+        const val GOLDEN_DIVINE_FULL = "e0b9cc2885495c4bf2ebdfe044b06948aa8cb0c859e777d45b880e59f3d4e799"
+        const val GOLDEN_DIVINE_EMPTY = "278213e576ad7f0865c73036789d82ec801bb65e594d9eee0ec6e6e799325b85"
     }
 }
