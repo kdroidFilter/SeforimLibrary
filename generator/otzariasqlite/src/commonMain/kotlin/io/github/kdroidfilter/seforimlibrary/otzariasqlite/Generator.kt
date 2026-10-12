@@ -1564,17 +1564,24 @@ class DatabaseGenerator(
                 // Skip links where source or target is a heading line
                 if (sourceLineId in headingLineIds || targetLineId in headingLineIds) continue
 
-                val connectionType = ConnectionType.fromString(linkData.connectionType)
-                val link = Link(
-                    id = allocator.linkId(sourceLineId, targetLineId, bindings.upsertConnectionType(connectionType.name)),
+                val link = canonicalOtzariaLink(
                     sourceBookId = sourceBook.id,
-                    targetBookId = targetBook.id,
                     sourceLineId = sourceLineId,
+                    sourceLineIndex = sourceLineIndex,
+                    targetBookId = targetBook.id,
                     targetLineId = targetLineId,
                     targetLineIndex = targetLineIndex,
-                    connectionType = connectionType
+                    connectionType = ConnectionType.fromString(linkData.connectionType),
                 )
-                repository.insertLink(link)
+                repository.insertLink(
+                    link.copy(
+                        id = allocator.linkId(
+                            link.sourceLineId,
+                            link.targetLineId,
+                            bindings.upsertConnectionType(link.connectionType.name),
+                        ),
+                    ),
+                )
                 processed++
             } catch (e: IllegalStateException) {
                 throw e // link id collision: data would be lost, fail the build
