@@ -76,6 +76,8 @@ data class SearchPage(
  * @property rawText Original unprocessed text content of the line
  * @property isBaseBook True if the line belongs to a base book (vs a commentary). Lets callers
  *   correlate results: anchor each hit on its base line and nest matching commentaries under it.
+ * @property lineStart start of the hit line in [rawText], which may hold its neighbors as context (snippet source)
+ * @property lineEnd end (exclusive) of the hit line in [rawText]
  */
 data class LineHit(
     val bookId: Long,
@@ -85,7 +87,9 @@ data class LineHit(
     val snippet: String,
     val score: Float,
     val rawText: String,
-    val isBaseBook: Boolean = false
+    val isBaseBook: Boolean = false,
+    val lineStart: Int = 0,
+    val lineEnd: Int = rawText.length
 )
 
 /**

@@ -86,35 +86,36 @@ interface SearchEngine : Closeable {
     fun buildSnippet(rawText: String, query: String, near: Int): String
 
     /**
-     * The words that stand for [query] in [text] (plain, diacritics allowed), as ranges of [text]: the one rule every
-     * view highlights a search with (results' snippets, their preview, the reader's smart find). A query word counts
-     * as itself (prefixed, or inside a longer word from 4 letters) or as one of its inflections; consecutive matched
-     * words form one range.
+     * The words that stand for [query] in [text] (plain, diacritics allowed), as ranges of [text]: what a search
+     * highlights when it doesn't highlight by meaning (see [highlightsByMeaning]). A query word counts as itself
+     * (prefixed, or inside a longer word from 4 letters) or as one of its inflections; consecutive matched words form
+     * one range.
      */
     fun highlightRanges(text: String, query: String): List<IntRange> = emptyList()
 
     /**
-     * What to highlight of [query] in found lines [texts] (plain): [highlightRanges] where the query's words show,
-     * else, for engines that search by meaning, the passage closest in meaning to the query (the whole line when it
-     * is a single clause). With [alwaysByMeaning] (a find by meaning), that passage shows beside the words in every
-     * line. One batch, as the meaning takes a model run.
+     * Whether a search for [query] highlights by meaning: the passage closest in meaning in the found line alone,
+     * none of the query's words. False for engines without a meaning search, and for an exact (quoted) query.
+     */
+    fun highlightsByMeaning(query: String): Boolean = false
+
+    /**
+     * What to highlight of [query] in found lines [texts] (plain): the one rule every view highlights a found line with
+     * (results' snippets, their preview, the reader's smart find). By meaning (see [highlightsByMeaning]), the passage
+     * closest in meaning (the whole line when it is a single clause), in one batch as it takes a model run; else, or
+     * when the meaning search fails, [highlightRanges].
      */
     suspend fun highlights(
         texts: List<String>,
-        query: String,
-        alwaysByMeaning: Boolean = false
+        query: String
     ): List<TextHighlights> {
-        val words = texts.map { highlightRanges(it, query) }
-        val wanted = texts.indices.filter { (alwaysByMeaning || words[it].isEmpty()) && texts[it].isNotBlank() }
-        val passages = if (wanted.isEmpty()) null else passagesByMeaning(query, wanted.map { texts[it] })
-        if (passages == null) return words.map { TextHighlights(it) }
-        val passageOf = wanted.indices.associate { wanted[it] to passages[it] }
+        val passages = if (highlightsByMeaning(query)) passagesByMeaning(query, texts) else null
+        if (passages == null) return texts.map { TextHighlights(highlightRanges(it, query)) }
         return texts.mapIndexed { i, text ->
-            if (i !in passageOf) return@mapIndexed TextHighlights(words[i])
             // A single clause is the passage itself
-            val passage = passageOf[i] ?: text.trim()
-            val at = text.indexOf(passage)
-            if (at < 0) TextHighlights(words[i]) else TextHighlights(unionRanges(words[i] + listOf(at until at + passage.length)), byMeaning = true)
+            val passage = passages[i] ?: text.trim()
+            val at = if (passage.isEmpty()) -1 else text.indexOf(passage)
+            TextHighlights(if (at < 0) emptyList() else listOf(at until at + passage.length), byMeaning = true)
         }
     }
 
@@ -124,8 +125,11 @@ interface SearchEngine : Closeable {
      */
     suspend fun passagesByMeaning(query: String, texts: List<String>): List<String?>? = null
 
-    /** A snippet of [text] (snippet text, see [SnippetSources.clean]) laid out around [ranges], bold. */
-    fun rangeSnippet(text: String, ranges: List<IntRange>): String = text
+    /**
+     * A snippet of [text] (snippet text, see [SnippetSources.clean]) laid out around [ranges] (sorted), bold;
+     * [lineStart] until [lineEnd] is the hit line when [text] holds its neighbors (see [LineHit]).
+     */
+    fun rangeSnippet(text: String, ranges: List<IntRange>, lineStart: Int = 0, lineEnd: Int = text.length): String = text
 
     /**
      * Fills `snippet` and `rawText` of [hits] fetched without snippets (`nextPage(limit, snippets = false)`), so
