@@ -13,6 +13,8 @@ internal object SefariaSimanTopicLines {
         "שולחן ערוך, יורה דעה",
         "שולחן ערוך, אבן העזר",
         "שולחן ערוך, חושן משפט",
+        // In the Tur the bold run is the "הלכות …" heading opening a group of simanim.
+        "טור",
         "ערוך השולחן",
         "ערוך השולחן העתיד",
         "קסת הסופר",
