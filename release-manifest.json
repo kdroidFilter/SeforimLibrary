@@ -1,16 +1,87 @@
 {
-  "generatedAt": "2026-10-11T21:05:47Z",
+  "generatedAt": "2026-10-12T04:00:51Z",
   "latest": {
-    "assets": [],
-    "name": "v2-20261011170830",
-    "publishedAt": "2026-10-11T19:38:10Z",
-    "tagName": "v2-20261011170830"
+    "assets": [
+      {
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/632025107",
+        "contentType": "application/octet-stream",
+        "createdAt": "2026-10-11T22:55:57Z",
+        "digest": "sha256:310f3c2ac7f918e9caeccdb0c350ca11e4e32ce500dbba41da7c31bf16cb3fb4",
+        "downloadCount": 0,
+        "id": "RA_kwDOPFZ3eM4lq_AT",
+        "label": "",
+        "name": "seforim.db.buildstate",
+        "size": 1161728000,
+        "state": "uploaded",
+        "updatedAt": "2026-10-11T22:57:27Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20261011223929/seforim.db.buildstate"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/632024684",
+        "contentType": "application/json",
+        "createdAt": "2026-10-11T22:55:41Z",
+        "digest": "sha256:b9c1c9ef3982af0e35f6733a1a8da795ae7b338e16f5f32362c6310d7e81f125",
+        "downloadCount": 0,
+        "id": "RA_kwDOPFZ3eM4lq-5s",
+        "label": "",
+        "name": "seforim_bundle.tar.zst.manifest.json",
+        "size": 621,
+        "state": "uploaded",
+        "updatedAt": "2026-10-11T22:55:43Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20261011223929/seforim_bundle.tar.zst.manifest.json"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/632024738",
+        "contentType": "application/octet-stream",
+        "createdAt": "2026-10-11T22:55:43Z",
+        "digest": "sha256:bccde103f0c53b44e8a76e9f63cb50bc78007f227143a9c5744d8a204c16a422",
+        "downloadCount": 1,
+        "id": "RA_kwDOPFZ3eM4lq-6i",
+        "label": "",
+        "name": "seforim_bundle.tar.zst.part01",
+        "size": 2040109465,
+        "state": "uploaded",
+        "updatedAt": "2026-10-11T22:57:51Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20261011223929/seforim_bundle.tar.zst.part01"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/632028180",
+        "contentType": "application/octet-stream",
+        "createdAt": "2026-10-11T22:57:51Z",
+        "digest": "sha256:c98cadde8e4dada173f5f67031e6486d66b9f7e9fa694772ce100702db04565a",
+        "downloadCount": 1,
+        "id": "RA_kwDOPFZ3eM4lq_wU",
+        "label": "",
+        "name": "seforim_bundle.tar.zst.part02",
+        "size": 2040109465,
+        "state": "uploaded",
+        "updatedAt": "2026-10-11T22:59:31Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20261011223929/seforim_bundle.tar.zst.part02"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/kdroidFilter/SeforimLibrary/releases/assets/632031112",
+        "contentType": "application/octet-stream",
+        "createdAt": "2026-10-11T22:59:31Z",
+        "digest": "sha256:75b1b77f723568b48f454282baaf1e965925d60e9022128ecda32ad53b0ba95e",
+        "downloadCount": 1,
+        "id": "RA_kwDOPFZ3eM4lrAeI",
+        "label": "",
+        "name": "seforim_bundle.tar.zst.part03",
+        "size": 1464053291,
+        "state": "uploaded",
+        "updatedAt": "2026-10-11T23:00:41Z",
+        "url": "https://github.com/kdroidFilter/SeforimLibrary/releases/download/v2-20261011223929/seforim_bundle.tar.zst.part03"
+      }
+    ],
+    "name": "v2-20261011223929",
+    "publishedAt": "2026-10-12T04:00:43Z",
+    "tagName": "v2-20261011223929"
   },
   "releases": [
     {
-      "name": "v2-20261011170830",
-      "publishedAt": "2026-10-11T19:38:10Z",
-      "tagName": "v2-20261011170830"
+      "name": "v2-20261011223929",
+      "publishedAt": "2026-10-12T04:00:43Z",
+      "tagName": "v2-20261011223929"
     },
     {
       "name": "v1-20260601094341",
