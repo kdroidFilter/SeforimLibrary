@@ -362,7 +362,7 @@ fun main(args: Array<String>) = runBlocking {
                     // A separate clickable anchor for EACH citation occurrence (same line may cite
                     // the same ref twice at different offsets → one link, two anchors).
                     val cs = countVisibleChars(content, start)
-                    val ce = countVisibleChars(content, end)
+                    val ce = countVisibleChars(content, closeDanglingBrackets(content, start, end))
                     if (ce > cs) {
                         anchorBatch.add(LinkAnchor(linkId = linkId, side = 0, charStart = cs, charEnd = ce))
                     }
@@ -485,6 +485,41 @@ internal fun linkerOffsetShift(sourceName: String, content: String, sourceHash: 
         return LinkerInputView.strippedPrefixLength(mode, content)
     }
     return LinkerInputView.offsetShift(content) { linkerContentHash(it) == sourceHash }
+}
+
+/**
+ * [end], or just past the ")" that closes a "(" the citation from [start] to [end] of the
+ * stored line [content] opened, and then past the "]" of a "[" it opened. Sefaria's NER can
+ * end a citation right before that bracket, as in "ובאיכה רבה (א, כו", and the app paints
+ * exactly the anchor, so only part of the parentheses was marked (Otzaria/otzaria#2366).
+ * The offsets index [content], where tags count for nothing: only spaces and tags may
+ * stand before the bracket.
+ */
+internal fun closeDanglingBrackets(content: String, start: Int, end: Int): Int =
+    closeDangling(content, start, closeDangling(content, start, end, '(', ')'), '[', ']')
+
+private fun closeDangling(content: String, start: Int, end: Int, open: Char, close: Char): Int {
+    var unclosed = 0
+    var i = start
+    while (i < end) {
+        when (content[i]) {
+            '<' -> i = content.indexOf('>', i).takeIf { it >= 0 } ?: end
+            open -> unclosed++
+            close -> unclosed--
+        }
+        i++
+    }
+    if (unclosed <= 0) return end
+    var j = end
+    while (j < content.length) {
+        when (content[j]) {
+            ' ' -> j++
+            '<' -> j = (content.indexOf('>', j).takeIf { it >= 0 } ?: return end) + 1
+            close -> return j + 1
+            else -> return end
+        }
+    }
+    return end
 }
 
 /** SHA-1(UTF-8(content)) truncated to 16 hex chars. MUST equal linker_artifact.content_hash. */

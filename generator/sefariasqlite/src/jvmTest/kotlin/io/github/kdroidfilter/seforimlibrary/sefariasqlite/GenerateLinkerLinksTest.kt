@@ -496,6 +496,30 @@ class GenerateLinkerLinksTest {
     }
 
     @Test
+    fun aCitationThatStopsBeforeItsClosingParenTakesIt() {
+        // Sefaria's NER ends "ובאיכה רבה (א, כו" right before its ")" (Otzaria/otzaria#2366).
+        val stored = "ובאיכה רבה (א, כו) שכל"
+        val run = runLinkerMain(record(0, 17, base = 0, hashedContent = stored) + "\n", strict = "true", storedSource = stored)
+        assertEquals(null, run.failure)
+        assertEquals(listOf(0 to 18), run.anchorRanges)
+    }
+
+    @Test
+    fun aClosingBracketIsTakenOnlyAcrossSpacesAndTags() {
+        val stored = "ראה <b>(א, כו</b> ) וכן [ובאיכה רבה (ב, ג)] וכן (ד, ה ועוד) וכן (ו, ז) וכן ח, ט)"
+        val citations = listOf("(א, כו", "[ובאיכה רבה (ב, ג", "(ד, ה", "(ו, ז)", "ח, ט")
+        val body = citations.joinToString("") {
+            val start = stored.indexOf(it)
+            record(start, start + it.length, base = 0, hashedContent = stored) + "\n"
+        }
+        val run = runLinkerMain(body, strict = "true", storedSource = stored)
+        assertEquals(null, run.failure)
+        val visible = "ראה (א, כו ) וכן [ובאיכה רבה (ב, ג)] וכן (ד, ה ועוד) וכן (ו, ז) וכן ח, ט)"
+        val painted = listOf("(א, כו )", "[ובאיכה רבה (ב, ג)]", "(ד, ה", "(ו, ז)", "ח, ט")
+        assertEquals(painted.map { visible.indexOf(it) to visible.indexOf(it) + it.length }, run.anchorRanges)
+    }
+
+    @Test
     fun corruptArtifactLineFailsTheRun() {
         val run = runLinkerMain(record(4, 15, base = 0) + "\n{\"book_key\":\n", strict = null)
         assertTrue(run.failure is SerializationException, "unexpected failure: ${run.failure}")
