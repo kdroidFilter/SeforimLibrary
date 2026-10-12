@@ -267,7 +267,12 @@ class LuceneSearchEngine(
         val sources = withContext(Dispatchers.IO) { snippetSources(hits.map { LineSnippetInfo(it.lineId, it.bookId, it.lineIndex) }) }
         return hits.map { hit ->
             val source = sources[hit.lineId] ?: SnippetSource(hit.rawText, 0, hit.rawText.length)
-            hit.copy(snippet = SnippetBuilder.build(source.text, context.highlightPlan, source.lineStart, source.lineEnd), rawText = source.text)
+            hit.copy(
+                snippet = SnippetBuilder.build(source.text, context.highlightPlan, source.lineStart, source.lineEnd),
+                rawText = source.text,
+                lineStart = source.lineStart,
+                lineEnd = source.lineEnd
+            )
         }
     }
 
@@ -316,8 +321,13 @@ class LuceneSearchEngine(
     override fun highlightRanges(text: String, query: String): List<IntRange> =
         mergedRanges(text, planFor(query, DEFAULT_NEAR).highlights(text))
 
-    override fun rangeSnippet(text: String, ranges: List<IntRange>): String =
-        SnippetBuilder.build(text, ranges.map { Occurrence(it.first, it.last + 1, 0, EvidenceLevel.LITERAL) })
+    override fun rangeSnippet(text: String, ranges: List<IntRange>, lineStart: Int, lineEnd: Int): String =
+        SnippetBuilder.build(
+            text,
+            ranges.map { Occurrence(it.first, it.last + 1, 0, EvidenceLevel.LITERAL) },
+            lineStart,
+            lineEnd
+        )
 
     // The highlight plans of the latest queries: a results page and its preview ask for the same one many times
     private val planCache = object : LinkedHashMap<String, HighlightPlan>(PLAN_CACHE_SIZE, 0.75f, true) {
