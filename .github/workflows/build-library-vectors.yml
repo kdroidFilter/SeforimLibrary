@@ -113,8 +113,8 @@ jobs:
     # On a runner with no warehouse yet, the first build plans and embeds the whole library
     # on the GPU (~1 h), plus the index and the assembly, and its first add creates the
     # warehouse; a later release embeds only the texts the warehouse lacks, on the CPU when
-    # they are few (CPU_EMBED_MAX in pins.env). A new family's first build (windows: ~3.2M texts)
-    # may outlast this bound: fill the warehouse first with a dry run of it alone, by hand.
+    # they are few (CPU_EMBED_MAX in pins.env). The windows family's first build embeds ~3.2M
+    # texts (about an hour more); if it ever outlasts this bound, a dry run of it alone fills the warehouse.
     timeout-minutes: 360
     env:
       GH_TOKEN: ${{ secrets.PIPELINE_TOKEN }}

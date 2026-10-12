@@ -251,7 +251,8 @@ case "$cmd" in
     tag=$1; shift; dir=.; pats=()
     while [ $# -gt 0 ]; do case "$1" in --dir) dir=$2; shift 2;; --pattern) pats+=("$2"); shift 2;; *) shift;; esac; done
     for p in "${pats[@]}"; do cp "$ASSETS/$tag/$p" "$dir/$p" || exit 1; done ;;
-  "release create") ;;
+  "release create")
+    tag=$1; while [ $# -gt 0 ]; do case "$1" in --notes-file) cp "$2" "$UPLOADED.notes.$tag"; shift 2;; *) shift;; esac; done ;;
   "release upload")
     # SHORT_UPLOAD names an asset that arrives one byte short
     name=$(basename "$2"); size=$(stat -c %s "$2")
@@ -288,6 +289,8 @@ esac
 
 STUB_EXPORT = r"""#!/usr/bin/env bash
 echo "export $*" >> "$CALLS"
+for o in "$@"; do out_arg=$o; done   # --out is last: the work directory holds the families before it
+echo "export-work $(cd "${out_arg%/*}/.." && ls -A | tr '\n' ' ')" >> "$CALLS"
 out=""; warehouse=""; db=""; model=""
 while [ $# -gt 0 ]; do case "$1" in --out) out=$2; shift 2;; --warehouse) warehouse=$2; shift 2;; --seforim-db) db=$2; shift 2;;
   --model) model=$2; shift 2;; *) shift;; esac; done
@@ -451,6 +454,14 @@ echo "zstd $*" >> "$CALLS"
 if [ "$1" = "-dc" ]; then case " $* " in *" --memory=2048MB "*) [ -z "${ZSTD_FAIL:-}" ] || exit 1 ;; esac; cat; exit 0; fi
 in=""; out=""; while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2;; -*) shift;; *) in=$1; shift;; esac; done
 cp "$in" "$out"
+"""
+
+# df -Pk answering DF_FREE_KB's values in turn (DF_COUNT counts the calls)
+STUB_DF = r"""#!/usr/bin/env bash
+n=$(cat "$DF_COUNT" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$DF_COUNT"
+set -- $DF_FREE_KB; shift $((n - 1)) 2>/dev/null || set --
+echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
+echo "stub 1 1 ${1:-0} 1% /"
 """
 
 
@@ -1220,6 +1231,50 @@ class Driver(unittest.TestCase):
         notes = [c for c in calls if c.startswith("gh release create")]
         self.assertEqual([c.split()[3] for c in notes], [prefix + "-" + TAG for _, prefix in FAMILIES])
 
+    def test_the_first_familys_notes_are_as_before_and_a_later_ones_name_it(self):
+        p, _ = self.run_driver(mode="base", TO_EMBED=0)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        legacy = (self.root / f"uploaded.tsv.notes.vectors-{TAG}").read_text().splitlines()
+        self.assertEqual(legacy[0], f"Semantic vectors for library release {TAG} (base).")
+        self.assertEqual([l.split(":")[0] for l in legacy[1:] if l], ["Manifest", "Gates"])
+        windows = (self.root / f"uploaded.tsv.notes.vectors-windows-{TAG}").read_text()
+        self.assertIn(f"Family: `{WINDOWS}`, chunking identity `{CHUNKING_IDENTITY[WINDOWS]}`.", windows)
+
+    def test_a_family_leaves_only_what_it_needs_before_the_next_starts(self):
+        for mode in ("base", "dry-run"):
+            with self.subTest(mode=mode):
+                self.calls.unlink(missing_ok=True)
+                (self.root / "uploaded.tsv").unlink(missing_ok=True)
+                shutil.rmtree(self.state / "ledger", ignore_errors=True)
+                p, calls = self.run_driver(mode=mode, TO_EMBED=5)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                works = [c.split()[1:] for c in calls if c.startswith("export-work")]
+                self.assertEqual(len(works), len(FAMILIES))
+                self.assertEqual((LEGACY in works[0], WINDOWS in works[0]), (True, False))   # its own, and none after it
+                # a published family's directory goes before the next family plans; a dry run's stays
+                self.assertEqual(LEGACY in works[1], mode == "dry-run")
+                self.assertEqual(len([c for c in calls if c.startswith("cli warehouse-add")]), len(FAMILIES))
+                if mode == "dry-run":
+                    for name, _ in FAMILIES:
+                        kept = sorted(f.name for f in (self.state / "work" / TAG / name).iterdir())
+                        self.assertEqual(kept, ["files", "plan", "plan.log", "release", "release-files.log"])   # no shards
+                    self.assertIn(" kept in ", p.stdout)
+
+    def test_each_family_needs_the_free_space_when_it_starts(self):
+        # a df that answers DF_FREE_KB's values in turn: the preflight's, then each family's
+        df = self.root / "df-stub"
+        df.mkdir()
+        (df / "df").write_text(STUB_DF)
+        (df / "df").chmod(0o755)
+        path = os.pathsep.join([str(df), str(self.root / "net"), os.environ["PATH"]])
+        p, calls = self.run_driver(mode="base", TO_EMBED=0, PATH=path, VECTORS_MIN_FREE_GB=1,
+                                   DF_COUNT=self.root / "df-count", DF_FREE_KB="2000000 2000000 10")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("::error::only 0 GiB free on", p.stdout)
+        self.assertIn(f"vectors-{TAG} stay published", p.stdout)
+        self.assertTrue([c for c in calls if c.startswith(f"gh release edit vectors-{TAG} ")])
+        self.assertFalse([c for c in calls if f"--model {self.model(WINDOWS)}" in c])
+
     def test_a_later_family_that_fails_leaves_the_first_published(self):
         p, calls = self.run_driver(mode="base", TO_EMBED=0, VALIDATE_FAILS_FOR=WINDOWS)
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
@@ -1247,12 +1302,16 @@ class Driver(unittest.TestCase):
         self.assertEqual(len([c for c in calls if c.startswith("export --index")]), len(FAMILIES))
 
     def test_a_family_that_is_not_pinned_is_refused_before_anything_runs(self):
-        for args in (("--family", "meivin-round2"), ("--family", WINDOWS, "--family", "vectors-windows")):
+        for args, needle in ((("--family", "meivin-round2"), "is not a family of FAMILY_CONFIGS"),
+                             (("--family", WINDOWS, "--family", "vectors-windows"), "is not a family of FAMILY_CONFIGS"),
+                             (("--family", "all", "--family", WINDOWS), "--family all and --family"),
+                             (("--family", WINDOWS, "--family", "all"), "--family all and --family"),
+                             (("--family",), "--family needs a value")):
             with self.subTest(args=args):
                 self.calls.unlink(missing_ok=True)
                 p, calls = self.run_driver(args=args)
-                self.assertEqual(p.returncode, 64)
-                self.assertIn("is not a family of FAMILY_CONFIGS", p.stdout)
+                self.assertEqual(p.returncode, 64, p.stdout + p.stderr)
+                self.assertIn(needle, p.stdout)
                 self.assertEqual(calls, [])
 
     def test_a_family_whose_identity_the_runner_lacks_stops_the_build_before_it_starts(self):
@@ -1295,12 +1354,20 @@ class Driver(unittest.TestCase):
         self.assertFalse((self.state / "ledger.migrating").exists())
         shutil.rmtree(self.state / "ledger")
         self.calls.unlink()
-        self.write_single_ledger("seforim-vectors.manifest.json")
-        p, calls = self.run_driver(mode="base", TO_EMBED=0)
-        self.assertNotEqual(p.returncode, 0)
-        self.assertIn("its family is unknown", p.stdout)
-        self.assertTrue((self.state / "ledger" / "published.json").exists())   # left as it was
-        self.assertFalse([c for c in calls if "release download" in c])
+        for manifest in ("seforim-vectors.manifest.json", "otzaria-vectors-abcdef01-v-base.manifest.json",
+                         "otzaria-vectors-abcdef01-v29x-base.manifest.json", None):
+            with self.subTest(manifest=manifest):
+                shutil.rmtree(self.state / "ledger", ignore_errors=True)
+                self.calls.unlink(missing_ok=True)
+                self.write_single_ledger(manifest or "")
+                if manifest is None:
+                    (self.state / "ledger" / "published.json").write_text("{not json")
+                p, calls = self.run_driver(mode="base", TO_EMBED=0)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("::error::" + str(self.state / "ledger" / "published.json"), p.stdout)
+                self.assertIn("its family is unknown", p.stdout)
+                self.assertTrue((self.state / "ledger" / "published.json").exists())   # left as it was
+                self.assertFalse([c for c in calls if "release download" in c])
 
 STUB_GIT = r"""#!/usr/bin/env bash
 echo "git $*" >> "$CALLS"

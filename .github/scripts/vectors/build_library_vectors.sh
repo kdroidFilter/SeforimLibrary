@@ -34,7 +34,7 @@
 # alone with --family NAME. The first family, which applications install, never waits on a later one.
 #
 # The warehouse (no recipe in its identity) is shared. A new family's first build can embed millions
-# of texts: fill the warehouse first by hand with --family NAME --mode dry-run, which keeps them.
+# of texts; if needed, --family NAME --mode dry-run fills the warehouse beforehand (a dry run keeps them).
 #
 # LIBRARY_VECTORS_PRERELEASE (true unless "false") publishes each release as a prerelease:
 # like the lines-snapshot-sha256-* and pipeline-result-* releases it then stays out of
@@ -54,12 +54,13 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../db_asset_names.sh"   # FULL_DB_ASSET_JQ: the release's full DB, which the index is built from
 
 TAG=""; MODE=dry-run; STATE=/home/runner/otzaria-vectors; WORK=""; REPO=${GITHUB_REPOSITORY:-Otzaria/SeforimLibrary}
-WANTED=()
+WANTED=(); ALL=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --tag) TAG=$2; shift 2 ;;
     --mode) MODE=$2; shift 2 ;;
-    --family) [ "$2" = all ] || WANTED+=("$2"); shift 2 ;;
+    --family) [ $# -ge 2 ] || { echo "::error::--family needs a value: all, or a family's name"; exit 64; }
+      if [ "$2" = all ]; then ALL=1; else WANTED+=("$2"); fi; shift 2 ;;
     --state) STATE=$2; shift 2 ;;
     --work) WORK=$2; shift 2 ;;
     --repo) REPO=$2; shift 2 ;;
@@ -77,6 +78,9 @@ for family in $FAMILY_CONFIGS; do
   if [ "${#WANTED[@]}" -gt 0 ] && [[ " ${WANTED[*]} " != *" $name "* ]]; then continue; fi
   NAMES+=("$name"); PREFIXES+=("${family#*:}")
 done
+if [ -n "$ALL" ] && [ "${#WANTED[@]}" -gt 0 ]; then
+  echo "::error::--family all and --family ${WANTED[*]} together: give all, or the families to build"; exit 64
+fi
 for name in ${WANTED[@]+"${WANTED[@]}"}; do
   [[ " ${NAMES[*]} " == *" $name "* ]] || { echo "::error::--family '$name' is not a family of FAMILY_CONFIGS ($FAMILY_CONFIGS)"; exit 64; }
 done
@@ -98,6 +102,11 @@ T0=$(date +%s)
 group() { local t="[+$(( $(date +%s) - T0 ))s]"; if [ "${GITHUB_ACTIONS:-}" = true ]; then echo "::group::$* $t"; else echo "== $* $t"; fi; }
 endgroup() { if [ "${GITHUB_ACTIONS:-}" = true ]; then echo "::endgroup::"; fi; }
 die() { echo "::error::$*"; exit 1; }
+need_free_space() {
+  local free_kb
+  free_kb=$(df -Pk "$STATE" | awk 'NR==2 {print $4}')
+  [ "$free_kb" -ge $((MIN_FREE_GB * 1024 * 1024)) ] || die "only $((free_kb / 1024 / 1024)) GiB free on $STATE, fewer than $MIN_FREE_GB"
+}
 onnx_runtime() {  # the venv's ONNX Runtime library, which embed-shard and the validator load
   local lib
   for lib in "$STATE"/venv/lib/python3*/site-packages/onnxruntime/capi/libonnxruntime.so.*; do
@@ -151,8 +160,7 @@ done
 [ -n "${MODEL_REVISION:-}" ] || die "pins.env pins no MODEL_REVISION: the model is fetched at a commit, never a branch"
 for tool in jq sha256sum split tar; do command -v "$tool" >/dev/null || die "$tool is required"; done
 MIN_FREE_GB=${VECTORS_MIN_FREE_GB:-$MIN_FREE_GB}
-free_kb=$(df -Pk "$STATE" | awk 'NR==2 {print $4}')
-[ "$free_kb" -ge $((MIN_FREE_GB * 1024 * 1024)) ] || die "only $((free_kb / 1024 / 1024)) GiB free on $STATE, fewer than $MIN_FREE_GB"
+need_free_space
 # The warehouse, or none yet: then the first family plans every text and its add creates it. A
 # directory holding files but no warehouse.json is neither, and --create would empty it.
 if [ ! -f "$WAREHOUSE/warehouse.json" ] && [ -n "$(ls -A "$WAREHOUSE" 2>/dev/null)" ]; then
@@ -162,7 +170,8 @@ fi
 # identity, which its published manifest's name carries.
 [ -e "$LEDGERS" ] || [ ! -d "$LEDGERS.migrating" ] || mv "$LEDGERS.migrating" "$LEDGERS"
 if [ -f "$LEDGERS/published.json" ]; then
-  id8=$(jq -r '.manifest // empty' "$LEDGERS/published.json" | sed -n 's/^otzaria-vectors-\([0-9a-f]\{8\}\)-v[0-9]*-base\.manifest\.json$/\1/p')
+  id8=$(jq -r '.manifest // empty' "$LEDGERS/published.json" | sed -n 's/^otzaria-vectors-\([0-9a-f]\{8\}\)-v[0-9]\{1,\}-base\.manifest\.json$/\1/p') \
+    || die "$LEDGERS/published.json is unreadable: its family is unknown"
   [ -n "$id8" ] || die "$LEDGERS/published.json names no otzaria-vectors-<id8>-v<N>-base manifest: its family is unknown"
   rm -rf "$LEDGERS.migrating"; mkdir "$LEDGERS.migrating"
   mv "$LEDGERS" "$LEDGERS.migrating/$id8"; mv "$LEDGERS.migrating" "$LEDGERS"
@@ -279,7 +288,9 @@ endgroup
 
 build_family() {  # <name> <release prefix>: steps 2 to 7 of one family, in a subshell of its own
   local name=$1 prefix=$2
-  local FAMILY=$STATE/bin/families/$name/model.json FW=$WORK/$name RELEASE_TAG=$prefix-$TAG FRESH=""
+  local FAMILY=$STATE/bin/families/$name/model.json FW=$WORK/$name RELEASE_TAG=$prefix-$TAG FRESH="" first
+  first=${FAMILY_CONFIGS%% *}; first=${first%%:*}; first=${first##*/}
+  need_free_space   # the families before this one hold space too
   mkdir -p "$FW/shards" "$FW/files"
 
   # ─── 2 plan ──────────────────────────────────────────────────────────────
@@ -338,6 +349,7 @@ build_family() {  # <name> <release prefix>: steps 2 to 7 of one family, in a su
     CREATE=()
     [ -z "$FRESH" ] || CREATE=(--create --model "$FAMILY" --passage-quantization "$PASSAGE_QUANTIZATION")
     "$CLI" warehouse-add --warehouse "$WAREHOUSE" ${CREATE[@]+"${CREATE[@]}"} --plan "$PLAN" --shards "$FW/shards"
+    rm -rf "$FW/shards"   # the warehouse holds their vectors now
     endgroup
   fi
 
@@ -399,7 +411,9 @@ build_family() {  # <name> <release prefix>: steps 2 to 7 of one family, in a su
   endgroup
 
   if [ "$MODE" = dry-run ]; then
-    echo "dry run: built and verified $STEM ($name); nothing published, the ledger is not persisted"
+    # Kept for inspection: the plan, the release, the files and the logs; the rest (the validator's set) goes.
+    find "$FW" -mindepth 1 -maxdepth 1 ! -name plan ! -name release ! -name files ! -name '*.log' -exec rm -rf {} +
+    echo "dry run: built and verified $STEM ($name); nothing published, the ledger is not persisted; $(du -sh "$FW" | cut -f1) kept in $FW"
     return 0
   fi
 
@@ -409,8 +423,10 @@ build_family() {  # <name> <release prefix>: steps 2 to 7 of one family, in a su
   {
     echo "Semantic vectors for library release $TAG (base)."
     echo
-    echo "Family: \`$name\`, chunking identity \`$(jq -r .chunking_identity "$FAMILY")\`."
-    echo
+    if [ "$name" != "$first" ]; then
+      echo "Family: \`$name\`, chunking identity \`$(jq -r .chunking_identity "$FAMILY")\`."
+      echo
+    fi
     echo "Manifest: \`$STEM.manifest.json\`, SHA-256 \`$MANIFEST_SHA\` — check it before trusting the files it lists."
     echo
     echo "Gates: \`gates.json\` (assemble --verify) and \`validation.json\` (validate_semantic_vectors on the release index: G3, G4, G6)."
