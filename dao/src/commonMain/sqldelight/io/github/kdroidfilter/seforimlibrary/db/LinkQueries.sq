@@ -144,6 +144,12 @@ DELETE FROM link WHERE sourceBookId = ? OR targetBookId = ?;
 lastInsertRowId:
 SELECT last_insert_rowid();
 
+changes:
+SELECT changes();
+
+selectLineKeyById:
+SELECT sourceLineId, targetLineId, connectionTypeId FROM link WHERE id = ?;
+
 -- Count links by source book
 countLinksBySourceBook:
 SELECT COUNT(*) FROM link WHERE sourceBookId = ?;

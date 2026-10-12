@@ -2071,6 +2071,22 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
             val connectionTypeId = getOrCreateConnectionType(link.connectionType.name)
             logger.d{"Using connection type ID: $connectionTypeId for type: ${link.connectionType.name}"}
 
+            // A caller-chosen id (build allocator) keeps later allocations from colliding with this row.
+            if (link.id > 0) {
+                database.linkQueriesQueries.insertWithId(
+                    id = link.id,
+                    sourceBookId = link.sourceBookId,
+                    targetBookId = link.targetBookId,
+                    sourceLineId = link.sourceLineId,
+                    targetLineId = link.targetLineId,
+                    targetLineIndex = link.targetLineIndex.toLong(),
+                    targetBookOrderIndex = resolveBookOrderIndex(link.targetBookId),
+                    connectionTypeId = connectionTypeId,
+                    isDeclaredBase = if (link.isDeclaredBase) 1L else 0L,
+                )
+                checkLinkIdInserted(link.id, link.sourceLineId, link.targetLineId, connectionTypeId)
+                return@withContext link.id
+            }
             database.linkQueriesQueries.insert(
                 sourceBookId = link.sourceBookId,
                 targetBookId = link.targetBookId,
@@ -2149,6 +2165,7 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
                         connectionTypeId = connectionTypeId,
                         isDeclaredBase = declaredFlag,
                     )
+                    checkLinkIdInserted(link.id, link.sourceLineId, link.targetLineId, connectionTypeId)
                 } else {
                     database.linkQueriesQueries.insert(
                         sourceBookId = link.sourceBookId,
@@ -2854,6 +2871,24 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
             connectionTypeId = connectionTypeId,
             isDeclaredBase = if (isDeclaredBase) 1L else 0L,
         )
+        checkLinkIdInserted(id, sourceLineId, targetLineId, connectionTypeId)
+    }
+
+    /**
+     * `insertWithId` is INSERT OR IGNORE so re-inserting the same link is a no-op. An id already held by a
+     * different link means two id sources disagree: fail instead of silently dropping the new link.
+     */
+    private fun checkLinkIdInserted(id: Long, sourceLineId: Long, targetLineId: Long, connectionTypeId: Long) {
+        if (database.linkQueriesQueries.changes().executeAsOne() > 0L) return
+        val existing = database.linkQueriesQueries.selectLineKeyById(id).executeAsOneOrNull() ?: return
+        check(
+            existing.sourceLineId == sourceLineId &&
+                existing.targetLineId == targetLineId &&
+                existing.connectionTypeId == connectionTypeId,
+        ) {
+            "Link id $id is already used by link ${existing.sourceLineId}->${existing.targetLineId} " +
+                "(type ${existing.connectionTypeId}); cannot insert $sourceLineId->$targetLineId (type $connectionTypeId)"
+        }
     }
 
     // ─── schema_meta accessors ────────────────────────────────────────────────

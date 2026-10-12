@@ -12,6 +12,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -524,6 +525,22 @@ class SeforimRepositoryIntegrationTest {
             listOf("Segment 0", "Segment 1", "Segment 2", "Segment 3", "Segment 4"),
             commentaries.map { it.targetText }
         )
+    }
+
+    @Test
+    fun `insertLink fails when its id is held by another link`() = runBlocking {
+        val sourceId = repository.insertSource("Test")
+        val catId = repository.insertCategory(Category(parentId = null, title = "C", level = 0, order = 1))
+        val bookId = repository.insertBook(Book(categoryId = catId, sourceId = sourceId, title = "B", order = 1f))
+        val l = (0 until 3).map { repository.insertLine(Line(bookId = bookId, lineIndex = it, content = "L$it")) }
+        fun link(src: Long, tgt: Long) = Link(
+            id = 42, sourceBookId = bookId, targetBookId = bookId, sourceLineId = src, targetLineId = tgt,
+            targetLineIndex = 0, connectionType = ConnectionType.COMMENTARY,
+        )
+        repository.insertLinksBatch(listOf(link(l[0], l[1])))
+        repository.insertLinksBatch(listOf(link(l[0], l[1]))) // same link again: no-op
+        assertFailsWith<IllegalStateException> { repository.insertLinksBatch(listOf(link(l[0], l[2]))) }
+        Unit
     }
 
     // ==================== Virtual SOURCE view tests ====================
