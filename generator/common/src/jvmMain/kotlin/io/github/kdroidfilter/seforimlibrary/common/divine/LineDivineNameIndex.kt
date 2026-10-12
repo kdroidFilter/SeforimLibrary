@@ -232,6 +232,7 @@ internal fun scanCorpus(
                     nonHvyh = tanachTitle == null || (verse != null && overrides != null),
                     elScope = (verse != null && overrides != null) ||
                         (DivineNameDetector.EL_NIKUD_IN_PRAYER_BOOK && bookId in prayerBooks),
+                    prayerBook = bookId in prayerBooks,
                 )
                 lines++
                 total += result.spans.size

@@ -31,7 +31,13 @@ internal class DivineNameDetector(private val overrides: DivineNameOverrides?) {
      * NIKUD rules for אֵל and אֱלוֹהַּ, which rabbinic prose also uses for "a god"
      * (Mishnah Sanhedrin 7:6): only Tanach verses and the prayer book.
      */
-    fun detect(content: String, verse: VerseRef? = null, nonHvyh: Boolean = true, elScope: Boolean = verse != null): Result {
+    fun detect(
+        content: String,
+        verse: VerseRef? = null,
+        nonHvyh: Boolean = true,
+        elScope: Boolean = verse != null,
+        prayerBook: Boolean = false,
+    ): Result {
         val dropped = LinkedHashMap<String, Int>()
         fun drop(kind: DivineKind, source: DivineSource, why: String) {
             dropped.merge("${kind.name}/${source.name}:$why", 1, Int::plus)
@@ -47,6 +53,7 @@ internal class DivineNameDetector(private val overrides: DivineNameOverrides?) {
             val words = line.words
             for (i in words.indices) nikudRules(words, i, elScope, candidates, ::drop)
             collocations(words, candidates, ::drop)
+            if (prayerBook) prayerPhrases(words, candidates, ::drop)
             if (verse != null && overrides != null) {
                 for (kind in overrides.sacredKinds(verse)) {
                     for (word in words) {
@@ -98,6 +105,7 @@ internal class DivineNameDetector(private val overrides: DivineNameOverrides?) {
                 isAdnut(body) -> DivineKind.ADNUT
                 isShaddai(body) -> DivineKind.SHADDAI
                 isVocalizedEl(body) && !shinPrefix -> DivineKind.EL
+                isYah(body) && isYahPrefix(word.letters.take(k)) -> DivineKind.YAH
                 isEloah(body) -> DivineKind.ELOAH
                 else -> null
             } ?: continue
@@ -183,8 +191,38 @@ internal class DivineNameDetector(private val overrides: DivineNameOverrides?) {
                 if (elohim != null) {
                     add(elohim, DivineKind.ELOHIM, i + 1)
                     if (joined(i + 2)) tzevaotBody(words[i + 2])?.let { add(it, DivineKind.TZEVAOT, i + 2) }
-                } else if (words[i + 1].skeleton == "צבאות") {
-                    add(words[i + 1].letters, DivineKind.TZEVAOT, i + 1)
+                } else {
+                    // יְהוִה הַצְּבָאוֹת (Amos 9:5): the article stays outside the span.
+                    tzevaotBody(words[i + 1])?.let { add(it, DivineKind.TZEVAOT, i + 1) }
+                }
+            }
+
+            // Unvocalized יה only in closed phrases (pending rabbinic approval). Never a bare יה,
+            // never ביה/ליה + ה' (Aramaic "in/to him": דכתב ביה ה', מהדרו ליה ה').
+            yahBody(w)?.let { yah ->
+                if (w.hasVowels) return@let
+                val context = WordContext(words)
+                val prev = context.skeleton(i, -1)
+                val next = if (joined(i + 1)) words[i + 1].skeleton else null
+                val proven = when (w.skeleton) {
+                    // יה ה' צבאות, עזי וזמרת יה ה' (Isa 12:2); שם יה / בשם יה.
+                    "יה" -> (joined(i + 1) && isAnchor(words, i + 1)) ||
+                        (w.softBefore && prev in YAH_SHEM_WORDS) ||
+                        // לשכן יה אלהים (Ps 68:19).
+                        (next == "אלהים" && w.softBefore && prev in YAH_SHOCHEN_WORDS)
+                    // כי ביה ה' צור עולמים (Isa 26:4).
+                    "ביה" -> w.softBefore && prev == "כי" &&
+                        (next in YAH_AFTER_KI_BEYAH || (joined(i + 1) && isAnchor(words, i + 1)))
+                    else -> false
+                }
+                // סימן יה ה', יד יה ה': the numeral fifteen.
+                val numeral = prev != null && (
+                    isNumeralLike(prev) || prev.length <= 2 || inWithPrefix(prev, REFERENCE_WORDS, "ובלמ", 2)
+                    ) && prev != "כי" && prev !in YAH_SHEM_WORDS
+                when {
+                    !proven -> Unit
+                    numeral -> drop(DivineKind.YAH, DivineSource.COLLOCATION, "numeral-context")
+                    else -> add(yah, DivineKind.YAH, i)
                 }
             }
 
@@ -280,11 +318,79 @@ internal class DivineNameDetector(private val overrides: DivineNameOverrides?) {
             if (rest.startsWith('ה') && i > 0) {
                 // ה' after a reference word or another numeral is the number five.
                 val prev = WordContext(words).skeleton(i, -1) ?: return true
-                if (prev.any(::isWordQuote) || inWithPrefix(prev, REFERENCE_WORDS, "ובלמ", 2)) return false
+                if (isNumeralLike(prev) || inWithPrefix(prev, REFERENCE_WORDS, "ובלמ", 2)) return false
             }
             return true
         }
         return false
+    }
+
+    /** יָהּ: qamats alone under the yod, mapiq in the heh (בֵּיהּ, לֵיהּ have neither). */
+    private fun isYah(body: List<WordLetter>): Boolean =
+        skeletonOf(body) == "יה" && body[0].vowels == QAMATS.toString() && DAGESH in body[1].marks
+
+    /**
+     * A numeral or abbreviation (ד', סי', ס"ק): a quote at the end or a gershayim before the last
+     * letter. A quote followed by a word (ל'את, מ'ויצו, a quotation mark a tag split off) is not one.
+     */
+    private fun isNumeralLike(skeleton: String): Boolean {
+        if (skeleton.isEmpty()) return false
+        if (isWordQuote(skeleton.last())) return true
+        val gershayim = skeleton.indexOfFirst { it == '"' || it == '״' }
+        return gershayim >= 0 && gershayim >= skeleton.length - 2
+    }
+
+    /**
+     * Prefixes יָהּ really takes: one of ב ל כ מ ו, or ו + one of ב ל כ מ (וּלְיָהּ). Longer or other
+     * runs are a word ending in ־יָהּ: בְּשָׁוְיָהּ, שִׁבְיָהּ, בִּכְיָהּ, כֶּלְיָהּ. A tsere prefix is
+     * never יָהּ (בֵיָהּ = בָּהּ, "in it").
+     */
+    private fun isYahPrefix(prefix: List<WordLetter>): Boolean = prefix.none { TSERE in it.vowels } && when (prefix.size) {
+        0 -> true
+        1 -> prefix[0].ch in YAH_PREFIXES || prefix[0].ch == 'ו'
+        2 -> prefix[0].ch == 'ו' && prefix[1].ch in YAH_PREFIXES
+        else -> false
+    }
+
+    /** The יה of a word that is only [isYahPrefix] letters and יה; never part of a longer word. */
+    private fun yahBody(word: Word): List<WordLetter>? {
+        if (word.glued || word.hasPresentation) return null
+        if (word.skeleton.length !in 2..4 || !word.skeleton.endsWith("יה")) return null
+        val split = word.letters.size - 2
+        if (!isYahPrefix(word.letters.take(split))) return null
+        return word.letters.subList(split, word.letters.size)
+    }
+
+    /** Whitelisted prayer-book phrases ([PRAYER_EL_PHRASES], [PRAYER_ELOAH_PHRASES]). */
+    private fun prayerPhrases(
+        words: List<Word>,
+        out: MutableList<Candidate>,
+        drop: (DivineKind, DivineSource, String) -> Unit,
+    ) {
+        fun usable(j: Int) = j in words.indices && !words[j].glued && !words[j].hasPresentation
+        for (i in words.indices) {
+            for ((kind, phrases) in listOf(DivineKind.EL to PRAYER_EL_PHRASES, DivineKind.ELOAH to PRAYER_ELOAH_PHRASES)) {
+                for (phrase in phrases) {
+                    val matches = phrase.words.indices.all { k ->
+                        val j = i + k
+                        usable(j) && words[j].skeleton == phrase.words[k] && (k == 0 || words[j].softBefore)
+                    }
+                    if (!matches) continue
+                    val nameWord = words[i + phrase.nameIndex]
+                    val body = nameWord.letters.subList(nameWord.letters.size - phrase.nameBody.length, nameWord.letters.size)
+                    if (phrase.vocalizedOnly && !nameWord.hasVowels) continue
+                    val shapeOk = !nameWord.hasVowels || when (kind) {
+                        DivineKind.EL -> isVocalizedEl(body)
+                        // A listed phrase decides; MAM spells Deut 32:15 אֱלוֹהַ without the mapiq.
+                        else -> skeletonOf(body) == "אלוה" || isEloah(body)
+                    }
+                    if (!shapeOk) { drop(kind, DivineSource.COLLOCATION, "prayer-phrase-vocalization"); continue }
+                    val guard = profaneContext(words, i + phrase.nameIndex, kind)
+                    if (guard != null) drop(kind, DivineSource.COLLOCATION, guard)
+                    else out += Candidate(body.first().start, body.last().end, kind, DivineSource.COLLOCATION)
+                }
+            }
+        }
     }
 
     private fun exceptionBody(word: Word, kind: DivineKind): List<WordLetter>? {
@@ -296,12 +402,17 @@ internal class DivineNameDetector(private val overrides: DivineNameOverrides?) {
             DivineKind.ELOHIM -> ELOHIM_FORMS
             DivineKind.SHADDAI -> setOf("שדי")
             DivineKind.TZEVAOT -> setOf("צבאות")
-            DivineKind.HVYH, DivineKind.YAH -> return null
+            DivineKind.YAH -> setOf("יה")
+            DivineKind.HVYH -> return null
         }
         val prefixes = if (kind == DivineKind.EHYEH) emptySet() else PREFIXES_NO_HEH
         for (k in prefixLengths(word, prefixes)) {
             val body = word.letters.subList(k, word.letters.size)
-            if (skeletonOf(body) in bodies) return body
+            if (skeletonOf(body) !in bodies) continue
+            // A sacred verse must not mark אֵלֶּה ("these") or בֵּיהּ: these kinds need the mapiq.
+            val needsMapiq = kind == DivineKind.YAH || (kind == DivineKind.ELOAH && skeletonOf(body) == "אלה")
+            if (needsMapiq && DAGESH !in body.last().marks) return null
+            return body
         }
         return null
     }
@@ -327,6 +438,12 @@ internal class DivineNameDetector(private val overrides: DivineNameOverrides?) {
         when (kind) {
             // צוּרִישַׁדָּי (Num 1:6): a personal name, also split as צורי שדי.
             DivineKind.SHADDAI -> if (prev != null && prev in setOf("צורי", "וצורי", "בצורי")) return "personal-name"
+            // הַלְלוּ־יָהּ is one word (Pesachim 117a); שַׁלְהֶבֶתְיָה (Song 8:6) likewise.
+            DivineKind.YAH -> {
+                if (prev != null && prev in setOf("הללו", "והללו", "שלהבת")) return "compound-word"
+                if (prev in YAH_SUPPRESS_PREV || next in YAH_SUPPRESS_NEXT) return "suppressed-phrase"
+                if (next to context.skeleton(i, 2) in YAH_SUPPRESS_NEXT_PAIRS) return "suppressed-phrase"
+            }
             DivineKind.EL -> {
                 if (next == "אלים") return "el-elim"
                 if (prev != null && inWithPrefix(prev, setOf("בית"), "ובלמ", 2)) return "beit-el-place"
@@ -357,12 +474,17 @@ internal class DivineNameDetector(private val overrides: DivineNameOverrides?) {
         /** הָאֵל may be "these" (Gen 19:8), so a heh prefix never proves a name. */
         private val PREFIXES_NO_HEH: Set<Char> = "ובכלמש".toSet()
 
+        private val YAH_PREFIXES: Set<Char> = "בלכמ".toSet()
+        private val YAH_SHEM_WORDS = setOf("שם", "בשם", "ושם")
+        private val YAH_SHOCHEN_WORDS = setOf("לשכן", "לשכון", "ולשכון", "ולשכן", "בשכון")
+        private val YAH_AFTER_KI_BEYAH = setOf("צור", "ד'", "ד׳", "הויה", "הוי'", "הוי׳", "הוי\"ה", "הוי״ה")
+
         /** Sheva, hataf segol/patach/qamats, hiriq, tsere, segol, patach, qamats. */
         private val PREFIX_VOWELS: Set<Char> = "\u05B0\u05B1\u05B2\u05B3\u05B4\u05B5\u05B6\u05B7\u05B8".toSet()
 
         private val ANCHORS = setOf("יהוה", "ה'", "ה׳", "ה’", "יי")
 
-        private val GUARDED = setOf(DivineKind.ELOHIM, DivineKind.EL, DivineKind.ELOAH, DivineKind.ADNUT)
+        private val GUARDED = setOf(DivineKind.ELOHIM, DivineKind.EL, DivineKind.ELOAH, DivineKind.ADNUT, DivineKind.YAH)
 
         val ELOHIM_FORMS: Set<String> = listOf("אלהי", "אלוהי").flatMap { base ->
             listOf("ם", "נו", "כם", "ך", "ו", "הם", "", "כן").map { base + it }
@@ -459,7 +581,7 @@ internal class DivineNameDetector(private val overrides: DivineNameOverrides?) {
                 DivineKind.EHYEH -> s == "אהיה"
                 DivineKind.SHADDAI -> s == "שדי"
                 DivineKind.TZEVAOT -> s == "צבאות"
-                DivineKind.YAH -> false
+                DivineKind.YAH -> s == "יה"
             }
             if (!skeletonOk) return false
 

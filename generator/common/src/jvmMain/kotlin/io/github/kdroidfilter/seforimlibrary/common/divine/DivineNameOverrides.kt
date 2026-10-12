@@ -4,7 +4,7 @@ enum class OverrideDecision { SACRED, PROFANE }
 
 /**
  * One reviewed verse-level decision. [kind] null means every kind except HVYH
- * (written `*`). A SACRED entry names one verse and one kind; it forces every word
+ * (written `*`), YAH included. A SACRED entry names one verse and one kind; it forces every word
  * of that verse whose body spells the kind (source EXCEPTION_LIST).
  */
 data class DivineOverride(
@@ -93,7 +93,7 @@ class DivineNameOverrides(val entries: List<DivineOverride>) {
                 val kindText = fields[1].trim()
                 val kind = if (kindText == "*") null else runCatching { DivineKind.parse(kindText) }.getOrNull()
                 if (kind == null && kindText != "*") { problems += "$where: unknown kind '$kindText'"; return@forEachIndexed }
-                if (kind == DivineKind.HVYH || kind == DivineKind.YAH) {
+                if (kind == DivineKind.HVYH) {
                     problems += "$where: $kind is never overridden by the list"; return@forEachIndexed
                 }
                 val decision = runCatching { OverrideDecision.valueOf(fields[2].trim().uppercase()) }.getOrNull()

@@ -14,7 +14,7 @@ enum class DivineKind(val code: Int) {
     SHADDAI(7),
     TZEVAOT(8),
 
-    /** Reserved, never emitted in wave 1 (halachic dispute over יה). */
+    /** יָהּ as a word of its own (with prefixes); never inside a word such as הללויה. */
     YAH(9),
     ;
 

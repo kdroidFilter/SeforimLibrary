@@ -13,6 +13,8 @@ class DivineNameDetectorTest {
             listOf("שמות 3:14", "EHYEH", "sacred", "", "x"),
             listOf("בראשית 19:18", "ADNUT", "sacred", "", "x"),
             listOf("בראשית 19:1-38", "*", "profane", "", "x"),
+            listOf("איוב 3:4", "ELOAH", "sacred", "", "x"),
+            listOf("ישעיהו 44:8", "ELOAH", "profane", "", "x"),
             listOf("שופטים 17:1-18:31", "*", "profane", "", "x"),
         ),
     ).overrides!!
@@ -32,8 +34,14 @@ class DivineNameDetectorTest {
 
     private data class Hit(val text: String, val kind: DivineKind, val source: DivineSource)
 
-    private fun hits(content: String, verse: VerseRef? = null, nonHvyh: Boolean = true, elScope: Boolean = true): List<Hit> =
-        detector.detect(content, verse, nonHvyh, elScope).spans.map { Hit(content.substring(it.rawStart, it.rawEnd), it.kind, it.source) }
+    private fun hits(
+        content: String,
+        verse: VerseRef? = null,
+        nonHvyh: Boolean = true,
+        elScope: Boolean = true,
+        prayerBook: Boolean = false,
+    ): List<Hit> =
+        detector.detect(content, verse, nonHvyh, elScope, prayerBook).spans.map { Hit(content.substring(it.rawStart, it.rawEnd), it.kind, it.source) }
 
     private fun kinds(content: String, verse: VerseRef? = null) = hits(content, verse).map { it.kind to it.source }
 
@@ -109,7 +117,7 @@ class DivineNameDetectorTest {
         // Disabled pending rabbinic approval (ELOAH_NIKUD_ENABLED): even a well-formed אֱלוֹהַּ is not written.
         assertEquals(false, DivineNameDetector.ELOAH_NIKUD_ENABLED)
         assertEquals(emptyList(), kinds("מִי $eloah"))
-        assertEquals(emptyList(), kinds("מִי $eloah", VerseRef("איוב", 3, 4)))
+        assertEquals(emptyList(), kinds("מִי $eloah", VerseRef("איוב", 3, 5)))
         assertEquals(emptyList(), kinds("כָּל־$eloah"))
         assertEquals(emptyList(), kinds("$eloah נֵכָר"))
         assertEquals(emptyList(), kinds(elle))
@@ -155,6 +163,98 @@ class DivineNameDetectorTest {
         val words = ScannedLine(text).words
         assertEquals("אחר", WordContext(words).skeleton(0, 1))
         assertEquals("כי", WordContext(words).skeleton(0, 2))
+    }
+
+    // ── YAH ──
+
+    private val yah = "יָהּ" // יָהּ
+
+    @Test
+    fun `yah by nikud needs qamats and mapiq and a real prefix`() {
+        assertEquals(listOf(Hit(yah, DivineKind.YAH, DivineSource.NIKUD_RULE)), hits("כִּי בְּ$yah"))
+        assertEquals(listOf(Hit(yah, DivineKind.YAH, DivineSource.NIKUD_RULE)), hits("עָזִּי וְזִמְרָת $yah"))
+        assertEquals(listOf(DivineKind.YAH), hits("וּלְ$yah").map { it.kind })
+        // בֵּיהּ / לֵיהּ: Aramaic "in/to him".
+        assertEquals(emptyList(), hits("בֵּיהּ"))
+        assertEquals(emptyList(), hits("לֵיהּ"))
+        // Words ending in ־יָהּ: בְּשָׁוְיָהּ, שִׁבְיָהּ, בִּכְיָהּ.
+        assertEquals(emptyList(), hits("בְּשָׁוְ$yah"))
+        assertEquals(emptyList(), hits("שִׁבְ$yah"))
+        assertEquals(emptyList(), hits("בִּכְ$yah"))
+        // וּכַיוֹצֵא בֵיָהּ (ספר דרך תבונות): "in it" — a tsere prefix is never יָהּ.
+        assertEquals(emptyList(), hits("וּכַיוֹצֵא בֵ$yah"))
+    }
+
+    @Test
+    fun `halleluyah is never yah`() {
+        assertEquals(emptyList(), hits("הַלְלֻוּ־$yah"))
+        assertEquals(emptyList(), hits("הַלְלֻוּ$yah"))
+        assertEquals(emptyList(), hits("הללויה"))
+    }
+
+    @Test
+    fun `unvocalized yah only in closed phrases`() {
+        assertEquals(listOf(DivineKind.YAH), hits("כי ביה ה' צור עולמים").map { it.kind })
+        assertEquals(listOf(DivineKind.YAH), hits("כי ביה צור עולמים").map { it.kind })
+        assertEquals(listOf(DivineKind.YAH), hits("אכתריאל יה ה' צבאות").filter { it.kind == DivineKind.YAH }.map { it.kind })
+        assertEquals(listOf(DivineKind.YAH), hits("ואף סוררים לשכון יה אלהים").filter { it.kind == DivineKind.YAH }.map { it.kind })
+        assertEquals(listOf(DivineKind.YAH), hits("בשם יה").map { it.kind })
+        assertEquals(emptyList(), hits("דכתב ביה ה' איש מלחמה").filter { it.kind == DivineKind.YAH })
+        assertEquals(emptyList(), hits("מהדרו ליה ה'").filter { it.kind == DivineKind.YAH })
+        assertEquals(emptyList(), hits("כי ביה באדם קיימא מילתא"))
+        assertEquals(emptyList(), hits("יה"))
+        assertEquals(emptyList(), hits("ביה"))
+        assertEquals(emptyList(), hits("סימן יה ה' אלהים").filter { it.kind == DivineKind.YAH })
+        assertEquals(emptyList(), hits("י\"ה ה'").filter { it.kind == DivineKind.YAH })
+        assertEquals(emptyList(), hits("יה. ה'").filter { it.kind == DivineKind.YAH })
+    }
+
+    @Test
+    fun `yah suppressed in the listed aramaic and wordplay phrases`() {
+        assertEquals(emptyList(), hits("לְאִתְדְּנָא בְּ$yah"))
+        assertEquals(emptyList(), hits("בְּ$yah חַיָּיבֵי"))
+        assertEquals(emptyList(), hits("$yah $yah דַּי דַּי"))
+        assertEquals(listOf(DivineKind.YAH), hits("בְּ$yah שְׁמוֹ").map { it.kind })
+    }
+
+    @Test
+    fun `a quotation mark split off by a tag is not a numeral`() {
+        // ל'<span>את ה' אלהיך תירא</span>: the joined neighbour ל'את is no numeral.
+        assertEquals(listOf(DivineKind.ELOHIM), hits("ל'<span>את ה' אלהיך תירא</span>").map { it.kind })
+        assertEquals(emptyList(), hits("ד' ה' אלהיך"))
+        assertEquals(emptyList(), hits("ס\"ק ה' אלהיך"))
+    }
+
+    // ── TZEVAOT / ELOAH / prayer-book phrases ──
+
+    @Test
+    fun `tzevaot with the article after the name`() {
+        val text = "וַאדֹנָי יֱהֹוִה הַצְּבָאוֹת"
+        assertEquals(listOf(Hit("צְּבָאוֹת", DivineKind.TZEVAOT, DivineSource.COLLOCATION)), hits(text).filter { it.kind == DivineKind.TZEVAOT })
+    }
+
+    @Test
+    fun `eloah only where the verse list or a prayer phrase says so`() {
+        val job = "אַל־יִדְרְשֵׁהוּ $eloah מִמָּעַל"
+        assertEquals(listOf(Hit(eloah, DivineKind.ELOAH, DivineSource.EXCEPTION_LIST)), hits(job, VerseRef("איוב", 3, 4)))
+        assertEquals(emptyList(), hits("הֲיֵשׁ $eloah מִבַּלְעָדַי", VerseRef("ישעיהו", 44, 8)))
+        assertEquals(emptyList(), hits("וְאֵין $eloah מִבַּלְעָדֶיךָ", prayerBook = true))
+        assertEquals(listOf(Hit(eloah, DivineKind.ELOAH, DivineSource.COLLOCATION)), hits("וְעַל כֻּלָּם $eloah סְלִיחוֹת", prayerBook = true))
+        assertEquals(emptyList(), hits("וְעַל כֻּלָּם $eloah סְלִיחוֹת", prayerBook = false))
+    }
+
+    @Test
+    fun `el in the prayer book only in listed phrases`() {
+        val listed = "$el מֶלֶךְ נֶאֱמָן"
+        assertEquals(listOf(Hit(el, DivineKind.EL, DivineSource.COLLOCATION)), hits(listed, elScope = false, prayerBook = true))
+        assertEquals(emptyList(), hits(listed, elScope = false, prayerBook = false))
+        assertEquals(emptyList(), hits("אֲשֶׁר מִי $el בַּשָּׁמַיִם", elScope = false, prayerBook = true))
+        assertEquals(emptyList(), hits("וּכְהַרְרֵי $el צִדְקָתֶךָ", elScope = false, prayerBook = true))
+        assertEquals(emptyList(), hits("וְ$el הַבָּקָר רָץ", elScope = false, prayerBook = true))
+        assertEquals(emptyList(), hits("$elSegol מֶלֶךְ נֶאֱמָן", elScope = false, prayerBook = true))
+        assertEquals(listOf(DivineKind.EL), hits("$el בְּנֵה", elScope = false, prayerBook = true).map { it.kind })
+        assertEquals(emptyList(), hits("אל בנה", elScope = false, prayerBook = true))
+        assertTrue(PRAYER_EL_PHRASES.none { it.words.joinToString(" ") in setOf("מי אל בשמים", "כהררי אל", "אל לא יושיע") })
     }
 
     @Test
