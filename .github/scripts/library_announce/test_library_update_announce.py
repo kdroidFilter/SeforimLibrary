@@ -287,6 +287,15 @@ class ForumPostTest(unittest.TestCase):
         self.assertIn("## השתנו הספרים הבאים:\n* ג/ד\n* ג/ה - שינוי מהדורה ל-מהד\n", post)
         self.assertNotIn("נמחקו", post)
 
+    def test_release_notes_hold_the_whole_list_in_one_file(self):
+        changes = self.changes(3000)
+        posts = lua.build_forum_posts(changes, 30, "א' תשרי")
+        self.assertGreater(len(posts), 1)
+        notes = lua.build_release_notes(changes, 30, "א' תשרי")
+        self.assertEqual([lua.build_forum_posts(changes, 30, "א' תשרי", limit=10**9)[0]], [notes])
+        self.assertEqual(3000, notes.count("\n* "))
+        self.assertNotIn("(המשך)", notes)
+
     def test_long_list_is_split_on_line_boundaries_without_losing_a_line(self):
         changes = self.changes(1000)
         changes["removed"] = [{"name": "x/נמחק", "title": "נמחק"}]
@@ -477,6 +486,7 @@ class RenderAndSendTest(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertIn("nothing to announce", out)
         self.assertFalse((self.dir / "out" / "forum_posts.json").exists())
+        self.assertFalse((self.dir / "out" / lua.RELEASE_NOTES_ASSET).exists())
         self.assertIn("has_changes=false\n", (self.dir / "gh_out").read_text(encoding="utf-8"))
 
     def test_render_writes_every_channel_payload(self):
@@ -488,7 +498,8 @@ class RenderAndSendTest(unittest.TestCase):
         spoken = json.loads((self.dir / "out" / "yemot.json").read_text(encoding="utf-8"))
         self.assertEqual({"התווספו הספרים הבאים:": "שמות"}, spoken["content"])
         self.assertRegex(spoken["heading"], r"^גרסת ספרייה 30\nעדכון .*תשפ.*\n$")
-        self.assertIn('channels=["forum", "yemot"]\n', (self.dir / "gh_out").read_text(encoding="utf-8"))
+        self.assertEqual(posts, [(self.dir / "out" / lua.RELEASE_NOTES_ASSET).read_text(encoding="utf-8")])
+        self.assertIn('channels=["forum", "yemot", "release"]\n', (self.dir / "gh_out").read_text(encoding="utf-8"))
 
     def test_unknown_channel_is_refused(self):
         with self.assertRaises(SystemExit):
@@ -683,7 +694,8 @@ class GateTest(unittest.TestCase):
         self.handoff()
         result, out, _ = self.gate("workflow_run")
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual({"proceed": "true", "tag": TAG, "send": "true", "channels": '["forum","yemot"]'}, out)
+        self.assertEqual({"proceed": "true", "tag": TAG, "send": "true",
+                          "channels": '["forum","yemot","release"]'}, out)
 
     def test_a_published_prerelease_is_a_clean_skip(self):
         self.handoff()
@@ -838,11 +850,11 @@ class WorkflowContractTest(unittest.TestCase):
         inputs = self.on["workflow_dispatch"]["inputs"]
         self.assertTrue(inputs["tag"]["required"])
         self.assertIs(True, inputs["dry_run"]["default"])
-        self.assertEqual("forum,yemot", inputs["channels"]["default"])
+        self.assertEqual("forum,yemot,release", inputs["channels"]["default"])
 
     def test_the_gate_decides_before_anything_is_downloaded(self):
         jobs = self.doc["jobs"]
-        self.assertEqual(["gate", "prepare", "forum", "yemot"], list(jobs))
+        self.assertEqual(["gate", "prepare", "forum", "yemot", "release"], list(jobs))
         self.assertEqual("gate", jobs["prepare"]["needs"])
         self.assertEqual("needs.gate.outputs.proceed == 'true'", jobs["prepare"]["if"])
         gate = next(s for s in jobs["gate"]["steps"] if s.get("id") == "gate")
@@ -875,6 +887,27 @@ class WorkflowContractTest(unittest.TestCase):
         dedup = (Path(__file__).resolve().parent / "already_sent.sh").read_text(encoding="utf-8")
         self.assertIn("filter=all", dedup)
         self.assertIn('JOB_NAME="$CHANNEL $TAG"', dedup)
+
+    def test_release_job_attaches_the_notes_once_under_the_name_reuse_ignores(self):
+        job = self.doc["jobs"]["release"]
+        self.assertEqual("release ${{ needs.gate.outputs.tag }}", job["name"])
+        self.assertEqual(["gate", "prepare"], job["needs"])
+        self.assertEqual({"contents": "write", "actions": "read"}, job["permissions"])
+        self.assertIn("contains(fromJSON(needs.gate.outputs.channels), 'release')", job["if"])
+        self.assertIn("needs.gate.outputs.send == 'true'", job["if"])
+        self.assertIn("needs.prepare.outputs.has_changes == 'true'", job["if"])
+        self.assertEqual("library-update-announce-release-${{ needs.gate.outputs.tag }}", job["concurrency"]["group"])
+        steps = {step.get("name") or step.get("uses"): step for step in job["steps"]}
+        self.assertIn('decision="$(bash .github/scripts/library_announce/channel_decision.sh)"',
+                      steps["Skip if this tag was already announced here"]["run"])
+        announce = steps["Announce"]
+        self.assertIn("steps.dedup.outputs.sent != 'true'", announce["if"])
+        self.assertIn(f"out/{lua.RELEASE_NOTES_ASSET}\"", announce["run"])
+        self.assertIn("gh release upload \"$TAG\" \"$notes\" --clobber", announce["run"])
+        self.assertIn(f'select(.name == "{lua.RELEASE_NOTES_ASSET}")', announce["run"])
+        # Every other asset still counts, so a reuse candidate must match its provenance exactly.
+        self.assertIn(f'[.assets[]|select(.name!="{lua.RELEASE_NOTES_ASSET}")]|length',
+                      RELEASE.read_text(encoding="utf-8"))
 
     def test_no_google_chat_left(self):
         script = (Path(__file__).resolve().parent / "library_update_announce.py").read_text(encoding="utf-8")

@@ -8,8 +8,10 @@ source repository's file tree.
 
   previous-tag --current TAG            tag names on stdin -> the previous published tag
   catalog DB OUT                        seforim.db -> a small per-book JSON catalog
-  render --old A --new B --tag T --out DIR   diff two catalogs -> forum posts + Yemot content
+  render --old A --new B --tag T --out DIR   diff two catalogs -> forum posts + Yemot content + release notes
   send --channel C --dir DIR            post one rendered channel (forum / yemot)
+
+The release channel is uploaded by the workflow itself: RELEASE_NOTES_ASSET as is.
 """
 import argparse
 import hashlib
@@ -31,7 +33,10 @@ FORUM_URL = "https://otzaria.org/forum"
 FORUM_TOPIC_ID = 20
 # maximumPostLength from https://otzaria.org/forum/api/config (read 2026-09-29).
 FORUM_MAX_POST_LENGTH = 32767
-CHANNELS = ("forum", "yemot")
+CHANNELS = ("forum", "yemot", "release")
+SENT_CHANNELS = ("forum", "yemot")
+# The reuse scan in manual-generate-release.yml leaves exactly this name out of the asset count.
+RELEASE_NOTES_ASSET = "library-changes.md"
 YEMOT_PATH = "ivr2:/1"
 TZINTUK_LIST = "books update"
 
@@ -288,6 +293,12 @@ def build_forum_posts(changes, version, date_text, limit=FORUM_MAX_POST_LENGTH):
     return posts
 
 
+def build_release_notes(changes, version, date_text):
+    """The whole list as one Markdown file, worded like the forum."""
+    [notes] = build_forum_posts(changes, version, date_text, limit=float("inf"))
+    return notes
+
+
 def build_yemot_content(changes):
     """Heading -> the book names read out, one per line; same sections and items as the forum."""
     return {title: "\n".join(describe(key, item, spoken=True) for item in changes[key])
@@ -425,6 +436,7 @@ def render(args):
         yemot = {"heading": f"גרסת ספרייה {version}\nעדכון {date_text}\n", "content": build_yemot_content(changes)}
         (out / "forum_posts.json").write_text(json.dumps(posts, ensure_ascii=False, indent=1), encoding="utf-8")
         (out / "yemot.json").write_text(json.dumps(yemot, ensure_ascii=False, indent=1), encoding="utf-8")
+        (out / RELEASE_NOTES_ASSET).write_text(build_release_notes(changes, version, date_text), encoding="utf-8")
         summary["forum_posts"] = [post_length(p) for p in posts]
         for index, text in enumerate(posts, 1):
             print(f"----- forum post {index}/{len(posts)} ({post_length(text)} chars) -----")
@@ -473,7 +485,7 @@ def main(argv=None):
     rendered.add_argument("--channels", default=",".join(CHANNELS))
     rendered.add_argument("--out", required=True)
     sender = commands.add_parser("send")
-    sender.add_argument("--channel", required=True, choices=CHANNELS)
+    sender.add_argument("--channel", required=True, choices=SENT_CHANNELS)
     sender.add_argument("--dir", required=True)
     sender.add_argument("--progress", default="")
     args = parser.parse_args(argv)

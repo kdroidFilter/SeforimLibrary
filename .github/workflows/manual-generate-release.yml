@@ -314,7 +314,8 @@ jobs:
               REMOTE_PROVENANCE_DIGEST=$(jq -r --argjson id "$release_id" '.[]|select(.id==$id)|.assets[]|select(.name=="build_provenance.json")|.digest' "$RUNNER_TEMP/releases.json")
               test "$REMOTE_PROVENANCE_SIZE" = "$PROVENANCE_SIZE"
               test "$REMOTE_PROVENANCE_DIGEST" = "sha256:$PROVENANCE_SHA"
-              REMOTE_ASSET_COUNT=$(jq --argjson id "$release_id" '.[]|select(.id==$id)|.assets|length' "$RUNNER_TEMP/releases.json")
+              # library-changes.md is attached after publishing, with the book-changes announcement.
+              REMOTE_ASSET_COUNT=$(jq --argjson id "$release_id" '.[]|select(.id==$id)|[.assets[]|select(.name!="library-changes.md")]|length' "$RUNNER_TEMP/releases.json")
               EXPECTED_ASSET_COUNT=$(jq '.assets|length + 1' "$file")
               test "$REMOTE_ASSET_COUNT" -eq "$EXPECTED_ASSET_COUNT"
               MATCHES=$((MATCHES+1))

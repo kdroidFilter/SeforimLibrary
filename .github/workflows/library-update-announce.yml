@@ -3,7 +3,7 @@ name: Announce a published library update
 run-name: announce ${{ inputs.tag || format('after release run {0}:{1}', github.event.workflow_run.id, github.event.workflow_run.run_attempt) }}${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && ' (dry run)' || '' }}
 
 # Posts what a published Seforim DB release changed to the Otzaria forum and
-# Yemot. A pre-release never reaches users, so it never announces; the
+# Yemot, and attaches the same list to the release as library-changes.md. A pre-release never reaches users, so it never announces; the
 # comparison is always against the previous PUBLISHED release, which skips any
 # pre-releases built in between.
 #
@@ -17,9 +17,10 @@ run-name: announce ${{ inputs.tag || format('after release run {0}:{1}', github.
 # is downloaded, and fails if another run left it half sent (resume that run with
 # "Re-run failed jobs"); each channel job re-checks under a per-tag lock.
 #
-# Nothing is uploaded back to either release: the reuse scan in
+# library-changes.md is the only file uploaded back to a release: the reuse scan in
 # manual-generate-release.yml requires a release's asset count to match its
-# provenance exactly, so the catalogs are computed here from seforim.db.zst.
+# provenance exactly, except for that one name. The catalogs are computed here
+# from seforim.db.zst.
 
 on:
   workflow_run:
@@ -38,10 +39,10 @@ on:
         required: false
         default: true
       channels:
-        description: Comma-separated subset of forum,yemot (for a resend)
+        description: Comma-separated subset of forum,yemot,release (for a resend)
         type: string
         required: false
-        default: forum,yemot
+        default: forum,yemot,release
 
 permissions:
   contents: read
@@ -316,3 +317,62 @@ jobs:
           path: ${{ runner.temp }}/progress/yemot_progress.json
           if-no-files-found: ignore
           overwrite: true
+
+  release:
+    name: release ${{ needs.gate.outputs.tag }}
+    needs: [gate, prepare]
+    if: needs.gate.outputs.send == 'true' && needs.prepare.outputs.has_changes == 'true' && contains(fromJSON(needs.gate.outputs.channels), 'release')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The per-tag lock makes the re-check below exact across concurrent triggers.
+    concurrency:
+      group: library-update-announce-release-${{ needs.gate.outputs.tag }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.gate.outputs.tag }}
+      CHANNEL: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Skip if this tag was already announced here
+        id: dedup
+        run: |
+          set -euo pipefail
+          decision="$(bash .github/scripts/library_announce/channel_decision.sh)"
+          case "$decision" in
+            skip) echo "sent=true" >> "$GITHUB_OUTPUT" ;;
+            proceed) echo "sent=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::channel_decision.sh printed '$decision'"; exit 1 ;;
+          esac
+
+      - uses: actions/download-artifact@v7
+        if: steps.dedup.outputs.sent != 'true'
+        with:
+          name: announcement
+          path: ${{ runner.temp }}/announce/out
+
+      # --clobber: a re-run replaces a half-uploaded file instead of failing on it.
+      - name: Announce
+        if: steps.dedup.outputs.sent != 'true'
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/announce/out/library-changes.md"
+          gh release upload "$TAG" "$notes" --clobber -R "$GITHUB_REPOSITORY"
+          expected="sha256:$(sha256sum "$notes" | cut -d' ' -f1)"
+          # GitHub may list a fresh asset before its digest.
+          for _ in $(seq 1 12); do
+            digest="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+              --jq '[.assets[] | select(.name == "library-changes.md")] | select(length == 1) | .[0].digest // ""')"
+            [ -z "$digest" ] || break
+            sleep 5
+          done
+          [ "$digest" = "$expected" ] || {
+            echo "::error::library-changes.md on $TAG does not match the rendered file (digest '$digest')"; exit 1; }
+          echo "✅ library-changes.md attached to $TAG"

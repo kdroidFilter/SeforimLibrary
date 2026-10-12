@@ -52,11 +52,11 @@ if [ "$state" != "false false" ]; then
 fi
 
 channels=()
-IFS=',' read -r -a requested <<< "${INPUT_CHANNELS:-forum,yemot}"
+IFS=',' read -r -a requested <<< "${INPUT_CHANNELS:-forum,yemot,release}"
 for channel in "${requested[@]}"; do
   channel="$(tr -d '[:space:]' <<<"$channel")"
   [ -n "$channel" ] || continue
-  case "$channel" in forum|yemot) ;; *) echo "::error::unknown channel '$channel' (allowed: forum,yemot)"; exit 1 ;; esac
+  case "$channel" in forum|yemot|release) ;; *) echo "::error::unknown channel '$channel' (allowed: forum,yemot,release)"; exit 1 ;; esac
   if [ "$send" = true ]; then
     # A plain assignment, so a failing check stops the gate instead of reading as "not sent".
     decision="$(TAG="$tag" CHANNEL="$channel" bash "$here/channel_decision.sh")"
