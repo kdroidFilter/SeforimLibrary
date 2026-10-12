@@ -4,7 +4,8 @@ run-name: library-vectors ${{ inputs.release_tag || github.event.workflow_run.di
 
 # The semantic vectors of a library release, built on the machine that holds the warehouse
 # and the GPU, once the release's search index is stored (build-library-index.yml), and
-# published beside the release as vectors-<tag>. Everything happens in
+# published beside the release, one release per family (FAMILY_CONFIGS in pins.env):
+# vectors-<tag>, which released applications install, then vectors-windows-<tag>. Everything happens in
 # .github/scripts/vectors/build_library_vectors.sh, which runs by hand on that machine the
 # same way, after bootstrap_runner.sh; this file only decides when, where, and in which mode.
 #
@@ -29,13 +30,22 @@ on:
         type: string
         required: true
       mode:
-        description: 'base: build, verify and publish vectors-<tag>; dry-run: build and verify only'
+        description: 'base: build, verify and publish each family''s release; dry-run: build and verify only'
         type: choice
         required: true
         default: dry-run
         options:
           - dry-run
           - base
+      family:
+        description: 'The families to build: all, or one alone (a retry, or a first build that fills the warehouse)'
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - meivin-round2-onnx
+          - meivin-round2-windows-onnx
 
 permissions:
   contents: write
@@ -103,13 +113,15 @@ jobs:
     # On a runner with no warehouse yet, the first build plans and embeds the whole library
     # on the GPU (~1 h), plus the index and the assembly, and its first add creates the
     # warehouse; a later release embeds only the texts the warehouse lacks, on the CPU when
-    # they are few (CPU_EMBED_MAX in pins.env).
+    # they are few (CPU_EMBED_MAX in pins.env). A new family's first build (windows: ~3.2M texts)
+    # may outlast this bound: fill the warehouse first with a dry run of it alone, by hand.
     timeout-minutes: 360
     env:
       GH_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
       OTZARIA_HF_TOKEN: ${{ secrets.OTZARIA_HF_TOKEN }}
       RELEASE_TAG: ${{ needs.gate.outputs.release_tag }}
       MODE: ${{ needs.gate.outputs.mode }}
+      FAMILY: ${{ inputs.family }}
       LIBRARY_VECTORS_PRERELEASE: ${{ vars.LIBRARY_VECTORS_PRERELEASE || 'true' }}
     steps:
       # The build machine's other self-hosted jobs pin checkout@v4: its runner's Node 24
@@ -125,4 +137,4 @@ jobs:
           bash .github/scripts/vectors/bootstrap_runner.sh
 
       - name: Build the vectors
-        run: bash .github/scripts/vectors/build_library_vectors.sh --tag "$RELEASE_TAG" --mode "$MODE" --repo "$GITHUB_REPOSITORY"
+        run: bash .github/scripts/vectors/build_library_vectors.sh --tag "$RELEASE_TAG" --mode "$MODE" --family "${FAMILY:-all}" --repo "$GITHUB_REPOSITORY"

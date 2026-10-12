@@ -21,7 +21,10 @@ the work, the same way by hand. Load-bearing properties, pinned here:
     of update-release-manifest.yml and the database history;
   * nothing is published unless the plugin's validate_semantic_vectors passes the release on its
     index (G3 coverage, G4 resolution, G6 retrieval), and its report is published with the gates;
-  * it persists the ledger only after a publish.
+  * it persists the ledger only after a publish, one ledger per family;
+  * it builds every family of FAMILY_CONFIGS from one index and one warehouse, in its order, each
+    published as its own <prefix>-<tag>: the first, which released applications install, is
+    published before a later family runs, and a later family's failure leaves it published.
 
 The YAML assertions read the parsed workflow; the driver's are made by running it against stub
 tools (gh, the planner, the sidecar CLI, the worker's Python, zstd) and reading what it called.
@@ -62,6 +65,10 @@ BOOTSTRAP = HERE / "bootstrap_runner.sh"
 PIN = dict(line.split("=", 1) for line in PINS.read_text().splitlines() if line and not line.startswith("#") and "=" in line)
 TAG = "v30-20260930165019"
 TAG_COMMIT = "c66256253b25c0aa0b13d04e399647496f3b0bee"   # the commit TAG names (the stub gh's answer)
+# (name, release prefix) of each family, in build order
+FAMILIES = [(c.split(":")[0].rsplit("/", 1)[-1], c.split(":")[1]) for c in PIN["FAMILY_CONFIGS"].strip('"').split()]
+LEGACY, WINDOWS = FAMILIES[0][0], FAMILIES[1][0]
+CHUNKING_IDENTITY = {"meivin-round2-onnx": 2685558872390372738, "meivin-round2-windows-onnx": 320260894818558297}
 
 
 def run_text(job):
@@ -89,7 +96,7 @@ class Workflow(unittest.TestCase):
         self.assertEqual(on["workflow_run"]["workflows"], [self.index["name"]])
         self.assertEqual(on["workflow_run"]["types"], ["completed"])
         inputs = on["workflow_dispatch"]["inputs"]
-        self.assertEqual(set(inputs), {"release_tag", "mode"})
+        self.assertEqual(set(inputs), {"release_tag", "mode", "family"})
         self.assertTrue(inputs["release_tag"]["required"])
         self.assertEqual(inputs["mode"]["options"], ["dry-run", "base"])
         self.assertEqual(inputs["mode"]["default"], "dry-run")
@@ -112,6 +119,14 @@ class Workflow(unittest.TestCase):
         self.assertIn("MODE=dry-run", gate)
         self.assertIn('[ "$PUBLISH" != true ] || MODE=base', gate)
         self.assertEqual(self.gate["steps"][0]["env"]["PUBLISH"], "${{ vars.LIBRARY_VECTORS_PUBLISH }}")
+
+    def test_a_manual_run_builds_every_family_or_one_alone(self):
+        family = self.doc[True]["workflow_dispatch"]["inputs"]["family"]
+        self.assertEqual(family["options"], ["all"] + [name for name, _ in FAMILIES])
+        self.assertEqual(family["default"], "all")
+        # a run the index workflow triggers has no inputs: every family
+        self.assertEqual(self.job["env"]["FAMILY"], "${{ inputs.family }}")
+        self.assertIn('--family "${FAMILY:-all}"', run_text(self.job))
 
     def test_the_heavy_job_runs_only_behind_the_gate_on_the_build_machine(self):
         self.assertEqual(self.job["needs"], "gate")
@@ -174,6 +189,16 @@ class Pins(unittest.TestCase):
         self.assertRegex(pins["QUERY_PACKAGE_CHECKSUM"], r"^[0-9a-f]{64}$")      # G6 measures the int8 query model
         self.assertTrue(pins["QUERY_GRAPH"].endswith("-int8.onnx"))
 
+    def test_the_family_released_applications_install_is_built_first_under_its_own_tag(self):
+        # the application asks for exactly releases/tags/vectors-<tag>; the windows family
+        # must not match its library-tag pattern ^v(\d+)- nor that tag
+        self.assertEqual(FAMILIES, [("meivin-round2-onnx", "vectors"), ("meivin-round2-windows-onnx", "vectors-windows")])
+        self.assertEqual(len({name for name, _ in FAMILIES}), len(FAMILIES))
+        for _, prefix in FAMILIES[1:]:
+            self.assertIsNone(re.match(r"^v(\d+)-", f"{prefix}-{TAG}"))
+            self.assertNotEqual(f"{prefix}-{TAG}", f"vectors-{TAG}")
+        self.assertNotIn("FAMILY_CONFIG", PIN)
+
     def test_a_plan_the_gpu_worker_gets_can_always_be_certified(self):
         # the GPU worker's parity certificate needs 1,000 samples, 41 of them golden: a plan of fewer
         # than 959 texts can never have one, so everything below CPU_EMBED_MAX goes to the CPU
@@ -216,9 +241,10 @@ case "$cmd" in
   "release view")
     tag=$1
     case "$tag" in vectors-*)
-      # a draft's assets: what was uploaded, as name<TAB>size
-      case " $* " in *" --json assets "*) cat "$UPLOADED" 2>/dev/null; exit 0 ;; esac
-      [ -n "${EXISTING:-}" ] && exit 0; exit 1 ;;
+      # a draft's assets: what was uploaded to it, as name<TAB>size
+      case " $* " in *" --json assets "*) awk -F'\t' -v t="$tag" '$1 == t {print $2 "\t" $3}' "$UPLOADED" 2>/dev/null; exit 0 ;; esac
+      # EXISTING: 1 for every release, else the tags that exist
+      case "${EXISTING:-}" in 1) exit 0 ;; *" $tag "*|"$tag"|"$tag "*|*" $tag") exit 0 ;; esac; exit 1 ;;
     esac
     exit 0 ;;
   "release download")
@@ -230,7 +256,7 @@ case "$cmd" in
     # SHORT_UPLOAD names an asset that arrives one byte short
     name=$(basename "$2"); size=$(stat -c %s "$2")
     [ "$name" != "${SHORT_UPLOAD:-}" ] || size=$((size - 1))
-    printf '%s\t%s\n' "$name" "$size" >> "$UPLOADED" ;;
+    printf '%s\t%s\t%s\n' "$1" "$name" "$size" >> "$UPLOADED" ;;
   "release edit") ;;
   *) echo "stub gh: $cmd" >&2; exit 90 ;;
 esac
@@ -262,8 +288,10 @@ esac
 
 STUB_EXPORT = r"""#!/usr/bin/env bash
 echo "export $*" >> "$CALLS"
-out=""; warehouse=""; db=""
-while [ $# -gt 0 ]; do case "$1" in --out) out=$2; shift 2;; --warehouse) warehouse=$2; shift 2;; --seforim-db) db=$2; shift 2;; *) shift;; esac; done
+out=""; warehouse=""; db=""; model=""
+while [ $# -gt 0 ]; do case "$1" in --out) out=$2; shift 2;; --warehouse) warehouse=$2; shift 2;; --seforim-db) db=$2; shift 2;;
+  --model) model=$2; shift 2;; *) shift;; esac; done
+[ -z "$model" ] || [ -f "$model" ] || { echo "Could not read the model identity $model" >&2; exit 1; }
 # as export_semantic_plan does on a schema 5 index, which keeps official books' line text in the DB
 [ -n "$db" ] || { echo "Planning failed: the document at DocAddress { segment_ord: 3, doc_id: 38119 } keeps its text in the library database, which cannot be read (pass --seforim-db)" >&2; exit 1; }
 [ -s "$db" ] || { echo "Could not use the library database: $db" >&2; exit 1; }
@@ -275,6 +303,7 @@ fi
 [ -z "$warehouse" ] || [ ! -f "$warehouse/index.fault" ] || TO_EMBED=3173793
 mkdir -p "$out"
 : > "$out/embed.jsonl"
+[ -z "$model" ] || cp "$model" "$out/model.json"   # what the stub assemble derives the identity digest from
 jq -n --argjson n "${TO_EMBED:-0}" '{format:"otzaria-embed-plan",version:2,records:$n,plan_sha256:("a"*64),passage_package:{checksum:"4a4a2ae88a86f15ffe6069bfcefc3abd13c207cec5d7aaef52c0c59d752ade46",quantization:"fp32"}}' > "$out/embed-manifest.json"
 jq -n --arg tag "${PLAN_TAG:-v30-20260930165019}" '{format:"otzaria-vector-plan",version:1,library_release_tag:$tag,parity:{checked:9,mismatches:0},counts:{records:9}}' > "$out/plan-manifest.json"
 """
@@ -282,9 +311,9 @@ jq -n --arg tag "${PLAN_TAG:-v30-20260930165019}" '{format:"otzaria-vector-plan"
 STUB_CLI = r"""#!/usr/bin/env bash
 echo "cli $*" >> "$CALLS"
 sub=$1; shift
-out=""; files=(); verify=""; warehouse=""; create=""; model=""; shards=(); repair=""
+out=""; files=(); verify=""; warehouse=""; create=""; model=""; shards=(); repair=""; plan=""
 while [ $# -gt 0 ]; do case "$1" in
-  --out) out=$2; shift 2;; --files) files+=("$2"); shift 2;; --verify) verify=1; shift;;
+  --out) out=$2; shift 2;; --plan) plan=$2; shift 2;; --files) files+=("$2"); shift 2;; --verify) verify=1; shift;;
   --warehouse) warehouse=$2; shift 2;; --create) create=1; shift;; --model) model=$2; shift 2;;
   --shards) shards+=("$2"); shift 2;; --processes) processes=$2; shift 2;; --repair) repair=1; shift;; *) shift;; esac; done
 # as the sidecar does: --create makes a missing warehouse for --model; everything else needs one
@@ -326,11 +355,12 @@ case "$sub" in
     verified ""
     if [ -n "$verify" ]; then echo '{"gates":"stub"}' > "$out/gates.json"; exit "${VERIFY_EXIT:-0}"; fi
     mkdir -p "$out"; head -c 3000 /dev/urandom > "$out/segment.oxv"
-    echo '{"identityDigest":"0123456789abcdef","toLibraryVersion":30}' > "$out/release.json"
+    # the identity is the family's: its digest, the hash of the model the plan was made with
+    jq -n --arg d "$(sha256sum < "$plan/model.json" | cut -c1-16)" '{identityDigest: $d, toLibraryVersion: 30}' > "$out/release.json"
     for f in ledger-v30.keys pairs-v30.bin ledger-v30.manifest.json; do echo "$f" > "$out/$f"; done ;;
   release-files)
     for f in "${files[@]}"; do [ -f "$f" ] || { echo "Could not read release file $f" >&2; exit 1; }; done
-    jq -cn --args '$ARGS.positional' "${files[@]}" > "$RELEASE_FILE_ARGS"
+    jq -cn --args '$ARGS.positional' "${files[@]}" >> "$RELEASE_FILE_ARGS"
     echo '{"files":[]}' > "$out"; echo "=== stem ==="; echo "Manifest SHA-256 $(sha256sum < "$out" | cut -d' ' -f1)" ;;
   *) echo "stub cli: $sub" >&2; exit 90 ;;
 esac
@@ -402,6 +432,8 @@ fi
 verdict() {
   case "$skips" in *$1*) echo skipped; return ;; esac
   case "${VALIDATE_FAILS:-}" in *$1*) echo failed; return ;; esac
+  # VALIDATE_FAILS_FOR: the family (a part of its --model-identity path) whose G4 fails
+  if [ "$1" = G4 ] && [ -n "${VALIDATE_FAILS_FOR:-}" ]; then case "$identity" in *"/${VALIDATE_FAILS_FOR}/"*) echo failed; return ;; esac; fi
   if [ "$1" = G6 ] && [ "$g6" != wmi ]; then echo notRun; return; fi
   echo passed
 }
@@ -462,8 +494,11 @@ class Driver(unittest.TestCase):
         self.write_provenance()
         self.state = r / "state"
         (self.state / "bin").mkdir(parents=True)
-        for f in ("family-model.json", "chunking.json"):
-            (self.state / "bin" / f).write_text("{}")
+        for name, _ in FAMILIES:
+            family = self.state / "bin" / "families" / name
+            family.mkdir(parents=True)
+            (family / "model.json").write_text(json.dumps({"family_id": "stub", "chunking_identity": CHUNKING_IDENTITY[name]}))
+            (family / "chunking.json").write_text("{}")
         # a runner that has built before: its warehouse (the driver's path for the fp32 package)
         self.warehouse = self.state / "warehouse" / "fp32-4a4a2ae8"
         self.warehouse.mkdir(parents=True)
@@ -510,6 +545,16 @@ class Driver(unittest.TestCase):
     def index_of(self, calls, needle):
         return next(i for i, c in enumerate(calls) if needle in c)
 
+    def model(self, name):
+        return self.state / "bin" / "families" / name / "model.json"
+
+    def id8(self, name):
+        """The first 8 of the identity digest the stub assemble gives the family."""
+        return hashlib.sha256(self.model(name).read_bytes()).hexdigest()[:8]
+
+    def stem(self, name):
+        return f"otzaria-vectors-{self.id8(name)}-v30-base"
+
     def test_a_dry_run_builds_and_verifies_and_publishes_and_persists_nothing(self):
         p, calls = self.run_driver(TO_EMBED=0)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -526,7 +571,7 @@ class Driver(unittest.TestCase):
         p, calls = self.run_driver(TO_EMBED=n)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         workers = [c for c in calls if "embed_worker.py" in c]
-        self.assertEqual(len(workers), -(-n // int(PIN["EMBED_WINDOW"])))
+        self.assertEqual(len(workers), len(FAMILIES) * -(-n // int(PIN["EMBED_WINDOW"])))   # each family's plan
         self.assertIn("--skip 0 --take", workers[0])
         self.assertFalse([c for c in calls if "cli embed-shard" in c
                           or ("model_package.py" in c and PIN["PASSAGE_PACKAGE_CHECKSUM"] in c)])   # not the CPU path
@@ -601,11 +646,19 @@ class Driver(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertNotIn("--warehouse", calls[self.index_of(calls, "export --index")])   # every text is planned
         add = self.index_of(calls, "cli warehouse-add")
-        for arg in ("--create", "--model " + str(self.state / "bin" / "family-model.json"), "--passage-quantization fp32",
+        for arg in ("--create", "--model " + str(self.model(LEGACY)), "--passage-quantization fp32",
                     "--plan "):
             self.assertIn(arg, calls[add])
         self.assertLess(add, self.index_of(calls, "cli assemble --kind base"))
         self.assertTrue((self.warehouse / "warehouse.json").exists())
+        # the next family plans against the warehouse the first one created, and adds to it
+        exports = [c for c in calls if c.startswith("export --index")]
+        self.assertEqual(len(exports), len(FAMILIES))
+        for c in exports[1:]:
+            self.assertIn("--warehouse " + str(self.warehouse) + " ", c)
+        adds = [c for c in calls if c.startswith("cli warehouse-add")]
+        self.assertEqual(len(adds), len(FAMILIES))
+        self.assertFalse([c for c in adds[1:] if "--create" in c])
 
     def test_the_gpu_worker_fetches_the_model_at_the_pinned_revision(self):
         pins = dict(line.split("=", 1) for line in PINS.read_text().splitlines()
@@ -685,21 +738,26 @@ class Driver(unittest.TestCase):
         for arg in ("model_package.py fetch", "--cache " + str(cache), "--graph " + PIN["QUERY_GRAPH"],
                     "--repo " + PIN["MODEL_REPO"], "--revision " + PIN["MODEL_REVISION"]):
             self.assertIn(arg + " ", fetch + " ")
-        i = self.index_of(calls, "validate --index")
-        args = calls[i].split()[1:]
-        pairs = dict(zip(args[::2], args[1::2]))
-        self.assertEqual(args[::2], ["--index", "--seforim-db", "--release", "--plan", "--warehouse", "--model", "--model-identity",
-                                     "--onnx-runtime", "--threads", "--report"])
-        self.assertEqual(pairs, {
-            "--index": str(work / "index" / "index"), "--seforim-db": str(work / "seforim.db"),
-            "--release": str(work / "release"), "--plan": str(work / "plan"),
-            "--warehouse": str(self.warehouse), "--model": str(cache / PIN["QUERY_PACKAGE_CHECKSUM"] / PIN["QUERY_GRAPH"]),
-            "--model-identity": str(self.state / "bin" / "family-model.json"), "--onnx-runtime": str(self.ort),
-            "--threads": pairs["--threads"], "--report": str(work / "release" / "validation.json")})
-        self.assertGreater(int(pairs["--threads"]), 0)
-        self.assertEqual(calls[i + 1], "validate-env TMPDIR=" + str(work))   # its installed set stays in the work dir
-        self.assertTrue(self.index_of(calls, "cli assemble --verify") < self.index_of(calls, "validate --index")
-                        < self.index_of(calls, "cli release-files") < self.index_of(calls, "gh release create"))
+        validations = [i for i, c in enumerate(calls) if c.startswith("validate --index")]
+        self.assertEqual(len(validations), len(FAMILIES))
+        for (name, prefix), i in zip(FAMILIES, validations):
+            with self.subTest(family=name):
+                fw = work / name
+                args = calls[i].split()[1:]
+                pairs = dict(zip(args[::2], args[1::2]))
+                self.assertEqual(args[::2], ["--index", "--seforim-db", "--release", "--plan", "--warehouse", "--model",
+                                             "--model-identity", "--onnx-runtime", "--threads", "--report"])
+                self.assertEqual(pairs, {
+                    "--index": str(work / "index" / "index"), "--seforim-db": str(work / "seforim.db"),
+                    "--release": str(fw / "release"), "--plan": str(fw / "plan"),
+                    "--warehouse": str(self.warehouse), "--model": str(cache / PIN["QUERY_PACKAGE_CHECKSUM"] / PIN["QUERY_GRAPH"]),
+                    "--model-identity": str(self.model(name)), "--onnx-runtime": str(self.ort),
+                    "--threads": pairs["--threads"], "--report": str(fw / "release" / "validation.json")})
+                self.assertGreater(int(pairs["--threads"]), 0)
+                self.assertEqual(calls[i + 1], "validate-env TMPDIR=" + str(fw))   # its installed set stays in the work dir
+                after = calls[i:]
+                self.assertTrue(self.index_of(calls[:i], "cli assemble --verify") < i
+                                < i + self.index_of(after, "cli release-files") < i + self.index_of(after, "gh release create " + prefix + "-"))
 
     def test_a_release_the_validator_does_not_pass_is_never_published(self):
         for env, code in (({"VALIDATE_FAILS": "G6"}, 1), ({"VALIDATE_FAILS": "G3 G4"}, 1), ({"VALIDATE_UNREADABLE": "1"}, 2)):
@@ -734,7 +792,7 @@ class Driver(unittest.TestCase):
         (plan / "plan-manifest.json").write_text("{}")
         model, ort = self.root / "q.onnx", self.root / "libonnxruntime.so"
         model.write_text("x"); ort.write_text("x")
-        g6 = ["--warehouse", str(self.warehouse), "--model", str(model), "--model-identity", str(self.state / "bin" / "family-model.json")]
+        g6 = ["--warehouse", str(self.warehouse), "--model", str(model), "--model-identity", str(self.model(LEGACY))]
         db = self.root / "seforim.db"
         db.write_text("x")
         base = ["--index", str(index), "--seforim-db", str(db), "--release", str(release)]
@@ -767,28 +825,39 @@ class Driver(unittest.TestCase):
         create = self.index_of(calls, "gh release create vectors-" + TAG)
         for arg in ("--draft", "--target " + TAG_COMMIT, "--latest=false"):
             self.assertIn(arg, calls[create].split(" --title")[0])
-        uploads = [c for c in calls if "gh release upload" in c]
-        self.assertTrue(all(self.index_of(calls, u) > create for u in uploads))
-        names = [Path(u.split()[4]).name for u in uploads]
-        self.assertEqual(len(names), 4)
-        self.assertTrue(names[0].endswith(".oxv.zst"))
-        self.assertEqual(names[1:3], ["gates.json", "validation.json"])
-        self.assertTrue(names[3].endswith(".manifest.json"))   # the manifest last
+        for name, prefix in FAMILIES:
+            with self.subTest(family=name):
+                create = self.index_of(calls, f"gh release create {prefix}-{TAG} ")
+                for arg in ("--draft", "--target " + TAG_COMMIT, "--latest=false"):
+                    self.assertIn(arg, calls[create].split(" --title")[0])
+                uploads = [c for c in calls if c.startswith(f"gh release upload {prefix}-{TAG} ")]
+                self.assertTrue(all(self.index_of(calls, u) > create for u in uploads))
+                names = [Path(u.split()[4]).name for u in uploads]
+                self.assertEqual(names, [self.stem(name) + ".oxv.zst", "gates.json", "validation.json",
+                                         self.stem(name) + ".manifest.json"])   # data first, the manifest last
 
     def test_the_draft_is_published_only_once_its_files_are_checked_and_then_the_ledger_is_persisted(self):
         p, calls = self.run_driver(mode="base", TO_EMBED=0)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        last_upload = max(i for i, c in enumerate(calls) if "gh release upload" in c)
-        check = self.index_of(calls, "gh release view vectors-" + TAG + " --repo o/r --json assets")
         edits = [i for i, c in enumerate(calls) if "gh release edit" in c]
-        self.assertEqual(len(edits), 1)
-        self.assertTrue(last_upload < check < edits[0])
-        self.assertEqual(calls[edits[0]], "gh release edit vectors-" + TAG + " --repo o/r --draft=false --latest=false")
-        self.assertEqual(edits[0], len(calls) - 1)   # nothing reaches the release after it is published
-        ledger = self.state / "ledger"
-        self.assertEqual(sorted(f.name for f in ledger.iterdir()),
-                         ["ledger-v30.keys", "ledger-v30.manifest.json", "pairs-v30.bin", "published.json"])
-        self.assertEqual(json.loads((ledger / "published.json").read_text())["published"], "vectors-" + TAG)
+        self.assertEqual(len(edits), len(FAMILIES))
+        for (name, prefix), edit in zip(FAMILIES, edits):
+            with self.subTest(family=name):
+                release = prefix + "-" + TAG
+                last_upload = max(i for i, c in enumerate(calls) if c.startswith(f"gh release upload {release} "))
+                check = self.index_of(calls, "gh release view " + release + " --repo o/r --json assets")
+                self.assertTrue(last_upload < check < edit)
+                self.assertEqual(calls[edit], "gh release edit " + release + " --repo o/r --draft=false --latest=false")
+                # nothing reaches the release after it is published
+                self.assertFalse([c for c in calls[edit + 1:] if f" {release} " in c + " "])
+                ledger = self.state / "ledger" / self.id8(name)
+                self.assertEqual(sorted(f.name for f in ledger.iterdir()),
+                                 ["ledger-v30.keys", "ledger-v30.manifest.json", "pairs-v30.bin", "published.json"])
+                published = json.loads((ledger / "published.json").read_text())
+                self.assertEqual(published["published"], release)
+                self.assertEqual(published["manifest"], self.stem(name) + ".manifest.json")
+        self.assertEqual(edits[-1], len(calls) - 1)
+        self.assertEqual(sorted(p.name for p in (self.state / "ledger").iterdir()), sorted(self.id8(n) for n, _ in FAMILIES))
         self.assertFalse((self.state / "work" / TAG).exists())
 
     def test_a_publish_is_a_prerelease_unless_the_variable_says_false(self):
@@ -836,10 +905,13 @@ class Driver(unittest.TestCase):
         self.assertFalse((self.state / "ledger").exists())
 
     def test_an_existing_vectors_release_is_never_rebuilt_in_place(self):
-        p, calls = self.run_driver(mode="base", EXISTING=1)
-        self.assertNotEqual(p.returncode, 0)
-        self.assertIn("exists already", p.stdout)
-        self.assertFalse([c for c in calls if "release download" in c])
+        for existing in ("1", "vectors-" + TAG, "vectors-windows-" + TAG):
+            with self.subTest(existing=existing):
+                self.calls.unlink(missing_ok=True)
+                p, calls = self.run_driver(mode="base", EXISTING=existing)
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn("exists already", p.stdout)
+                self.assertFalse([c for c in calls if "release download" in c])
 
     def test_a_damaged_index_part_is_refused(self):
         part = self.root / "assets" / TAG / "otzaria-library-index.tar.zst.part-001"
@@ -974,7 +1046,8 @@ class Driver(unittest.TestCase):
                 p, calls = self.run_driver(mode="base", TO_EMBED=n)
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
                 self.assertTrue([c for c in calls if "gh release edit" in c])
-                self.assertTrue((odd / "ledger" / "published.json").exists())
+                for name, _ in FAMILIES:
+                    self.assertTrue((odd / "ledger" / self.id8(name) / "published.json").exists())
         work = self.root / "work with spaces & 'quotes' |pipes|"
         p, calls = self.run_driver(TO_EMBED=5, args=("--work", str(work)))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -986,11 +1059,12 @@ class Driver(unittest.TestCase):
         self.state = odd
         for work in (odd / "work" / TAG, self.root / "work\nwith newline\n"):
             with self.subTest(work=work):
+                (self.root / "release-file-args.json").unlink(missing_ok=True)
                 p, _ = self.run_driver(TO_EMBED=0, args=("--work", str(work)))
                 self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-                files = json.loads((self.root / "release-file-args.json").read_text())
-                self.assertEqual(files, [str(work / "files" / "otzaria-vectors-01234567-v30-base.oxv.zst")])
-                self.assertTrue(Path(files[0]).is_file())
+                files = [json.loads(l) for l in (self.root / "release-file-args.json").read_text().splitlines()]
+                self.assertEqual(files, [[str(work / name / "files" / (self.stem(name) + ".oxv.zst"))] for name, _ in FAMILIES])
+                self.assertTrue(all(Path(f[0]).is_file() for f in files))
 
     def test_work_overlapping_state_or_persistent_paths_is_refused_without_changes(self):
         alias = self.root / "state-alias"
@@ -1025,7 +1099,7 @@ class Driver(unittest.TestCase):
         p, _ = self.run_driver(TO_EMBED=0, args=("--work", str(work)))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertFalse((work / "old-scratch").exists())
-        self.assertTrue((work / "files" / "otzaria-vectors-01234567-v30-base.oxv.zst").is_file())
+        self.assertTrue((work / LEGACY / "files" / (self.stem(LEGACY) + ".oxv.zst")).is_file())
 
     def test_work_cannot_delete_custom_gh_or_zstd_executables(self):
         for variable, tool in (("GH", "gh"), ("ZSTD", "zstd")):
@@ -1124,6 +1198,109 @@ class Driver(unittest.TestCase):
                     "--warehouse ", "--created-at 2026-09-30T21:38:29Z", "--out "):
             self.assertIn(arg, plan)
         self.assertNotIn("--chunking", plan)   # the recipe comes from the model
+        # one planner for every family, each with its own model, into its own work directory
+        exports = [c for c in calls if c.startswith("export --index")]
+        work = self.state / "work" / TAG
+        self.assertEqual(len(exports), len(FAMILIES))
+        for (name, _), c in zip(FAMILIES, exports):
+            self.assertIn(f"--model {self.model(name)} ", c)
+            self.assertIn(f"--out {work / name / 'plan'}", c)
+
+    def test_every_family_is_built_in_order_and_the_first_is_published_before_the_next_runs(self):
+        p, calls = self.run_driver(mode="base", TO_EMBED=0)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        # the index and the DB are fetched once, and the warehouse verified once, for every family
+        self.assertEqual(len([c for c in calls if c.endswith("--pattern otzaria-library-index.tar.zst.part-000")]), 1)
+        self.assertEqual(len([c for c in calls if c.endswith("--pattern seforim-schema6.db.zst")]), 1)
+        self.assertEqual(len([c for c in calls if "warehouse-verify" in c]), 1)
+        published = self.index_of(calls, f"gh release edit vectors-{TAG} ")
+        self.assertLess(published, self.index_of(calls, f"--model {self.model(WINDOWS)} "))
+        self.assertLess(published, self.index_of(calls, f"gh release create vectors-windows-{TAG} "))
+        self.assertNotEqual(self.id8(LEGACY), self.id8(WINDOWS))   # their assets are told apart by the identity
+        notes = [c for c in calls if c.startswith("gh release create")]
+        self.assertEqual([c.split()[3] for c in notes], [prefix + "-" + TAG for _, prefix in FAMILIES])
+
+    def test_a_later_family_that_fails_leaves_the_first_published(self):
+        p, calls = self.run_driver(mode="base", TO_EMBED=0, VALIDATE_FAILS_FOR=WINDOWS)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn(f"the family {WINDOWS} failed; vectors-{TAG} stay published — retry it alone with --family {WINDOWS}", p.stdout)
+        self.assertTrue([c for c in calls if c.startswith(f"gh release edit vectors-{TAG} ")])
+        self.assertFalse([c for c in calls if f"vectors-windows-{TAG}" in c and ("release create" in c or "release edit" in c)])
+        self.assertEqual([p.name for p in (self.state / "ledger").iterdir()], [self.id8(LEGACY)])
+        self.assertTrue((self.state / "work" / TAG / "seforim.db").exists())   # the work directory stays, as after any failure
+
+    def test_a_first_family_that_fails_stops_before_the_next(self):
+        p, calls = self.run_driver(mode="base", TO_EMBED=0, VALIDATE_FAILS_FOR=LEGACY)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertNotIn("stay published", p.stdout)
+        self.assertFalse([c for c in calls if c.startswith("gh release create") or f"--model {self.model(WINDOWS)}" in c])
+
+    def test_one_family_is_built_alone_when_named(self):
+        p, calls = self.run_driver(mode="base", TO_EMBED=0, EXISTING="vectors-" + TAG, args=("--family", WINDOWS))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual([c.split()[3] for c in calls if c.startswith("gh release create")], [f"vectors-windows-{TAG}"])
+        self.assertFalse([c for c in calls if f"--model {self.model(LEGACY)}" in c])
+        self.assertFalse([c for c in calls if c.startswith(f"gh release view vectors-{TAG} ")])
+        self.calls.unlink()
+        p, calls = self.run_driver(TO_EMBED=0, args=("--family", "all"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(len([c for c in calls if c.startswith("export --index")]), len(FAMILIES))
+
+    def test_a_family_that_is_not_pinned_is_refused_before_anything_runs(self):
+        for args in (("--family", "meivin-round2"), ("--family", WINDOWS, "--family", "vectors-windows")):
+            with self.subTest(args=args):
+                self.calls.unlink(missing_ok=True)
+                p, calls = self.run_driver(args=args)
+                self.assertEqual(p.returncode, 64)
+                self.assertIn("is not a family of FAMILY_CONFIGS", p.stdout)
+                self.assertEqual(calls, [])
+
+    def test_a_family_whose_identity_the_runner_lacks_stops_the_build_before_it_starts(self):
+        shutil.rmtree(self.state / "bin" / "families" / WINDOWS)
+        p, calls = self.run_driver()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(f"families/{WINDOWS}/model.json is missing", p.stdout)
+        self.assertFalse([c for c in calls if "release download" in c])
+
+    def write_single_ledger(self, manifest):
+        """The ledger as a build of one family persisted it: its files in ledger/ itself."""
+        ledger = self.state / "ledger"
+        ledger.mkdir()
+        for f in ("ledger-v29.keys", "pairs-v29.bin", "ledger-v29.manifest.json"):
+            (ledger / f).write_text(f)
+        (ledger / "published.json").write_text(json.dumps({"published": "vectors-v29-20260927072953", "manifest": manifest}))
+
+    def test_the_single_ledger_moves_under_its_familys_identity_once(self):
+        self.write_single_ledger("otzaria-vectors-abcdef01-v29-base.manifest.json")
+        p, calls = self.run_driver(mode="base", TO_EMBED=0)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("ledger: moved to " + str(self.state / "ledger" / "abcdef01"), p.stdout)
+        old = self.state / "ledger" / "abcdef01"
+        self.assertEqual(sorted(f.name for f in old.iterdir()),
+                         ["ledger-v29.keys", "ledger-v29.manifest.json", "pairs-v29.bin", "published.json"])
+        self.assertEqual(sorted(p.name for p in (self.state / "ledger").iterdir()),
+                         sorted(["abcdef01"] + [self.id8(n) for n, _ in FAMILIES]))
+        self.assertFalse((self.state / "ledger.migrating").exists())
+        p, calls = self.run_driver(TO_EMBED=0)   # once: the next build finds the per-family layout
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("ledger: moved", p.stdout)
+
+    def test_a_move_cut_short_is_finished_and_an_unknown_ledger_is_refused(self):
+        moved = self.state / "ledger.migrating" / "abcdef01"
+        moved.mkdir(parents=True)
+        (moved / "published.json").write_text("{}")
+        p, _ = self.run_driver(TO_EMBED=0)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue((self.state / "ledger" / "abcdef01" / "published.json").exists())
+        self.assertFalse((self.state / "ledger.migrating").exists())
+        shutil.rmtree(self.state / "ledger")
+        self.calls.unlink()
+        self.write_single_ledger("seforim-vectors.manifest.json")
+        p, calls = self.run_driver(mode="base", TO_EMBED=0)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("its family is unknown", p.stdout)
+        self.assertTrue((self.state / "ledger" / "published.json").exists())   # left as it was
+        self.assertFalse([c for c in calls if "release download" in c])
 
 STUB_GIT = r"""#!/usr/bin/env bash
 echo "git $*" >> "$CALLS"
@@ -1131,9 +1308,11 @@ if [ "$1" = clone ]; then           # git clone -q --filter=blob:none <url> <des
   url=${@: -2:1}; dest=${@: -1}
   mkdir -p "$dest"
   case "$url" in *otzaria-semantic-search*)
-    mkdir -p "$dest/config/models/meivin-round2-onnx"
-    echo '{"family_id":"stub"}' > "$dest/config/models/meivin-round2-onnx/model.json"
-    echo '{"chunking_version":1}' > "$dest/config/models/meivin-round2-onnx/chunking.json" ;;
+    for family in meivin-round2-onnx meivin-round2-windows-onnx; do
+      mkdir -p "$dest/config/models/$family"
+      echo "{\"family_id\":\"$family\"}" > "$dest/config/models/$family/model.json"
+      echo '{"chunking_version":1}' > "$dest/config/models/$family/chunking.json"
+    done ;;
     *otzaria_search_engine*) mkdir -p "$dest/rust" ;;     # the plugin's crate
   esac
 fi
@@ -1193,11 +1372,24 @@ class Bootstrap(unittest.TestCase):
             self.assertTrue(os.access(b / name, os.X_OK), name)
             self.assertEqual((b / f"{name}.rev").read_text().strip(), rev, name)
             self.assertEqual((b / f"{name}.build").read_text().strip(), build, name)
-        self.assertTrue((b / "family-model.json").exists() and (b / "chunking.json").exists())
+        for name, _ in FAMILIES:
+            self.assertEqual(json.loads((b / "families" / name / "model.json").read_text()), {"family_id": name})
+            self.assertTrue((b / "families" / name / "chunking.json").exists())
+        self.assertFalse((b / "family-model.json").exists() or (b / "chunking.json").exists())
         self.assertFalse((self.state / "build").exists())        # the build directory goes
         p, calls = self.run_bootstrap()                            # and a second run builds nothing
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertFalse([c for c in calls if c.startswith("cargo ")])
+
+    def test_the_single_familys_files_make_way_for_every_familys(self):
+        b = self.state / "bin"
+        b.mkdir(parents=True)
+        for f in ("family-model.json", "chunking.json"):
+            (b / f).write_text("{}")
+        p, calls = self.run_bootstrap()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse((b / "family-model.json").exists() or (b / "chunking.json").exists())
+        self.assertEqual(sorted(d.name for d in (b / "families").iterdir()), sorted(n for n, _ in FAMILIES))
 
     def test_pip_is_handed_the_system_ca_bundle_unless_it_is_told_another(self):
         for env, expected in (({}, str(self.ca)), ({"PIP_CERT": "/elsewhere/bundle.pem"}, "/elsewhere/bundle.pem"),

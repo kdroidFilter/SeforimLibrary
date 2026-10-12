@@ -10,7 +10,7 @@
 #   bin/export_semantic_plan (+ .rev, .build)   the plugin's planner at PLUGIN_REV
 #   bin/validate_semantic_vectors (+ .rev, .build)   the plugin's validator at PLUGIN_REV, with
 #                                          --features semantic: G6 runs the int8 query model
-#   bin/family-model.json, bin/chunking.json   the family's identity and recipe at SIDECAR_REV
+#   bin/families/<name>/{model,chunking}.json   each family's identity and recipe at SIDECAR_REV
 #   venv/                                  the worker's Python: PyTorch ROCm, ONNX Runtime, tokenizers
 #   model-cache/<checksum>/                seeded from --seed-model-dir (checksum-verified), or
 #                                          fetched by the worker on its first run
@@ -61,8 +61,12 @@ build_bin() {  # <name> <repo> <rev> <package dir in the repo> [cargo args...]
   echo "$rev" > "$STATE/bin/$name.rev"
   echo "$build" > "$STATE/bin/$name.build"
   if [ "$name" = otzaria-semantic-search ]; then
-    cp "$STATE/build/src/$FAMILY_CONFIG/model.json" "$STATE/bin/family-model.json"
-    cp "$STATE/build/src/$FAMILY_CONFIG/chunking.json" "$STATE/bin/chunking.json"
+    rm -rf "$STATE/bin/families" "$STATE/bin/family-model.json" "$STATE/bin/chunking.json"
+    for family in $FAMILY_CONFIGS; do
+      config=${family%%:*}
+      mkdir -p "$STATE/bin/families/${config##*/}"
+      cp "$STATE/build/src/$config/model.json" "$STATE/build/src/$config/chunking.json" "$STATE/bin/families/${config##*/}/"
+    done
   fi
   rm -rf "$STATE/build"
   echo "$name at $rev: built"
@@ -75,7 +79,11 @@ if [ -n "$PLUGIN_REV" ]; then
 else
   echo "export_semantic_plan, validate_semantic_vectors: PLUGIN_REV is not pinned — the build can neither plan nor validate"
 fi
-[ -f "$STATE/bin/chunking.json" ] || { echo "bin/chunking.json missing: rebuild the sidecar CLI (remove bin/otzaria-semantic-search.rev)" >&2; exit 1; }
+for family in $FAMILY_CONFIGS; do
+  config=${family%%:*}
+  [ -f "$STATE/bin/families/${config##*/}/chunking.json" ] \
+    || { echo "bin/families/${config##*/}/chunking.json missing: rebuild the sidecar CLI (remove bin/otzaria-semantic-search.rev)" >&2; exit 1; }
+done
 
 if [ ! -x "$STATE/venv/bin/python" ]; then
   python3 -m venv "$STATE/venv"
