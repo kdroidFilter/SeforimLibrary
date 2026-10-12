@@ -178,19 +178,26 @@ class DatabaseGenerator(
         return candidates.firstOrNull { comparableLabel(it.title) == targetKey }
     }
 
+    private val categoryPathById = mutableMapOf<Long, String>()
+
+    /** Titles from the root down to [id], joined by '/', as the category's allocator key. */
+    private suspend fun categoryPath(id: Long): String = categoryPathById.getOrPut(id) {
+        val category = repository.getCategory(id) ?: error("Category $id not found")
+        category.parentId?.let { "${categoryPath(it)}/${category.title}" } ?: category.title
+    }
+
     private suspend fun ensureCategoryHierarchy(rawTitle: String, parentId: Long?, startLevel: Int): CategoryPlacement {
         val normalizedSegments = normalizeCategorySegments(rawTitle)
         var currentParent = parentId
         var currentLevel = startLevel
         var lastId: Long? = null
-        val pathSoFar = StringBuilder()
 
         for (title in normalizedSegments) {
-            if (pathSoFar.isNotEmpty()) pathSoFar.append('/')
-            pathSoFar.append(title)
             val existing = findExistingCategory(currentParent, title)
             val categoryId = existing?.id ?: bindings.upsertCategory(
-                canonicalPath = pathSoFar.toString(),
+                // Full path from the root: a bare folder name ("סדר מועד") is shared by many folders,
+                // and one id per name filed all of them under the first one created.
+                canonicalPath = currentParent?.let { "${categoryPath(it)}/$title" } ?: title,
                 parentId = currentParent,
                 title = title,
                 level = currentLevel,
@@ -1478,19 +1485,23 @@ class DatabaseGenerator(
                         continue
                     }
 
+                    val connectionType = ConnectionType.fromString(linkData.connectionType)
                     val link = Link(
+                        id = allocator.linkId(sourceLineId, targetLineId, bindings.upsertConnectionType(connectionType.name)),
                         sourceBookId = sourceBook.id,
                         targetBookId = targetBook.id,
                         sourceLineId = sourceLineId,
                         targetLineId = targetLineId,
                         targetLineIndex = targetLineIndex,
-                        connectionType = ConnectionType.fromString(linkData.connectionType)
+                        connectionType = connectionType
                     )
 
                     logger.d { "Inserting link from book ${sourceBook.id} to book ${targetBook.id}" }
                     val linkId = repository.insertLink(link)
                     logger.d { "Link inserted with ID: $linkId" }
                     processed++
+                } catch (e: IllegalStateException) {
+                    throw e // link id collision: data would be lost, fail the build
                 } catch (e: Exception) {
                     // Changed from error to debug level to reduce unnecessary error logs
                     logger.d(e) { "Error processing link: ${linkData.heRef_2}" }
@@ -1553,16 +1564,20 @@ class DatabaseGenerator(
                 // Skip links where source or target is a heading line
                 if (sourceLineId in headingLineIds || targetLineId in headingLineIds) continue
 
+                val connectionType = ConnectionType.fromString(linkData.connectionType)
                 val link = Link(
+                    id = allocator.linkId(sourceLineId, targetLineId, bindings.upsertConnectionType(connectionType.name)),
                     sourceBookId = sourceBook.id,
                     targetBookId = targetBook.id,
                     sourceLineId = sourceLineId,
                     targetLineId = targetLineId,
                     targetLineIndex = targetLineIndex,
-                    connectionType = ConnectionType.fromString(linkData.connectionType)
+                    connectionType = connectionType
                 )
                 repository.insertLink(link)
                 processed++
+            } catch (e: IllegalStateException) {
+                throw e // link id collision: data would be lost, fail the build
             } catch (_: Exception) {
                 // Skip malformed entries but continue
             }

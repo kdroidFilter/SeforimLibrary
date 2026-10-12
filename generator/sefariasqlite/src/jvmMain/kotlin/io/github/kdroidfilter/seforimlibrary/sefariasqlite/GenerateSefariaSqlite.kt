@@ -128,7 +128,7 @@ fun main(args: Array<String>) = runBlocking {
                     "build_version" to buildVersion.toString(),
                 ),
             )
-        }.onFailure { logger.w(it) { "Failed to write build_state to $buildStatePath" } }
+        }.getOrElse { throw IllegalStateException("Failed to write build_state to $buildStatePath", it) }
         Unit
 
         logger.i { "Sefaria -> SQLite completed. DB at ${if (useMemoryDb) persistDbPath else dbPath}" }

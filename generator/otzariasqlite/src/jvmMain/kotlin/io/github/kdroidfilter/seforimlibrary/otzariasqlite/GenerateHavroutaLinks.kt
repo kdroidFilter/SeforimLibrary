@@ -92,7 +92,7 @@ fun main(args: Array<String>) = runBlocking {
                     "generated_at" to java.time.Instant.now().toString(),
                 ),
             )
-        }.onFailure { logger.w(it) { "Failed to write build_state to $buildStatePath" } }
+        }.getOrElse { throw IllegalStateException("Failed to write build_state to $buildStatePath", it) }
         Unit
     } catch (e: Exception) {
         logger.e(e) { "Error generating Havrouta links" }

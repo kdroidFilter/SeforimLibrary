@@ -99,7 +99,8 @@ fun main() = runBlocking {
                 repo.executeRawQuery("PRAGMA foreign_keys=ON")
                 logger.i { "[IndexDefault] Seed complete: ${'$'}{tables.size} tables copied" }
             }.onFailure { e ->
-                logger.e(e) { "[IndexDefault] Failed to seed in-memory DB; falling back to disk reads" }
+                logger.e(e) { "[IndexDefault] Failed to seed in-memory DB" }
+                throw e // the index would be built from an empty or partial DB
             }
         } else {
             logger.w { "[IndexDefault] Base DB not found at $baseDb; cannot seed in-memory DB" }

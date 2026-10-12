@@ -78,7 +78,8 @@ fun main(args: Array<String>) = runBlocking {
                     repository.executeRawQuery("PRAGMA foreign_keys=ON")
                     logger.i { "Seeding completed. Imported ${'$'}{tables.size} tables." }
                 }.onFailure { e ->
-                    logger.e(e) { "Failed to seed in-memory DB from $baseDb. Links may not be processed." }
+                    logger.e(e) { "Failed to seed in-memory DB from $baseDb" }
+                    throw e // the persist step would otherwise overwrite the DB with a partial copy
                 }
             } else {
                 logger.w { "Base DB not found at $baseDb; running with empty in-memory DB" }
@@ -108,7 +109,7 @@ fun main(args: Array<String>) = runBlocking {
                     "generated_at" to java.time.Instant.now().toString(),
                 ),
             )
-        }.onFailure { logger.w(it) { "Failed to write build_state to $buildStatePath" } }
+        }.getOrElse { throw IllegalStateException("Failed to write build_state to $buildStatePath", it) }
         Unit
         if (useMemoryDb) {
             // Persist in-memory DB to disk using VACUUM INTO (target must not exist)
