@@ -947,6 +947,12 @@ internal class SefariaBookPayloadReader(
                     else -> "<h5>" to "</h5>"
                 }
                 val title = sectionName?.let { "$it $letter" } ?: letter
+                val legacy = if (currentAddressType == "Talmud") null else legacyThousandsGematria(idx + 1)
+                if (lineKeyHashOverrides != null && legacy != null) {
+                    val oldTitle = sectionName?.let { "$it $legacy" } ?: legacy
+                    lineKeyHashOverrides[output.size] =
+                        IdAllocatorBindings.lineNaturalKeyHash("${tag.first}$oldTitle${tag.second}")
+                }
                 output += "${tag.first}$title${tag.second}"
                 headings += Heading(
                     title = title,
@@ -1192,7 +1198,7 @@ private fun ownLabel(item: JsonElement, number: Int, variants: Boolean): LabelKi
 }
 
 // Inverse of toGematria, for validating printed markers.
-private val gematriaToInt: Map<String, Int> = (1..999).associateBy { toGematria(it) }
+private val gematriaToInt: Map<String, Int> = (1..1199).associateBy { toGematria(it) }
 
 /** מבנה סכמה שהמייבא לא יודע לפרש — נפילה רועשת במקום דילוג שקט על הספר. */
 internal class SefariaSchemaException(message: String) : IllegalStateException(message)

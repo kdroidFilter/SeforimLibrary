@@ -22,14 +22,19 @@ private val TRAILING_SPACES_NUMBER_REGEX = Regex(" +(\\d+[ab]?)$")
 private const val CANONICAL_CACHE_MAX = 500_000
 private val canonicalCitationCache = ConcurrentHashMap<String, String>()
 
+/** The form [toGematria] printed for 1000–1199 before "תתר" ("א ", "א א"); line ids built from it stay. */
+internal fun legacyThousandsGematria(num: Int): String? =
+    if (num in 1000..1199) "${toGematria(num / 1000)} ${if (num % 1000 > 0) toGematria(num % 1000) else ""}" else null
+
 internal fun toGematria(num: Int): String {
     if (num <= 0) return num.toString()
 
     // Check cache first
     gematriaCache[num]?.let { return it }
 
-    val thousands = num / 1000
-    var remainder = num % 1000
+    // Below 1200 the print repeats tav ("תתר" for a thousand), like Sefaria does.
+    val thousands = if (num < 1200) 0 else num / 1000
+    var remainder = if (num < 1200) num else num % 1000
     val builder = StringBuilder()
     if (thousands > 0) {
         builder.append(toGematria(thousands)).append(' ')
