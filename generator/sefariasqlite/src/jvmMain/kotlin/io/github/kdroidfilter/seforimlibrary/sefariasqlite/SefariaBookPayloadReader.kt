@@ -690,7 +690,7 @@ internal class SefariaBookPayloadReader(
                     cleanShifts = cleanShifts,
                     lineKeyHashOverrides = lineKeyHashOverrides,
                     simanTopicLines = simanTopicLines,
-                    numbersIntegerLeaf = numbersIntegerLeaf(node),
+                    numbersIntegerLeaf = numbersIntegerLeaf(node, refPrefix),
                     labels = labels.section(refPrefix),
                 )
             }
@@ -1000,7 +1000,8 @@ internal class SefariaBookPayloadReader(
 
     // "Integer" is Sefaria's default address type, not "unnumbered": the leaf is
     // numbered unless its own Hebrew name is blank or paragraph/comment/line-like.
-    private fun numbersIntegerLeaf(node: JsonObject): Boolean {
+    private fun numbersIntegerLeaf(node: JsonObject, refPrefix: String = ""): Boolean {
+        if (NUMBERED_PARAGRAPH_SECTIONS.any(refPrefix::startsWith)) return true
         val he = node["heSectionNames"]?.jsonArray ?: return false
         val leafIndex = maxOf(he.size, node["sectionNames"]?.jsonArray?.size ?: 0) - 1
         val leaf = he.getOrNull(leafIndex)?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
@@ -1076,6 +1077,12 @@ internal class SefariaBookPayloadReader(
 // Integer leaves Sefaria names as paragraphs, comments or lines stay unprefixed;
 // "מדרש" too, since the Simanim alt-TOC already prints its letters.
 private val UNNUMBERED_INTEGER_LEAF_NAMES = setOf("פסקה", "פירוש", "פרשנות", "שורה", "מדרש")
+
+// Seifim Sefaria names "פסקה" although the print numbers them (Hilchot Ribit, Choshen Mishpat).
+private val NUMBERED_PARAGRAPH_SECTIONS = listOf(
+    "Shulchan Arukh HaRav, Yoreh Deah, ",
+    "Shulchan Arukh HaRav, Choshen Mishpat, ",
+)
 
 /** `match_templates[].scope` values that make an alt-struct node citable alone. */
 private val ALONE_MATCH_TEMPLATE_SCOPES = setOf("any", "alone")
