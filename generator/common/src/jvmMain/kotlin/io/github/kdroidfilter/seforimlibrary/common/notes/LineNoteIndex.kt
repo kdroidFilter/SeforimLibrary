@@ -8,7 +8,10 @@ import io.github.kdroidfilter.seforimlibrary.common.patch.SCHEMA_7_TABLE_DDL
 import java.sql.Connection
 
 data class LineNoteIndexReport(
+    /** Lines the pre-filter selected (any case of "footnote"). */
     val linesScanned: Long,
+    /** Selected lines in which the parser found no note body. */
+    val linesWithoutNote: Long,
     val linesChanged: Long,
     val notes: Long,
     val unanchoredNotes: Long,
@@ -17,8 +20,12 @@ data class LineNoteIndexReport(
     /** Lines left untouched: a marker sup not followed by a note would break the k-th marker rule. */
     val orphanMarkerLines: Long,
     val anchorsRemapped: Long,
-    /** Anchors inside a removed body, or colliding with another anchor of the link after the shift. */
-    val anchorsDropped: Long,
+    /** Range anchors with one end inside a removed body, cut back to the body's edge. */
+    val anchorsClipped: Long,
+    /** Point anchors inside a removed body, and ranges left empty by it. */
+    val anchorsDroppedInBody: Long,
+    /** Anchors whose shifted position collides with another anchor of the same link and side. */
+    val anchorsDroppedOnCollision: Long,
     /** NULL version_line rows of changed lines given the old text (split shape only), so they keep it. */
     val versionRowsMaterialized: Long,
 )
@@ -56,13 +63,16 @@ private class LineNotePass(
     private val batchSize: Int,
 ) : AutoCloseable {
     private var scanned = 0L
+    private var withoutNote = 0L
     private var changed = 0L
     private var notes = 0L
     private var unanchored = 0L
     private var unclosed = 0L
     private var orphanMarkers = 0L
     private var remapped = 0L
-    private var dropped = 0L
+    private var clipped = 0L
+    private var droppedInBody = 0L
+    private var droppedOnCollision = 0L
     private var materialized = 0L
     private var batches = 0
     private val opened = ArrayList<java.sql.PreparedStatement>()
@@ -72,9 +82,9 @@ private class LineNotePass(
     private val select = prepare(
         if (split) {
             "SELECT l.id, c.content FROM line l JOIN line_content c ON c.id = l.id " +
-                "WHERE l.id > ? AND instr(c.content, 'class=\"footnote\"') > 0 ORDER BY l.id LIMIT ?"
+                "WHERE l.id > ? AND instr(lower(c.content), 'footnote') > 0 ORDER BY l.id LIMIT ?"
         } else {
-            "SELECT id, content FROM line WHERE id > ? AND instr(content, 'class=\"footnote\"') > 0 ORDER BY id LIMIT ?"
+            "SELECT id, content FROM line WHERE id > ? AND instr(lower(content), 'footnote') > 0 ORDER BY id LIMIT ?"
         },
     )
     private val existing = prepare("SELECT 1 FROM line_note WHERE lineId = ? LIMIT 1")
@@ -101,7 +111,9 @@ private class LineNotePass(
     private val hasAnchors = tableExists("link_anchor") && tableExists("link")
     private val hasNullableVersions = split && tableExists("version_line")
 
-    private class Anchor(val linkId: Long, val side: Int, val start: Int, val end: Int?, val label: String?)
+    private class Anchor(
+        val linkId: Long, val side: Int, val start: Int, val end: Int?, val label: String?, val clipped: Boolean = false,
+    )
 
     fun run(): LineNoteIndexReport {
         var lastId = Long.MIN_VALUE
@@ -117,7 +129,8 @@ private class LineNotePass(
             if (++batches % 50 == 0) logger.i { "line_note: $scanned lines with notes scanned, $changed changed" }
         }
         val report = LineNoteIndexReport(
-            scanned, changed, notes, unanchored, unclosed, orphanMarkers, remapped, dropped, materialized,
+            scanned, withoutNote, changed, notes, unanchored, unclosed, orphanMarkers,
+            remapped, clipped, droppedInBody, droppedOnCollision, materialized,
         )
         logger.i { "line_note: $report" }
         return report
@@ -132,7 +145,10 @@ private class LineNotePass(
             }
             is InlineNotes.Parsed.Notes -> parsed.notes
         }
-        if (found.isEmpty()) return
+        if (found.isEmpty()) {
+            withoutNote++
+            return
+        }
         val stripped = InlineNotes.strip(content, found)
         if (InlineNotes.countMarkers(stripped) != found.count { it.marker != null }) {
             if (orphanMarkers++ < SAMPLE) logger.w { "line_note: line $id has a marker sup without a note; left inline" }
@@ -181,11 +197,16 @@ private class LineNotePass(
         val moves = ArrayList<Pair<Anchor, Anchor?>>()
         for (a in anchors) {
             val start = shift(a.start, removed)
-            val end = a.end?.let { shift(it, removed) }
-            val kept = start != null && (a.end == null || (end != null && end > start))
+            val new = if (a.end == null) {
+                start.takeUnless { start.inside }?.let { Anchor(a.linkId, a.side, it.value, null, a.label) }
+            } else {
+                val end = shift(a.end, removed)
+                if (end.value <= start.value) null
+                else Anchor(a.linkId, a.side, start.value, end.value, a.label, clipped = start.inside || end.inside)
+            }
             when {
-                !kept -> moves += a to null
-                start != a.start || end != a.end -> moves += a to Anchor(a.linkId, a.side, start!!, end, a.label)
+                new == null -> moves += a to null
+                new.start != a.start || new.end != a.end -> moves += a to new
             }
         }
         if (moves.isEmpty()) return
@@ -196,26 +217,33 @@ private class LineNotePass(
             deleteAnchor.executeUpdate()
         }
         for ((_, new) in moves) {
-            if (new == null) { dropped++; continue }
+            if (new == null) { droppedInBody++; continue }
             insertAnchor.setLong(1, new.linkId)
             insertAnchor.setInt(2, new.side)
             insertAnchor.setInt(3, new.start)
             if (new.end == null) insertAnchor.setNull(4, java.sql.Types.INTEGER) else insertAnchor.setInt(4, new.end)
             insertAnchor.setString(5, new.label)
-            if (insertAnchor.executeUpdate() == 1) remapped++ else dropped++
+            if (insertAnchor.executeUpdate() == 1) {
+                remapped++
+                if (new.clipped) clipped++
+            } else {
+                droppedOnCollision++
+            }
         }
     }
 
-    /** Position after the removal, or null when it falls strictly inside a removed body. */
-    private fun shift(x: Int, removed: List<Pair<Int, Int>>): Int? {
+    /** [value]: position after the removal; one strictly inside a removed body moves to that body's start. */
+    private class Shifted(val value: Int, val inside: Boolean)
+
+    private fun shift(x: Int, removed: List<Pair<Int, Int>>): Shifted {
         var delta = 0
         for ((start, end) in removed) {
             when {
                 x >= end -> delta += end - start
-                x > start -> return null
+                x > start -> return Shifted(start - delta, inside = true)
             }
         }
-        return x - delta
+        return Shifted(x - delta, inside = false)
     }
 
     override fun close() {

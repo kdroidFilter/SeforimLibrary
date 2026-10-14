@@ -40,6 +40,21 @@ class InlineNotesTest {
     }
 
     @Test
+    fun `no-break spaces between the sup and the note still anchor it`() {
+        for (gap in listOf("&nbsp;", "&#160;", "&#xA0;", "\u00A0", " &NBSP; ")) {
+            val line = "<sup class=\"footnote-marker\">1</sup>$gap<i class=\"footnote\">x</i>"
+            assertEquals(listOf("1"), notes(line).map { it.marker }, gap)
+        }
+        assertEquals(listOf(null), notes("<sup class=\"footnote-marker\">1</sup>&amp;<i class=\"footnote\">x</i>").map { it.marker })
+    }
+
+    @Test
+    fun `tag and attribute case and spacing do not matter`() {
+        val line = "<SUP CLASS = \"footnote-marker\">1</SUP><I Class=\"footnote\">x</I>"
+        assertEquals(listOf("1" to "x"), notes(line).map { it.marker to it.body })
+    }
+
+    @Test
     fun `several notes keep reading order and each marker's raw inner HTML`() {
         val line = "א<sup class=\"footnote-marker\"><b>2</b></sup><i class=\"footnote\">ראשונה</i> ב " +
             "<i class=\"footnote\">בלי סמן</i> ג<sup class=\"footnote-marker\">ג</sup><i class=\"footnote\">שלישית</i>"

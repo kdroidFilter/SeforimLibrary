@@ -79,24 +79,28 @@ class LineNoteIndexTest {
                 // side 0 of link 1 and side 1 of link 2 are on line 100; side 1 of link 1 is on line 101.
                 st.execute(
                     "INSERT INTO link_anchor(linkId, side, charStart, charEnd, label) VALUES " +
-                        "(1, 0, 1, NULL, 'a'), (1, 0, 3, NULL, NULL), (1, 0, 4, NULL, NULL), (1, 0, 6, 12, NULL), " +
-                        "(1, 0, 8, 11, NULL), (1, 0, 10, NULL, NULL), (1, 1, 5, NULL, NULL), " +
-                        "(2, 1, 7, 10, NULL), (2, 1, 2, 11, NULL), (2, 0, 7, NULL, NULL)",
+                        "(1, 0, 1, NULL, 'a'), (1, 0, 3, NULL, NULL), (1, 0, 4, NULL, NULL), (1, 0, 5, NULL, NULL), " +
+                        "(1, 0, 6, 12, NULL), (1, 0, 8, 11, NULL), (1, 0, 11, NULL, NULL), (1, 1, 5, NULL, NULL), " +
+                        "(2, 1, 7, 10, NULL), (2, 1, 2, 11, NULL), (2, 1, 4, 8, NULL), (2, 0, 7, NULL, NULL)",
                 )
             }
             val report = rebuildLineNoteIndex(conn, logger)
-            assertEquals(3, report.anchorsRemapped)
-            assertEquals(3, report.anchorsDropped)
+            assertEquals(5, report.anchorsRemapped)
+            assertEquals(2, report.anchorsClipped, "ranges with one end in a body are cut back to its edge")
+            assertEquals(2, report.anchorsDroppedInBody, "a point inside a body, a range wholly inside one")
+            assertEquals(1, report.anchorsDroppedOnCollision, "5 shifts onto the untouched anchor at 3")
         }
         assertEquals(
             listOf(
                 listOf<Any?>(1, 0, 1, null, "a"),
                 listOf<Any?>(1, 0, 3, null, null),
                 listOf<Any?>(1, 0, 4, 7, null),
-                listOf<Any?>(1, 0, 5, null, null),
+                listOf<Any?>(1, 0, 5, 6, null),
+                listOf<Any?>(1, 0, 6, null, null),
                 listOf<Any?>(1, 1, 5, null, null),
                 listOf<Any?>(2, 0, 7, null, null),
                 listOf<Any?>(2, 1, 2, 6, null),
+                listOf<Any?>(2, 1, 3, 5, null),
             ),
             query(db, "SELECT linkId, side, charStart, charEnd, label FROM link_anchor ORDER BY linkId, side, charStart"),
         )
@@ -113,6 +117,21 @@ class LineNoteIndexTest {
         assertEquals(0, report.linesChanged)
         assertEquals(listOf(listOf<Any?>(unclosed), listOf<Any?>(orphan)), query(db, "SELECT content FROM line ORDER BY id"))
         assertTrue(query(db, "SELECT * FROM line_note").isEmpty())
+    }
+
+    @Test
+    fun `the pre-filter is as broad as the parser and counts lines without a note`() {
+        val upper = "א<SUP CLASS = \"footnote-marker\">1</SUP><I CLASS = \"footnote\">גוף</I>"
+        val db = db(listOf(upper, "המילה footnote בטקסט", "<sup class=\"footnote-marker\">1</sup>&nbsp;<i class=\"footnote\">ב</i>"))
+        val report = connect(db).use { rebuildLineNoteIndex(it, logger) }
+        assertEquals(3, report.linesScanned)
+        assertEquals(1, report.linesWithoutNote)
+        assertEquals(2, report.linesChanged)
+        assertEquals(0, report.orphanMarkerLines, "a no-break space keeps the marker adjacent")
+        assertEquals(
+            listOf(listOf<Any?>(100, 0, "1", "גוף"), listOf<Any?>(102, 0, "1", "ב")),
+            query(db, "SELECT lineId, noteIndex, marker, body FROM line_note ORDER BY lineId"),
+        )
     }
 
     @Test

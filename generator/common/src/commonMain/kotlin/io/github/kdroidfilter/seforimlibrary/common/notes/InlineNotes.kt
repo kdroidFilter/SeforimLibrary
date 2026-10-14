@@ -5,8 +5,8 @@ package io.github.kdroidfilter.seforimlibrary.common.notes
  * the idiom of Sefaria books and of merged 'הערות על' companions.
  *
  * A body ends at the `</i>` that closes its own opening tag, so `<i>` nested in a body
- * belongs to it. A note is anchored when only whitespace separates it from a preceding
- * footnote-marker `<sup>`; that sup is not part of the note.
+ * belongs to it. A note is anchored when only whitespace (no-break spaces included, also as
+ * entities) separates it from a preceding footnote-marker `<sup>`; that sup is not part of the note.
  */
 object InlineNotes {
 
@@ -44,12 +44,10 @@ object InlineNotes {
         while (true) {
             val open = NOTE_OPEN.find(line, cursor) ?: break
             val close = matchingClose(line, open.range.first) ?: return Parsed.Unclosed(open.range.first)
-            var before = open.range.first
-            while (before > 0 && line[before - 1].isWhitespace()) before--
             notes += Note(
                 start = open.range.first,
                 end = close.range.last + 1,
-                marker = markersByEnd[before],
+                marker = markersByEnd[gapStart(line, open.range.first)],
                 body = line.substring(open.range.last + 1, close.range.first),
             )
             cursor = close.range.last + 1
@@ -85,6 +83,20 @@ object InlineNotes {
         out.append(line, cursor, line.length)
         return MARKER.replace(out, "")
     }
+
+    /** Start of the run of whitespace and no-break-space entities that ends at [end]. */
+    private fun gapStart(line: String, end: Int): Int {
+        var at = end
+        while (at > 0) {
+            if (line[at - 1].isWhitespace() || line[at - 1] == '\u00A0') { at--; continue }
+            val entity = NBSP_ENTITIES.firstOrNull { line.regionMatches(at - it.length, it, 0, it.length, ignoreCase = true) }
+                ?: break
+            at -= entity.length
+        }
+        return at
+    }
+
+    private val NBSP_ENTITIES = listOf("&nbsp;", "&#160;", "&#xa0;")
 
     private fun matchingClose(line: String, openAt: Int): MatchResult? {
         var depth = 0

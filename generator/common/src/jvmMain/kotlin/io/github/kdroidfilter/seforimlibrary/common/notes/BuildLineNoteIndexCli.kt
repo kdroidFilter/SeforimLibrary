@@ -27,8 +27,10 @@ fun main() {
         val report = rebuildLineNoteIndex(conn, logger)
         logger.i {
             "line_note: ${report.notes} notes (${report.unanchoredNotes} without a marker) moved out of " +
-                "${report.linesChanged} lines; ${report.anchorsRemapped} anchors shifted, ${report.anchorsDropped} dropped; " +
-                "left inline: ${report.unclosedLines} unclosed, ${report.orphanMarkerLines} with a marker but no note"
+                "${report.linesChanged} lines; ${report.anchorsRemapped} anchors shifted (${report.anchorsClipped} clipped), " +
+                "${report.anchorsDroppedInBody} dropped inside a body, ${report.anchorsDroppedOnCollision} on a collision; " +
+                "left inline: ${report.unclosedLines} unclosed, ${report.orphanMarkerLines} with a marker but no note; " +
+                "${report.linesWithoutNote} pre-filtered lines had no note"
         }
     }
 }
