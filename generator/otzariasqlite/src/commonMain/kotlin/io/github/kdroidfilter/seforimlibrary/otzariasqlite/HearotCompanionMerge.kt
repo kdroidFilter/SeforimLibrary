@@ -1,5 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.otzariasqlite
 
+import io.github.kdroidfilter.seforimlibrary.common.notes.InlineNotes
+
 /**
  * Merges 'הערות על X' companion-note files into the base book's lines as inline
  * footnotes — `<sup class="footnote-marker">N</sup><i class="footnote">body</i>`,
@@ -31,16 +33,8 @@ internal object HearotCompanionMerge {
     private val NOTE_SUP = Regex("""^﻿?<sup(?:\s[^>]*)?>([^<]+)</sup>\s*""")
     private val NOTE_BARE_NUMBER = Regex("""^﻿?(\d+)\s+""")
 
-    private val FOOTNOTE_BODY =
-        Regex("""<i\s+class="footnote">.*?</i>""", RegexOption.DOT_MATCHES_ALL)
-    private val FOOTNOTE_MARKER =
-        Regex("""<sup\s+class="footnote-marker">.*?</sup>""", RegexOption.DOT_MATCHES_ALL)
-
     /** Strips merged markers+bodies; keeps TOC text of heading lines clean. */
-    fun stripFootnotes(line: String): String {
-        if (!line.contains("footnote")) return line
-        return line.replace(FOOTNOTE_BODY, "").replace(FOOTNOTE_MARKER, "")
-    }
+    fun stripFootnotes(line: String): String = InlineNotes.stripMarkersAndBodies(line)
 
     /**
      * Returns [baseLines] with [notesByLine] (0-based base line → note lines in

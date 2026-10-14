@@ -54,6 +54,7 @@ tasks.register("generateSeforimDb") {
     dependsOn(":sefariasqlite:seedGenerations")
     dependsOn(":sefariasqlite:seedAllMetadata")
     dependsOn(":sefariasqlite:seedBookNotices")
+    dependsOn(":generator-common:buildLineNoteIndex")
     dependsOn(":generator-common:buildLineRefIndex")
     dependsOn(":generator-common:buildLineDhIndex")
     dependsOn(":sefariasqlite:buildLineDivineNameIndex")
@@ -80,6 +81,7 @@ val lineContentWriters = listOf(
     ":sefariasqlite:seedGenerations",
     ":sefariasqlite:seedAllMetadata",
     ":sefariasqlite:seedBookNotices",
+    ":generator-common:buildLineNoteIndex",
     ":sefariasqlite:synthesizeSeifimAltToc",
     ":sefariasqlite:synthesizeSimanNamesAltToc",
     ":sefariasqlite:inheritChaptersAltToc",
@@ -160,9 +162,22 @@ listOf(
     }
 }
 
+// line_note moves footnote bodies out of line text and shifts the visible-char offsets
+// of link_anchor, so it follows every line writer and precedes every stage that reads
+// the text or stores offsets into it (each of those orders itself after it below).
+project(":generator-common").tasks.matching { it.name == "buildLineNoteIndex" }.configureEach {
+    mustRunAfter(":otzariasqlite:appendOtzaria")
+    mustRunAfter(":otzariasqlite:generateHavroutaLinks")
+    mustRunAfter(":sefariasqlite:renameCategories")
+    mustRunAfter(":sefariasqlite:seedGenerations")
+    mustRunAfter(":sefariasqlite:seedAllMetadata")
+    mustRunAfter(":sefariasqlite:seedBookNotices")
+}
+
 // line_ref is derived from line.heRef + book.title, so it must be rebuilt
 // after every stage that writes or renames books and lines.
 project(":generator-common").tasks.matching { it.name == "buildLineRefIndex" }.configureEach {
+    mustRunAfter(":generator-common:buildLineNoteIndex")
     mustRunAfter(":otzariasqlite:appendOtzaria")
     mustRunAfter(":otzariasqlite:generateHavroutaLinks")
     mustRunAfter(":sefariasqlite:renameCategories")
@@ -178,6 +193,7 @@ project(":generator-common").tasks.matching { it.name == "buildLineRefIndex" }.c
 // stage that writes lines. Ordered after buildLineRefIndex as well so the
 // two index builders write to seforim.db sequentially rather than concurrently.
 project(":generator-common").tasks.matching { it.name == "buildLineDhIndex" }.configureEach {
+    mustRunAfter(":generator-common:buildLineNoteIndex")
     mustRunAfter(":otzariasqlite:appendOtzaria")
     mustRunAfter(":otzariasqlite:generateHavroutaLinks")
     mustRunAfter(":sefariasqlite:renameCategories")
@@ -192,6 +208,7 @@ project(":generator-common").tasks.matching { it.name == "buildLineDhIndex" }.co
 // index builders, so writers stay sequential), before splitLineContent (via
 // lineContentWriters) and long before compression.
 project(":sefariasqlite").tasks.matching { it.name == "buildLineDivineNameIndex" }.configureEach {
+    mustRunAfter(":generator-common:buildLineNoteIndex")
     mustRunAfter(":otzariasqlite:appendOtzaria")
     mustRunAfter(":otzariasqlite:generateHavroutaLinks")
     mustRunAfter(":sefariasqlite:renameCategories")
@@ -254,6 +271,7 @@ project(":sefariasqlite").tasks.matching { it.name == "seedBookNotices" }.config
 // runs after every book- and link-writing stage. Ordered after the other
 // post-process seeders so they write to seforim.db sequentially.
 project(":sefariasqlite").tasks.matching { it.name == "synthesizeSeifimAltToc" }.configureEach {
+    mustRunAfter(":generator-common:buildLineNoteIndex")
     mustRunAfter(":otzariasqlite:appendOtzaria")
     mustRunAfter(":otzariasqlite:generateHavroutaLinks")
     mustRunAfter(":sefariasqlite:renameCategories")
@@ -264,6 +282,7 @@ project(":sefariasqlite").tasks.matching { it.name == "synthesizeSeifimAltToc" }
 // synthesizeSimanNamesAltToc reads the Sefaria Topic structures and COMMENTARY
 // links; ordered after synthesizeSeifimAltToc only so the two write sequentially.
 project(":sefariasqlite").tasks.matching { it.name == "synthesizeSimanNamesAltToc" }.configureEach {
+    mustRunAfter(":generator-common:buildLineNoteIndex")
     mustRunAfter(":otzariasqlite:appendOtzaria")
     mustRunAfter(":otzariasqlite:generateHavroutaLinks")
     mustRunAfter(":sefariasqlite:renameCategories")
@@ -275,6 +294,7 @@ project(":sefariasqlite").tasks.matching { it.name == "synthesizeSimanNamesAltTo
 // inheritChaptersAltToc skips any book that already has an alt structure, so
 // it must see every other alt-TOC writer's output, Seifim included.
 project(":sefariasqlite").tasks.matching { it.name == "inheritChaptersAltToc" }.configureEach {
+    mustRunAfter(":generator-common:buildLineNoteIndex")
     mustRunAfter(":otzariasqlite:appendOtzaria")
     mustRunAfter(":otzariasqlite:generateHavroutaLinks")
     mustRunAfter(":sefariasqlite:renameCategories")
@@ -285,6 +305,7 @@ project(":sefariasqlite").tasks.matching { it.name == "inheritChaptersAltToc" }.
     mustRunAfter(":sefariasqlite:synthesizeSimanNamesAltToc")
 }
 project(":catalog").tasks.matching { it.name == "buildCatalog" }.configureEach {
+    mustRunAfter(":generator-common:buildLineNoteIndex")
     mustRunAfter(":otzariasqlite:generateHavroutaLinks")
     mustRunAfter(":sefariasqlite:seedGenerations")
     mustRunAfter(":sefariasqlite:seedAllMetadata")
