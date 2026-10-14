@@ -170,9 +170,9 @@ class LogicalContentHasher(
             add(indexOf("line_content") + 1, "zstd_dict")
         }
 
-        /** Schema 7 adds the per-book notices and the per-line indexes right before schema_meta. */
+        /** Schema 7 adds the per-book notices, the per-line indexes and the notes right before schema_meta. */
         val TABLES_SCHEMA_7: List<String> = TABLES_SCHEMA_6.toMutableList().apply {
-            addAll(indexOf("schema_meta"), listOf("book_banner", "book_protection", "line_divine_name", "line_note"))
+            addAll(indexOf("schema_meta"), listOf("book_banner", "book_protection", "line_divine_name", "line_note", "line_note_divine_name"))
         }
 
         /** Current-schema default for build-time diagnostics and current DB tests. */

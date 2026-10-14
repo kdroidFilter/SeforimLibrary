@@ -71,6 +71,7 @@
 --     book_protection.bookId          -> book(id)                ON DELETE CASCADE
 --     line_divine_name.lineId         -> line(id)                ON DELETE CASCADE
 --     line_note.lineId                -> line(id)                ON DELETE CASCADE
+--     line_note_divine_name.(lineId, noteIndex) -> line_note     ON DELETE CASCADE
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- Schema-level metadata (db_version, db_schema_version, content_hash, ...)
@@ -642,13 +643,28 @@ CREATE TABLE IF NOT EXISTS line_divine_name (
 ) WITHOUT ROWID;
 
 -- Schema 7. Inline footnote bodies moved out of the line text by buildLineNoteIndex.
--- noteIndex is the reading order in the line; marker is the inner HTML of the
+-- noteIndex is the reading order in the line; charPos is the visible offset in the
+-- stored line where the body stood; marker is the inner HTML of the
 -- <sup class="footnote-marker"> left in place before the note, NULL when the note
 -- had none. The k-th marker sup of the line belongs to the k-th row with a marker.
 CREATE TABLE IF NOT EXISTS line_note (
     lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
     noteIndex INTEGER NOT NULL,
+    charPos INTEGER NOT NULL,
     marker TEXT,
     body TEXT NOT NULL,
     PRIMARY KEY (lineId, noteIndex)
+) WITHOUT ROWID;
+
+-- Schema 7. Verified divine names inside each note body, in visible-char offsets
+-- within the body; same kind/source codes as line_divine_name.
+CREATE TABLE IF NOT EXISTS line_note_divine_name (
+    lineId INTEGER NOT NULL,
+    noteIndex INTEGER NOT NULL,
+    charStart INTEGER NOT NULL,
+    charEnd INTEGER NOT NULL,
+    kind INTEGER NOT NULL,
+    source INTEGER NOT NULL,
+    PRIMARY KEY (lineId, noteIndex, charStart),
+    FOREIGN KEY (lineId, noteIndex) REFERENCES line_note(lineId, noteIndex) ON DELETE CASCADE
 ) WITHOUT ROWID;

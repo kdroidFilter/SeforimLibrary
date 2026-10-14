@@ -34,8 +34,9 @@ class DeltaApplierSchemaSevenTest {
         assertEquals(7, manifest.toSchemaVersion)
         val result = DeltaApplierClient().apply(prev, patch, manifest)
 
-        assertEquals(8, result.applied.migrationsApplied)
+        assertEquals(10, result.applied.migrationsApplied)
         assertEquals(2, result.applied.upsertCounts.getValue("line_note"))
+        assertEquals(1, result.applied.upsertCounts.getValue("line_note_divine_name"))
         assertEquals(hash(next, 7), hash(prev, 7))
     }
 
@@ -80,7 +81,8 @@ class DeltaApplierSchemaSevenTest {
                 if (schemaSeven) {
                     SCHEMA_7_TABLE_DDL.values.forEach { st.execute(it) }
                     st.execute("INSERT INTO book_banner VALUES (1, 'באדיבות\nהמו\"ל')")
-                    st.execute("INSERT INTO line_note VALUES (1, 0, '1', 'גוף'), (2, 0, NULL, 'נספח')")
+                    st.execute("INSERT INTO line_note VALUES (1, 0, 3, '1', 'גוף'), (2, 0, 7, NULL, 'נספח')")
+                    st.execute("INSERT INTO line_note_divine_name VALUES (1, 0, 0, 3, 1, 1)")
                 }
             }
         }

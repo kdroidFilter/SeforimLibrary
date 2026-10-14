@@ -43,6 +43,7 @@
     { "table": "book_protection", "pk": ["bookId"], "updatable": true },
     { "table": "line_divine_name", "pk": ["lineId", "charStart"], "updatable": true },
     { "table": "line_note", "pk": ["lineId", "noteIndex"], "updatable": true },
+    { "table": "line_note_divine_name", "pk": ["lineId", "noteIndex", "charStart"], "updatable": true },
     { "table": "schema_meta", "pk": ["key"], "updatable": true }
   ],
   "hashOrder": [
@@ -88,6 +89,7 @@
     "book_protection",
     "line_divine_name",
     "line_note",
+    "line_note_divine_name",
     "schema_meta"
   ]
 }

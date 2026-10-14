@@ -36,7 +36,10 @@ class SchemaSevenPatchTest {
         }
         assertEquals(expected, migrations)
         assertEquals(
-            mapOf("book_banner" to 2, "book_protection" to 1, "line_divine_name" to 2, "line_note" to 3),
+            mapOf(
+                "book_banner" to 2, "book_protection" to 1, "line_divine_name" to 2, "line_note" to 3,
+                "line_note_divine_name" to 1,
+            ),
             produced.upsertCounts.filterKeys { it in SCHEMA_7_TABLES },
         )
         assertEquals(1, produced.upsertCounts.getValue("line"), "the stripped line is an ordinary upsert")
@@ -47,12 +50,16 @@ class SchemaSevenPatchTest {
         connect(target).use { conn ->
             conn.createStatement().use { it.execute("PRAGMA foreign_keys = ON") }
             val result = PatchApplier().apply(conn, patch, expectedToContentHash = hash(next, 7), expectedToSchemaVersion = 7)
-            assertEquals(8, result.migrationsApplied)
+            assertEquals(10, result.migrationsApplied)
         }
         assertEquals(hash(next, 7), hash(target, 7))
         assertEquals(
-            listOf(listOf<Any?>(10, 0, "1", "גוף <i>פנימי</i>"), listOf<Any?>(10, 1, null, "נספח"), listOf<Any?>(11, 0, "*", "ב")),
-            query(target, "SELECT lineId, noteIndex, marker, body FROM line_note ORDER BY lineId, noteIndex"),
+            listOf(
+                listOf<Any?>(10, 0, 2, "1", "גוף <i>פנימי</i>"),
+                listOf<Any?>(10, 1, 6, null, "נספח"),
+                listOf<Any?>(11, 0, 1, "*", "ב"),
+            ),
+            query(target, "SELECT lineId, noteIndex, charPos, marker, body FROM line_note ORDER BY lineId, noteIndex"),
         )
     }
 
@@ -112,17 +119,17 @@ class SchemaSevenPatchTest {
     @Test
     fun `line_note hashes rows ordered by every column alphabetically`() {
         val db = tablesDb("order.db")
-        insertNotes(db, listOf(listOf(2, 0, "1", "ב"), listOf(1, 0, null, "א")))
+        insertNotes(db, listOf(listOf(2, 0, 7, "1", "ב"), listOf(1, 0, 3, null, "א")))
         val actual = connect(db).use { LogicalContentHasher(listOf("line_note")).computeReport(it).tableHashes }
 
         val bytes = ByteArrayOutputStream()
         bytes.write(" table:line_note ".toByteArray())
-        bytes.write("cols:body,lineId,marker,noteIndex".toByteArray())
+        bytes.write("cols:body,charPos,lineId,marker,noteIndex".toByteArray())
         bytes.write(0x00)
         fun text(s: String) { bytes.write(3); bytes.write(s.toByteArray()); bytes.write(0x1F) }
         fun int(n: Int) { bytes.write(2); bytes.write(n.toString().toByteArray()); bytes.write(0x1F) }
-        text("א"); int(1); bytes.write(0); bytes.write(0x1F); int(0); bytes.write(0xFF)
-        text("ב"); int(2); text("1"); int(0); bytes.write(0xFF)
+        text("א"); int(3); int(1); bytes.write(0); bytes.write(0x1F); int(0); bytes.write(0xFF)
+        text("ב"); int(7); int(2); text("1"); int(0); bytes.write(0xFF)
         val expected = MessageDigest.getInstance("SHA-256").digest(bytes.toByteArray()).joinToString("") { "%02x".format(it) }
         assertEquals(mapOf("line_note" to expected), actual)
     }
@@ -144,12 +151,14 @@ class SchemaSevenPatchTest {
             }
         }
         insertNotes(full, GOLDEN_NOTES)
+        insertNoteNames(full, GOLDEN_NOTE_NAMES)
         assertEquals(
             mapOf(
                 "book_banner" to "87026c32c4996eee6e5c75b65ce5e08be1a1a28e52864a57a696cbb6555a0c59",
                 "book_protection" to "015c3c2291e1ebac6c68a6f33c8c01b42af0ce46dc3840d7e0a12ae370ae1319",
                 "line_divine_name" to "e0b9cc2885495c4bf2ebdfe044b06948aa8cb0c859e777d45b880e59f3d4e799",
                 "line_note" to GOLDEN_LINE_NOTE_FULL,
+                "line_note_divine_name" to GOLDEN_LINE_NOTE_DIVINE_NAME_FULL,
             ),
             tableHashes(full),
         )
@@ -159,6 +168,7 @@ class SchemaSevenPatchTest {
                 "book_protection" to "260da62f074581043b5bf203c9790203a9ea052f9d1e14e27ecc780f66790a81",
                 "line_divine_name" to "278213e576ad7f0865c73036789d82ec801bb65e594d9eee0ec6e6e799325b85",
                 "line_note" to GOLDEN_LINE_NOTE_EMPTY,
+                "line_note_divine_name" to GOLDEN_LINE_NOTE_DIVINE_NAME_EMPTY,
             ),
             tableHashes(tablesDb("empty.db")),
         )
@@ -199,7 +209,7 @@ class SchemaSevenPatchTest {
                 st.execute("INSERT INTO line VALUES (10, 1, 30), (11, 1, 5), (12, 2, 7)")
                 if (staleNote) {
                     st.execute(SCHEMA_7_TABLE_DDL.getValue("line_note"))
-                    st.execute("INSERT INTO line_note VALUES (12, 0, NULL, 'stale')")
+                    st.execute("INSERT INTO line_note VALUES (12, 0, 0, NULL, 'stale')")
                 }
             }
         }
@@ -217,15 +227,29 @@ class SchemaSevenPatchTest {
                 st.execute("INSERT INTO line_divine_name VALUES (10, 0, 4, 1, 1), (12, 2, 6, 5, 3)")
             }
         }
-        insertNotes(p, listOf(listOf(10, 0, "1", "גוף <i>פנימי</i>"), listOf(10, 1, null, "נספח"), listOf(11, 0, "*", "ב")))
+        insertNotes(p, listOf(listOf(10, 0, 2, "1", "גוף <i>פנימי</i>"), listOf(10, 1, 6, null, "נספח"), listOf(11, 0, 1, "*", "ב")))
+        insertNoteNames(p, listOf(listOf(10, 0, 4, 9, 1, 1)))
         return p
     }
 
     private fun insertNotes(db: Path, rows: List<List<Any?>>) {
         connect(db).use { conn ->
-            conn.prepareStatement("INSERT INTO line_note (lineId, noteIndex, marker, body) VALUES (?, ?, ?, ?)").use { ps ->
+            conn.prepareStatement("INSERT INTO line_note (lineId, noteIndex, charPos, marker, body) VALUES (?, ?, ?, ?, ?)").use { ps ->
                 for (row in rows) {
                     row.forEachIndexed { i, v -> ps.setObject(i + 1, v) }
+                    ps.executeUpdate()
+                }
+            }
+        }
+    }
+
+    private fun insertNoteNames(db: Path, rows: List<List<Int>>) {
+        connect(db).use { conn ->
+            conn.prepareStatement(
+                "INSERT INTO line_note_divine_name (lineId, noteIndex, charStart, charEnd, kind, source) VALUES (?, ?, ?, ?, ?, ?)",
+            ).use { ps ->
+                for (row in rows) {
+                    row.forEachIndexed { i, v -> ps.setInt(i + 1, v) }
                     ps.executeUpdate()
                 }
             }
@@ -258,18 +282,29 @@ class SchemaSevenPatchTest {
     }
 
     private companion object {
-        val SCHEMA_7_TABLES_IN_ORDER = listOf("book_banner", "book_protection", "line_divine_name", "line_note")
+        val SCHEMA_7_TABLES_IN_ORDER =
+            listOf("book_banner", "book_protection", "line_divine_name", "line_note", "line_note_divine_name")
 
         // Same rows in the Dart golden test; NULL marker, nested <i>, newline and quotes on purpose.
         val GOLDEN_NOTES: List<List<Any?>> = listOf(
-            listOf(2, 0, "1", "הערה <i>פנימית</i> א"),
-            listOf(1, 1, null, "נספח בסוף השורה"),
-            listOf(1, 0, "*", "גוף \"ב\"\nשורה שנייה"),
-            listOf(2, 1, "<b>2</b>", "<b>ב</b> &amp; ג"),
+            listOf(2, 0, 5, "1", "הערה <i>פנימית</i> א"),
+            listOf(1, 1, 12, null, "נספח בסוף השורה"),
+            listOf(1, 0, 3, "*", "גוף \"ב\"\nשורה שנייה"),
+            listOf(2, 1, 9, "<b>2</b>", "<b>ב</b> &amp; ג"),
+        )
+
+        // (lineId, noteIndex, charStart, charEnd, kind, source), on the notes above.
+        val GOLDEN_NOTE_NAMES: List<List<Int>> = listOf(
+            listOf(2, 0, 0, 4, 1, 1),
+            listOf(1, 1, 6, 11, 5, 2),
+            listOf(1, 0, 3, 6, 7, 3),
+            listOf(2, 0, 10, 14, 3, 4),
         )
 
         // Shared with otzaria_library_updater: the Dart hasher must give the same hex.
-        const val GOLDEN_LINE_NOTE_FULL = "cc6c99229bb4f95d66a0c089330c57245b555b37cea99a7a87dc6826c5230484"
-        const val GOLDEN_LINE_NOTE_EMPTY = "e484b003c6701873e28a91136af62ff0b41f6416aec35fee56749eabb85a35c2"
+        const val GOLDEN_LINE_NOTE_FULL = "380d6d28f0dc83595a26b002ec90e7fd7fdb690cf58086c6a05457f553459ba9"
+        const val GOLDEN_LINE_NOTE_EMPTY = "027c225d40b02cfc2025d0c279668dcd341af7ab68c725b3b187fac0dbdce8a8"
+        const val GOLDEN_LINE_NOTE_DIVINE_NAME_FULL = "d9a81d17557a10c109fe5ab430ce0fd408c569366db8cddadb4124e945d8349c"
+        const val GOLDEN_LINE_NOTE_DIVINE_NAME_EMPTY = "4c7710872d55a8575723dac795a2de02e09085ec0643712cc4aa41014d5320aa"
     }
 }

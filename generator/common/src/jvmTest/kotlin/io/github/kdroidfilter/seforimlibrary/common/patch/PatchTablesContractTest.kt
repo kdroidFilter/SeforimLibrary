@@ -29,7 +29,7 @@ class PatchTablesContractTest {
         )
         assertEquals(
             PATCH_TABLES_IN_FK_ORDER.filterNot {
-                it.name in setOf("book_banner", "book_protection", "line_divine_name", "line_note")
+                it.name in setOf("book_banner", "book_protection", "line_divine_name", "line_note", "line_note_divine_name")
             },
             PATCH_TABLES_SCHEMA_6,
         )
@@ -89,7 +89,7 @@ class PatchTablesContractTest {
         )
         assertEquals(
             LogicalContentHasher.TABLES_SCHEMA_6.toMutableList().apply {
-                addAll(indexOf("schema_meta"), listOf("book_banner", "book_protection", "line_divine_name", "line_note"))
+                addAll(indexOf("schema_meta"), listOf("book_banner", "book_protection", "line_divine_name", "line_note", "line_note_divine_name"))
             },
             LogicalContentHasher.TABLES_SCHEMA_7,
         )

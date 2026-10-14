@@ -42,7 +42,8 @@
     "book_banner": ["bookId", "text"],
     "book_protection": ["bookId", "level"],
     "line_divine_name": ["charEnd", "charStart", "kind", "lineId", "source"],
-    "line_note": ["body", "lineId", "marker", "noteIndex"],
+    "line_note": ["body", "charPos", "lineId", "marker", "noteIndex"],
+    "line_note_divine_name": ["charEnd", "charStart", "kind", "lineId", "noteIndex", "source"],
     "schema_meta": ["key", "value"]
   }
 }

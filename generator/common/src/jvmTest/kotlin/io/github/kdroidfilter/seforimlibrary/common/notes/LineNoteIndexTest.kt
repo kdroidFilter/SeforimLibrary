@@ -45,12 +45,26 @@ class LineNoteIndexTest {
         )
         assertEquals(
             listOf(
-                listOf<Any?>(100, 0, "1", "ג<i>ד</i>"),
-                listOf<Any?>(100, 1, null, "זחט"),
-                listOf<Any?>(102, 0, "*", "ה"),
+                listOf<Any?>(100, 0, 3, "1", "ג<i>ד</i>"),
+                listOf<Any?>(100, 1, 5, null, "זחט"),
+                listOf<Any?>(102, 0, 6, "*", "ה"),
             ),
-            query(db, "SELECT lineId, noteIndex, marker, body FROM line_note ORDER BY lineId, noteIndex"),
+            query(db, "SELECT lineId, noteIndex, charPos, marker, body FROM line_note ORDER BY lineId, noteIndex"),
         )
+    }
+
+    @Test
+    fun `charPos is the visible offset of the stripped line right after the marker sup`() {
+        val line = "&amp;<b>א</b><sup class=\"footnote-marker\">12</sup> <i class=\"footnote\">x</i>" +
+            "<i class=\"footnote\">y</i>ב<sup>3</sup><i class=\"footnote\">z</i>"
+        val db = db(listOf(line))
+        connect(db).use { rebuildLineNoteIndex(it, logger) }
+        val stripped = query(db, "SELECT content FROM line").single().single() as String
+        val positions = query(db, "SELECT charPos FROM line_note ORDER BY noteIndex").map { it.single() as Int }
+        // "&amp;" counts 1, "א" 1, "12" 2, the space 1; the second note sits where the first one ended.
+        assertEquals(listOf(5, 5, 7), positions)
+        val sups = Regex("</sup>").findAll(stripped).map { countVisibleChars(stripped, it.range.last + 1) }.toList()
+        assertEquals(listOf(4, 7), sups)
     }
 
     @Test
@@ -129,8 +143,8 @@ class LineNoteIndexTest {
         assertEquals(2, report.linesChanged)
         assertEquals(0, report.orphanMarkerLines, "a no-break space keeps the marker adjacent")
         assertEquals(
-            listOf(listOf<Any?>(100, 0, "1", "גוף"), listOf<Any?>(102, 0, "1", "ב")),
-            query(db, "SELECT lineId, noteIndex, marker, body FROM line_note ORDER BY lineId"),
+            listOf(listOf<Any?>(100, 0, 2, "1", "גוף"), listOf<Any?>(102, 0, 2, "1", "ב")),
+            query(db, "SELECT lineId, noteIndex, charPos, marker, body FROM line_note ORDER BY lineId"),
         )
     }
 

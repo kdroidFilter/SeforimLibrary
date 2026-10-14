@@ -109,13 +109,15 @@ internal val PATCH_TABLES_IN_FK_ORDER: List<PatchTable> = listOf(
     PatchTable("book_protection",    listOf("bookId"),   updatable = true),
     PatchTable("line_divine_name",   listOf("lineId", "charStart"), updatable = true),
     PatchTable("line_note",          listOf("lineId", "noteIndex"), updatable = true),
+    PatchTable("line_note_divine_name", listOf("lineId", "noteIndex", "charStart"), updatable = true),
 
     // Versioning. Keyed by a string `key` column.
     PatchTable("schema_meta",        listOf("key"),      updatable = true),
 )
 
 /** Tables schema 7 added; a 6 -> 7 delta creates them through its migrations. */
-internal val SCHEMA_7_TABLES: Set<String> = setOf("book_banner", "book_protection", "line_divine_name", "line_note")
+internal val SCHEMA_7_TABLES: Set<String> =
+    setOf("book_banner", "book_protection", "line_divine_name", "line_note", "line_note_divine_name")
 
 /** Schema-6 contract, frozen. */
 internal val PATCH_TABLES_SCHEMA_6: List<PatchTable> =
@@ -186,9 +188,22 @@ val SCHEMA_7_TABLE_DDL: Map<String, String> = linkedMapOf(
         CREATE TABLE IF NOT EXISTS line_note (
             lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
             noteIndex INTEGER NOT NULL,
+            charPos INTEGER NOT NULL,
             marker TEXT,
             body TEXT NOT NULL,
             PRIMARY KEY (lineId, noteIndex)
+        ) WITHOUT ROWID
+    """.trimIndent(),
+    "line_note_divine_name" to """
+        CREATE TABLE IF NOT EXISTS line_note_divine_name (
+            lineId INTEGER NOT NULL,
+            noteIndex INTEGER NOT NULL,
+            charStart INTEGER NOT NULL,
+            charEnd INTEGER NOT NULL,
+            kind INTEGER NOT NULL,
+            source INTEGER NOT NULL,
+            PRIMARY KEY (lineId, noteIndex, charStart),
+            FOREIGN KEY (lineId, noteIndex) REFERENCES line_note(lineId, noteIndex) ON DELETE CASCADE
         ) WITHOUT ROWID
     """.trimIndent(),
 )

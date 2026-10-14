@@ -32,6 +32,7 @@ data class LineNoteIndexReport(
 
 /**
  * Moves the inline footnote bodies of every base `line` into `line_note`, in one transaction.
+ * `charPos` is the visible offset in the stripped line where the body stood.
  *
  * Per changed line: the bodies leave the text (marker sups stay), `charCount` is recounted,
  * and its `link_anchor` rows are shifted by the visible length of the bodies removed before
@@ -88,7 +89,7 @@ private class LineNotePass(
         },
     )
     private val existing = prepare("SELECT 1 FROM line_note WHERE lineId = ? LIMIT 1")
-    private val insertNote = prepare("INSERT INTO line_note (lineId, noteIndex, marker, body) VALUES (?, ?, ?, ?)")
+    private val insertNote = prepare("INSERT INTO line_note (lineId, noteIndex, charPos, marker, body) VALUES (?, ?, ?, ?, ?)")
     private val updateContent = prepare(
         if (split) "UPDATE line_content SET content = ? WHERE id = ?" else "UPDATE line SET content = ? WHERE id = ?",
     )
@@ -157,12 +158,17 @@ private class LineNotePass(
         existing.setLong(1, id)
         check(existing.executeQuery().use { !it.next() }) { "line $id still carries note bodies but already has line_note rows" }
 
+        val removed = found.map { countVisibleChars(content, it.start) to countVisibleChars(content, it.end) }
+        var removedBefore = 0
         found.forEachIndexed { index, note ->
+            val (start, end) = removed[index]
             insertNote.setLong(1, id)
             insertNote.setInt(2, index)
-            insertNote.setString(3, note.marker)
-            insertNote.setString(4, note.body)
+            insertNote.setInt(3, start - removedBefore)
+            insertNote.setString(4, note.marker)
+            insertNote.setString(5, note.body)
             insertNote.addBatch()
+            removedBefore += end - start
         }
         insertNote.executeBatch()
         notes += found.size
@@ -179,7 +185,7 @@ private class LineNotePass(
         updateCharCount.setInt(1, countVisibleChars(stripped))
         updateCharCount.setLong(2, id)
         updateCharCount.executeUpdate()
-        if (hasAnchors) remapAnchors(id, found.map { countVisibleChars(content, it.start) to countVisibleChars(content, it.end) })
+        if (hasAnchors) remapAnchors(id, removed)
         changed++
     }
 
