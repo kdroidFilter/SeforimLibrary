@@ -50,7 +50,12 @@ object InlineNotes {
         while (true) {
             val open = NOTE_OPEN.find(line, cursor) ?: break
             val close = matchingClose(line, open.range.first) ?: return Parsed.Unclosed(open.range.first)
-            val sup = supsByEnd[gapStart(line, open.range.first)]
+            // A footnote tag inside a sup is part of that marker (seen in Sefaria data), not a note.
+            if (supsByEnd.values.any { open.range.first in it.range }) {
+                cursor = close.range.last + 1
+                continue
+            }
+            val sup =supsByEnd[gapStart(line, open.range.first)]
             val plain = sup != null && !MARKER_CLASS.containsMatchIn(sup.groupValues[1])
             notes += Note(
                 start = open.range.first,

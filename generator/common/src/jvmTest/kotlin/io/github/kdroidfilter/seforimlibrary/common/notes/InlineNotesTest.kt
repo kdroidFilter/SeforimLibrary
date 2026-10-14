@@ -19,6 +19,15 @@ class InlineNotesTest {
     }
 
     @Test
+    fun `a footnote tag inside a marker sup belongs to the marker`() {
+        val line = "א<sup class=\"footnote-marker\">1<i class=\"footnote\"></i></sup><i class=\"footnote\">גוף</i> ב"
+        val found = notes(line)
+        assertEquals(listOf("1<i class=\"footnote\"></i>"), found.map { it.marker })
+        assertEquals(listOf("גוף"), found.map { it.body })
+        assertEquals("א<sup class=\"footnote-marker\">1<i class=\"footnote\"></i></sup> ב", InlineNotes.strip(line, found))
+    }
+
+    @Test
     fun `an unclosed body is reported, not guessed`() {
         val line = "א<sup class=\"footnote-marker\">1</sup><i class=\"footnote\">גוף <i>מוטה</i> בלי סוף"
         assertEquals(Parsed.Unclosed(line.indexOf("<i class")), InlineNotes.parse(line))
