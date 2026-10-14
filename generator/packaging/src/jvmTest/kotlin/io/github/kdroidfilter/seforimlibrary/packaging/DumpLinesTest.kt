@@ -18,6 +18,33 @@ class DumpLinesTest {
     }
 
     @Test
+    fun `a line is dumped with its line_note bodies put back at their charPos`() {
+        val books = listOf(TestBook(1, "src", "Book", listOf("א<sup class=\"footnote-marker\">1</sup> ב", "ג")))
+        for (split in listOf(false, true)) {
+            val snapshot = dumpBooks(split, books) { c ->
+                c.createStatement().use { st ->
+                    st.execute(
+                        "CREATE TABLE line_note (lineId INTEGER NOT NULL, noteIndex INTEGER NOT NULL, " +
+                            "charPos INTEGER NOT NULL, marker TEXT, body TEXT NOT NULL, PRIMARY KEY (lineId, noteIndex))",
+                    )
+                    st.execute(
+                        "INSERT INTO line_note SELECT id, 0, 2, '1', 'ראה בראשית א א' FROM line WHERE lineIndex = 0",
+                    )
+                    st.execute("INSERT INTO line_note SELECT id, 1, 4, NULL, 'סוף' FROM line WHERE lineIndex = 0")
+                }
+            }
+            assertEquals(
+                listOf(
+                    "src|Book|0|א<sup class=\"footnote-marker\">1</sup><i class=\"footnote\">ראה בראשית א א</i> ב" +
+                        "<i class=\"footnote\">סוף</i>|Book",
+                    "src|Book|1|ג|Book",
+                ),
+                snapshot.rows,
+            )
+        }
+    }
+
+    @Test
     fun `a Sefaria line reaches the linker without its opening seif label`() {
         val rows = dump(
             split = true,
@@ -112,7 +139,12 @@ class DumpLinesTest {
         }
     }
 
-    private fun <T> withSourceDb(split: Boolean, books: List<TestBook>, block: (Path) -> T): T {
+    private fun <T> withSourceDb(
+        split: Boolean,
+        books: List<TestBook>,
+        prepare: (java.sql.Connection) -> Unit = {},
+        block: (Path) -> T,
+    ): T {
         val dir = Files.createTempDirectory("dumpLinesBooks")
         try {
             val db = dir.resolve("seforim.db")
@@ -157,6 +189,7 @@ class DumpLinesTest {
                         st.execute("ALTER TABLE line DROP COLUMN content")
                     }
                 }
+                prepare(c)
             }
             return block(db)
         } finally {
@@ -164,8 +197,13 @@ class DumpLinesTest {
         }
     }
 
-    private fun dumpBooks(split: Boolean, books: List<TestBook>, bookLimit: Int? = null): Snapshot =
-        withSourceDb(split, books) { db ->
+    private fun dumpBooks(
+        split: Boolean,
+        books: List<TestBook>,
+        bookLimit: Int? = null,
+        prepare: (java.sql.Connection) -> Unit = {},
+    ): Snapshot =
+        withSourceDb(split, books, prepare) { db ->
             val out = db.resolveSibling("lines_snapshot.db")
             val properties = listOfNotNull(
                 "seforimDb" to db.toString(),

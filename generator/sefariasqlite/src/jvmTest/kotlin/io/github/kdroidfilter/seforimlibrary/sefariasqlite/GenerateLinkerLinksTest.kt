@@ -6,6 +6,7 @@ import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BuildStateSnapshot
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BuildStateWriter
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.IdTable
+import io.github.kdroidfilter.seforimlibrary.common.notes.LineNoteRehydration
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
 import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
@@ -300,6 +301,7 @@ class GenerateLinkerLinksTest {
         splitLineContent: Boolean = false,
         storedSource: String = sourceContent,
         targets: List<RefEntry> = listOf(RefEntry("Genesis 1:1", "TgtBook 1:1", "Tanakh/Genesis", 1)),
+        notes: List<Pair<Int, String>> = emptyList(),
     ): LinkerRun {
         val dir = Files.createTempDirectory("linkerMainFixture")
         val artifacts = Files.createDirectory(dir.resolve("artifacts"))
@@ -330,6 +332,13 @@ class GenerateLinkerLinksTest {
                 id
             }
             repo.close()
+            DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
+                c.prepareStatement("INSERT INTO line_note (lineId, noteIndex, charPos, marker, body) VALUES (20, ?, ?, NULL, ?)").use { ps ->
+                    notes.forEachIndexed { i, (charPos, body) ->
+                        ps.setInt(1, i); ps.setInt(2, charPos); ps.setString(3, body); ps.executeUpdate()
+                    }
+                }
+            }
             if (splitLineContent) {
                 // The schema-6 shape SplitLineContentCli leaves behind.
                 DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
@@ -395,6 +404,55 @@ class GenerateLinkerLinksTest {
             }
             Logger.setMinSeverity(severity)
             dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun theLinkerReadsTheLineWithItsNotesAndAnAnchorOnANoteIsNotWritten() {
+        val stored = "see Genesis 1:1 and again"
+        val notes = listOf(15 to "Genesis 1:1")
+        val read = "see Genesis 1:1<i class=\"footnote\">Genesis 1:1</i> and again"
+        assertEquals(read, rehydrateLinkerLine(stored, notes).first)
+        val inNote = read.indexOf(">Genesis") + 1
+        val body = record(4, 15, base = 0, hashedContent = read) + "\n" +
+            record(inNote, inNote + 11, base = 0, hashedContent = read) + "\n"
+        for (split in listOf(false, true)) {
+            val run = runLinkerMain(body, strict = "true", splitLineContent = split, storedSource = stored, notes = notes)
+            assertEquals(null, run.failure)
+            assertEquals(1L, run.links, "the citation in the note still links its line")
+            assertEquals(listOf(4 to 15), run.anchorRanges, "only the citation outside the note gets an anchor")
+        }
+        // A record hashed on the stored text alone is stale once the line has notes.
+        val stale = runLinkerMain(record(4, 15, base = 0, hashedContent = stored) + "\n", strict = null, storedSource = stored, notes = notes)
+        assertEquals(0L, stale.links)
+    }
+
+    @Test
+    fun anAnchorAfterANoteMapsBackToTheStoredLine() {
+        val stored = "x Genesis 1:1"
+        val notes = listOf(1 to "הערה")
+        val read = rehydrateLinkerLine(stored, notes).first
+        val start = read.indexOf("Genesis")
+        val run = runLinkerMain(record(start, start + 11, base = 0, hashedContent = read) + "\n", strict = "true", storedSource = stored, notes = notes)
+        assertEquals(listOf(2 to 13), run.anchorRanges)
+    }
+
+    @Test
+    fun theInlineRehydrationMatchesTheSharedOne() {
+        val cases = listOf(
+            "א<sup class=\"footnote-marker\">1</sup> ב &amp; ג</b>" to listOf(2 to "x", 2 to "<i>y</i>", 8 to "z"),
+            "<h2>כותרת</h2>" to listOf(0 to "a", 5 to "b"),
+            "<h2>א<sup>1</sup></h2> ב<b>ג</b>" to listOf(2 to "x", 4 to "y"),
+            "" to listOf(0 to "only"),
+        )
+        for ((stored, notes) in cases) {
+            val shared = LineNoteRehydration.rehydrate(stored, notes.map { LineNoteRehydration.NoteAt(it.first, it.second) })
+            val (text, bodies) = rehydrateLinkerLine(stored, notes)
+            assertEquals(shared.text, text)
+            assertEquals(shared.bodies, bodies)
+            for (start in 0..text.length) for (end in start..text.length) {
+                assertEquals(shared.storedRange(start, end), linkerStoredRange(bodies, start, end))
+            }
         }
     }
 
