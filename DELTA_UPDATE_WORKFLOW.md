@@ -256,10 +256,10 @@ the change is deliberate.
 
 ### 1.5 Schema 7: the 6 -> 7 delta
 
-Schema 7 adds `book_banner`, `book_protection`, `line_divine_name` and `line_note`
-(`SCHEMA_7_TABLES` in `PatchTables.kt`), right before `schema_meta` in both the FK order
-and the hash order. 6 -> 7 is an ordinary delta, not a full rebase: the producer treats
-the four tables as promoted, so the patch's `migrations` carry, per table,
+Schema 7 adds `book_banner`, `book_protection`, `line_divine_name`, `line_note` and
+`line_note_divine_name` (`SCHEMA_7_TABLES` in `PatchTables.kt`), right before `schema_meta`
+in both the FK order and the hash order. 6 -> 7 is an ordinary delta, not a full rebase: the producer treats
+the five tables as promoted, so the patch's `migrations` carry, per table,
 `DROP TABLE IF EXISTS` and the table's `CREATE TABLE` from the new DB, and every row of
 them is an upsert. The client checks the pre-apply hash in schema-6 order and the
 post-apply hash in schema-7 order. An app that reads schema 6 only gets the planner's

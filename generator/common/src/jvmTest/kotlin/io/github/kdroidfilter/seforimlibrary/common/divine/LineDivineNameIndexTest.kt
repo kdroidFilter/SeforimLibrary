@@ -62,6 +62,41 @@ class LineDivineNameIndexTest {
     }
 
     @Test
+    fun `note bodies get their own spans, in offsets within the body, replacing the previous rows`() {
+        val path = db(listOf("טקסט בלי שם", "שורה"))
+        DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use { conn ->
+            conn.createStatement().use { st ->
+                st.execute("INSERT INTO line_note VALUES (100, 0, 4, NULL, '<b>א</b>&nbsp;ה'' אלהינו'), (100, 1, 4, '1', 'שמע ישראל יהוה')")
+                st.execute("INSERT INTO line_note VALUES (101, 0, 0, NULL, 'בלי שם')")
+                st.execute("INSERT INTO line_note_divine_name VALUES (101, 0, 0, 1, 5, 3)")
+            }
+            val report = rebuildLineDivineNameIndex(conn, logger, overrides = null, requireTanach = false)
+            assertEquals(0L, report.total)
+            assertEquals(3L, report.noteBodies)
+            assertEquals(2L, report.noteSpans)
+        }
+        val noteRows = { sql: String ->
+            DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use { conn ->
+                conn.createStatement().use { st ->
+                    st.execute("PRAGMA foreign_keys = ON")
+                    if (sql.isNotEmpty()) st.execute(sql)
+                    st.executeQuery("SELECT * FROM line_note_divine_name ORDER BY lineId, noteIndex, charStart").use { rs ->
+                        buildList { while (rs.next()) add((1..6).map { rs.getInt(it) }) }
+                    }
+                }
+            }
+        }
+        assertEquals(
+            listOf(
+                listOf(100, 0, 5, 11, DivineKind.ELOHIM.code, DivineSource.COLLOCATION.code),
+                listOf(100, 1, 10, 14, 1, 1),
+            ),
+            noteRows(""),
+        )
+        assertEquals(listOf(listOf(100, 1, 10, 14, 1, 1)), noteRows("DELETE FROM line_note WHERE lineId = 100 AND noteIndex = 0"))
+    }
+
+    @Test
     fun `a library without every tanach book is refused and the old table survives`() {
         val path = db(listOf("ה' אלהינו"))
         DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use { conn ->

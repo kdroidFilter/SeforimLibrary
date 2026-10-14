@@ -36,10 +36,14 @@ data class DivineNameIndexReport(
     val appHvyh: Long,
     val hvyhNotEmitted: Long,
     val dropped: Map<String, Long>,
+    /** Note bodies scanned and spans written to line_note_divine_name; 0 for the dry-run report. */
+    val noteBodies: Long = 0,
+    val noteSpans: Long = 0,
 )
 
 /**
- * Atomically replaces the existing table. [overrides] null (no usable list) leaves
+ * Atomically replaces the existing table, and `line_note_divine_name` from the note
+ * bodies of `line_note` (run after buildLineNoteIndex). [overrides] null (no usable list) leaves
  * every Tanach base line HVYH-only. Fails (and keeps the previous contents) when the
  * Tanach books cannot all be resolved — the overrides depend on them — or when an
  * app HVYH match outside markup is not emitted.
@@ -56,8 +60,11 @@ fun rebuildLineDivineNameIndex(
         conn.createStatement().use { st ->
             st.execute(CREATE_LINE_DIVINE_NAME)
             st.execute("DELETE FROM line_divine_name")
+            st.execute(SCHEMA_7_TABLE_DDL.getValue("line_note"))
+            st.execute(SCHEMA_7_TABLE_DDL.getValue("line_note_divine_name"))
+            st.execute("DELETE FROM line_note_divine_name")
         }
-        val report = conn.prepareStatement(
+        val lineReport = conn.prepareStatement(
             "INSERT INTO line_divine_name (lineId, charStart, charEnd, kind, source) VALUES (?, ?, ?, ?, ?)",
         ).use { insert ->
             var pending = 0
@@ -75,6 +82,34 @@ fun rebuildLineDivineNameIndex(
             if (pending > 0) insert.executeBatch()
             report
         }
+        val noteReport = conn.prepareStatement(
+            "INSERT INTO line_note_divine_name (lineId, noteIndex, charStart, charEnd, kind, source) VALUES (?, ?, ?, ?, ?, ?)",
+        ).use { insert ->
+            var pending = 0
+            val report = scanNoteBodies(conn, logger, requireTanach) { lineId, noteIndex, result ->
+                for (span in result.spans) {
+                    insert.setLong(1, lineId)
+                    insert.setInt(2, noteIndex)
+                    insert.setInt(3, span.charStart)
+                    insert.setInt(4, span.charEnd)
+                    insert.setInt(5, span.kind.code)
+                    insert.setInt(6, span.source.code)
+                    insert.addBatch()
+                    if (++pending >= 10_000) { insert.executeBatch(); pending = 0 }
+                }
+            }
+            if (pending > 0) insert.executeBatch()
+            report
+        }
+        val report = lineReport.copy(
+            appHvyh = lineReport.appHvyh + noteReport.appHvyh,
+            hvyhNotEmitted = lineReport.hvyhNotEmitted + noteReport.hvyhNotEmitted,
+            dropped = (lineReport.dropped.keys + noteReport.dropped.keys).associateWith {
+                (lineReport.dropped[it] ?: 0L) + (noteReport.dropped[it] ?: 0L)
+            },
+            noteBodies = noteReport.lines,
+            noteSpans = noteReport.total,
+        )
         // An app match may stay unwritten only inside markup or where the app's own word-boundary
         // check would reject the span (its runtime regex keeps covering those).
         val explainedReasons = setOf("not-visible-text", "app-boundary")
@@ -182,6 +217,56 @@ fun unmatchedOverrideRefs(conn: Connection, overrides: DivineNameOverrides): Lis
         }
     }
     return overrides.entries.flatMap { listOf(it.from, it.to) }.distinct().filter { it !in verses }.map { it.toString() }
+}
+
+/**
+ * Every `line_note` body through the detector, offsets within the body. A body is no verse:
+ * in a Tanach book it gets the HVYH rule only, elsewhere the rules its line gets.
+ */
+internal fun scanNoteBodies(
+    conn: Connection,
+    logger: Logger,
+    requireTanach: Boolean,
+    onNote: (lineId: Long, noteIndex: Int, DivineNameDetector.Result) -> Unit,
+): DivineNameIndexReport {
+    val tanach = resolveTanachBooks(conn, requireTanach)
+    val prayerBooks = resolvePrayerBooks(conn)
+    val detector = DivineNameDetector(null)
+    var bodies = 0L
+    var total = 0L
+    var appHvyh = 0L
+    var hvyhNotEmitted = 0L
+    val counts = sortedMapOf<String, Long>()
+    val dropped = sortedMapOf<String, Long>()
+    conn.prepareStatement(
+        "SELECT n.lineId, n.noteIndex, n.body, l.bookId FROM line_note n JOIN line l ON l.id = n.lineId " +
+            "ORDER BY n.lineId, n.noteIndex",
+    ).use { ps ->
+        ps.fetchSize = 2_000
+        ps.executeQuery().use { rs ->
+            while (rs.next()) {
+                val bookId = rs.getLong(4)
+                val prayer = bookId in prayerBooks
+                val result = detector.detect(
+                    rs.getString(3),
+                    verse = null,
+                    nonHvyh = tanach[bookId] == null,
+                    elScope = DivineNameDetector.EL_NIKUD_IN_PRAYER_BOOK && prayer,
+                    prayerBook = prayer,
+                )
+                bodies++
+                total += result.spans.size
+                appHvyh += result.appHvyh.size
+                val emitted = result.spans.filter { it.kind == DivineKind.HVYH }.mapTo(HashSet()) { it.rawStart until it.rawEnd }
+                hvyhNotEmitted += result.appHvyh.count { it !in emitted }
+                for (span in result.spans) counts.merge("${span.kind.name}/${span.source.name}", 1L, Long::plus)
+                for ((k, v) in result.dropped) dropped.merge(k, v.toLong(), Long::plus)
+                onNote(rs.getLong(1), rs.getInt(2), result)
+            }
+        }
+    }
+    logger.i { "line_note_divine_name: $total spans in $bodies note bodies" }
+    return DivineNameIndexReport(bodies, total, counts, appHvyh, hvyhNotEmitted, dropped)
 }
 
 /** Streams every line through the detector; shared by the build and the report. */

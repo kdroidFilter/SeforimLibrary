@@ -53,7 +53,8 @@ fun main(args: Array<String>) {
             logger.i {
                 "line_divine_name: ${report.total} spans over ${report.lines} lines " +
                     "(${report.countsByKindSource.entries.joinToString { "${it.key}=${it.value}" }}); " +
-                    "HVYH gate: ${report.appHvyh} app matches, ${report.hvyhNotEmitted} inside markup"
+                    "HVYH gate: ${report.appHvyh} app matches, ${report.hvyhNotEmitted} inside markup; " +
+                    "line_note_divine_name: ${report.noteSpans} spans in ${report.noteBodies} note bodies"
             }
         }
     } catch (e: Exception) {
