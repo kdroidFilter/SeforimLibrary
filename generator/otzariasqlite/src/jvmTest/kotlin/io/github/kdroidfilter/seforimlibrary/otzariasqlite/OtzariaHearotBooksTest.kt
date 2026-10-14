@@ -326,6 +326,20 @@ class OtzariaHearotBooksTest {
         assertEquals(1, repo.countLinks())
     }
 
+    @Test
+    fun havroutaGrammarDoesNotApplyToOtherCompanions() {
+        val lines = listOf("גוף <small>(1)</small> סוף")
+        val notes = mapOf(0 to listOf("<b>(1)</b> הערה"))
+        assertEquals(
+            listOf("גוף <small>(1)</small> סוף<i class=\"footnote\"><b>(1)</b> הערה</i>"),
+            HearotCompanionMerge.mergeLines("מזור ותרופה", lines, notes),
+        )
+        assertEquals(
+            listOf("גוף <sup class=\"footnote-marker\">(1)</sup><i class=\"footnote\">הערה</i> סוף"),
+            HearotCompanionMerge.mergeLines("חברותא על ברכות", lines, notes),
+        )
+    }
+
     private fun havroutaEntry(i1: Int, i2: Int) =
         """{"line_index_1": $i1, "heRef_2": "הערות על חברותא על ברכות", "path_2": "הערות על חברותא על ברכות.txt",
            |"line_index_2": $i2, "Conection Type": "footnotes"}""".trimMargin()

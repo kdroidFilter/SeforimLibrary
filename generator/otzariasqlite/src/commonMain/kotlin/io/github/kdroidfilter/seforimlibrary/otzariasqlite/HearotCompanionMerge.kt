@@ -16,6 +16,10 @@ import io.github.kdroidfilter.seforimlibrary.common.notes.InlineNotes
 internal object HearotCompanionMerge {
 
     const val COMPANION_PREFIX = "הערות על "
+    private const val HAVROUTA_PREFIX = "הערות על חברותא"
+
+    /** The Havrouta grammar applies only to the notes of a Havrouta base book. */
+    private fun isHavroutaBase(baseTitle: String): Boolean = (COMPANION_PREFIX + baseTitle).startsWith(HAVROUTA_PREFIX)
 
     fun isMergeableCompanionTitle(title: String): Boolean = title.startsWith(COMPANION_PREFIX)
 
@@ -25,7 +29,7 @@ internal object HearotCompanionMerge {
     }
 
     // Leading-marker grammars, tried in order: <small><sup>N</sup> body</small> | <sup [attrs]>N</sup> body |
-    // "N body" | Havrouta "<b>(N)</b> body" (N may end in * or a letter), anchored on a bare <small>(N)</small>
+    // "N body" | Havrouta notes only: "<b>(N)</b> body" (N may end in * or a letter) on a bare <small>(N)</small>
     private val NOTE_SMALL_SUP = Regex("""^﻿?<small><sup>([^<]+)</sup>\s*""")
     private val NOTE_SUP = Regex("""^﻿?<sup(?:\s[^>]*)?>([^<]+)</sup>\s*""")
     private val NOTE_BARE_NUMBER = Regex("""^﻿?(\d+)\s+""")
@@ -47,6 +51,7 @@ internal object HearotCompanionMerge {
     ): List<String> {
         if (notesByLine.isEmpty()) return baseLines
         val out = baseLines.toMutableList()
+        val havrouta = isHavroutaBase(bookTitle)
         for ((lineIdx, notes) in notesByLine.toSortedMap()) {
             check(lineIdx in out.indices) {
                 "hearot merge for '$bookTitle': base line $lineIdx out of range (${out.size} lines)"
@@ -64,8 +69,8 @@ internal object HearotCompanionMerge {
                     "hearot merge for '$bookTitle': note carries <i> markup, which breaks the " +
                         "app's footnote regex (first </i> ends the body): ${note.take(80)}"
                 }
-                val parsed = parseLeadingMarker(note)
-                val anchor = parsed?.let { findAnchor(original, it.first, consumed) }
+                val parsed = parseLeadingMarker(note, havrouta)
+                val anchor = parsed?.let { findAnchor(original, it.first, consumed, havrouta) }
                 if (parsed != null && anchor != null) {
                     consumed += anchor
                     placements += anchor to
@@ -86,7 +91,7 @@ internal object HearotCompanionMerge {
     }
 
     /** (marker token, body) when the note opens with a recognized marker, else null. */
-    private fun parseLeadingMarker(note: String): Pair<String, String>? {
+    private fun parseLeadingMarker(note: String, havrouta: Boolean): Pair<String, String>? {
         NOTE_SMALL_SUP.find(note)?.let { m ->
             val rest = note.substring(m.value.length).trimEnd()
             // The whole note is wrapped in <small>…</small>; unwrap both ends.
@@ -97,7 +102,7 @@ internal object HearotCompanionMerge {
         }
         NOTE_SUP.find(note)?.let { return it.groupValues[1] to note.substring(it.value.length) }
         NOTE_BARE_NUMBER.find(note)?.let { return it.groupValues[1] to note.substring(it.value.length) }
-        NOTE_BOLD_PAREN.find(note)?.let { return it.groupValues[1] to note.substring(it.value.length) }
+        if (havrouta) NOTE_BOLD_PAREN.find(note)?.let { return it.groupValues[1] to note.substring(it.value.length) }
         return null
     }
 
@@ -106,13 +111,13 @@ internal object HearotCompanionMerge {
      * `<sup>N</sup>`, attribute-carrying `<sup …>N</sup>`, `<small …>N</small>`, or a
      * Havrouta `<small>(N)</small>`.
      */
-    private fun findAnchor(line: String, token: String, consumed: List<IntRange>): IntRange? {
+    private fun findAnchor(line: String, token: String, consumed: List<IntRange>, havrouta: Boolean): IntRange? {
         val esc = Regex.escape(token)
         val patterns = listOfNotNull(
             Regex("<sup>$esc</sup>"),
             Regex("<sup\\s[^>]*>$esc</sup>"),
             Regex("<small\\s[^>]*>\\s*$esc\\s*</small>"),
-            Regex("<small>$esc</small>").takeIf { HAVROUTA_TOKEN.matches(token) },
+            Regex("<small>$esc</small>").takeIf { havrouta && HAVROUTA_TOKEN.matches(token) },
         )
         // Leftmost across ALL grammars — a line may mix marker styles.
         return patterns
