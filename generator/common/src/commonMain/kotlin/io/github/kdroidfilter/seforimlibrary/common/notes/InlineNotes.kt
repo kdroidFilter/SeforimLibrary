@@ -17,6 +17,8 @@ object InlineNotes {
         /** Inner HTML of the anchoring marker sup, null when the note has none. */
         val marker: String?,
         val body: String,
+        /** Opening tag, `<` to `>`, of an anchoring sup without the footnote-marker class. */
+        val plainSupTag: IntRange? = null,
     )
 
     sealed interface Parsed {
@@ -33,34 +35,51 @@ object InlineNotes {
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
     )
 
+    private val ANY_SUP = Regex("""<sup\b([^>]*)>(.*?)</sup>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+    private val MARKER_CLASS = Regex("""\bclass\s*=\s*"footnote-marker"""", RegexOption.IGNORE_CASE)
+    private val CLASS_ATTR = Regex("""\s*\bclass\s*=\s*"[^"]*"""", RegexOption.IGNORE_CASE)
+
     fun hasNotes(line: String): Boolean = line.contains("footnote") && NOTE_OPEN.containsMatchIn(line)
 
     /** Top-level notes in reading order; a note nested in another note's body is part of that body. */
     fun parse(line: String): Parsed {
         if (!hasNotes(line)) return Parsed.Notes(emptyList())
-        val markersByEnd = MARKER.findAll(line).associate { it.range.last + 1 to it.groupValues[1] }
+        val supsByEnd = ANY_SUP.findAll(line).associateBy { it.range.last + 1 }
         val notes = ArrayList<Note>()
         var cursor = 0
         while (true) {
             val open = NOTE_OPEN.find(line, cursor) ?: break
             val close = matchingClose(line, open.range.first) ?: return Parsed.Unclosed(open.range.first)
+            val sup = supsByEnd[gapStart(line, open.range.first)]
+            val plain = sup != null && !MARKER_CLASS.containsMatchIn(sup.groupValues[1])
             notes += Note(
                 start = open.range.first,
                 end = close.range.last + 1,
-                marker = markersByEnd[gapStart(line, open.range.first)],
+                marker = sup?.groupValues?.get(2),
                 body = line.substring(open.range.last + 1, close.range.first),
+                plainSupTag = if (plain) sup!!.range.first..line.indexOf('>', sup.range.first) else null,
             )
             cursor = close.range.last + 1
         }
         return Parsed.Notes(notes)
     }
 
-    /** [line] without the [notes]' `<i …>BODY</i>` spans; marker sups stay. */
+    /**
+     * [line] without the [notes]' `<i …>BODY</i>` spans. Marker sups stay; an anchoring sup
+     * without the class gains `class="footnote-marker"`, so every anchored note has a classed sup.
+     */
     fun strip(line: String, notes: List<Note>): String {
         if (notes.isEmpty()) return line
         val out = StringBuilder(line.length)
         var cursor = 0
         for (note in notes) {
+            val tag = note.plainSupTag
+            if (tag != null) {
+                out.append(line, cursor, tag.first)
+                val attrs = line.substring(tag.first + "<sup".length, tag.last)
+                out.append("<sup class=\"footnote-marker\"").append(CLASS_ATTR.replace(attrs, "")).append('>')
+                cursor = tag.last + 1
+            }
             out.append(line, cursor, note.start)
             cursor = note.end
         }

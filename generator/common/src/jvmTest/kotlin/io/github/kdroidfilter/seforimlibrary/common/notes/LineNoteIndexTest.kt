@@ -135,6 +135,31 @@ class LineNoteIndexTest {
     }
 
     @Test
+    fun `a plain sup before a body becomes its classed marker without moving visible text`() {
+        val line = "א<sup>1</sup><i class=\"footnote\">גוף</i>ב <sup>2</sup> ג"
+        val db = db(listOf(line, "יעד"))
+        connect(db).use { conn ->
+            conn.createStatement().use { st ->
+                st.execute("INSERT INTO connection_type(id, name) VALUES (1, 'COMMENTARY')")
+                st.execute(
+                    "INSERT INTO link(id, sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, " +
+                        "targetBookOrderIndex, connectionTypeId) VALUES (1, 1, 1, 100, 101, 1, 0, 1)",
+                )
+                // Visible "א1" + "גוף" + "ב 2 ג": the anchor at 1 sits before the sup text.
+                st.execute("INSERT INTO link_anchor(linkId, side, charStart, charEnd) VALUES (1, 0, 1, NULL)")
+            }
+            val report = rebuildLineNoteIndex(conn, logger)
+            assertEquals(0, report.orphanMarkerLines)
+            assertEquals(0, report.unanchoredNotes)
+        }
+        val stripped = "א<sup class=\"footnote-marker\">1</sup>ב <sup>2</sup> ג"
+        assertEquals(listOf(listOf<Any?>(stripped, countVisibleChars(stripped))), query(db, "SELECT content, charCount FROM line WHERE id = 100"))
+        assertEquals(countVisibleChars("א<sup>1</sup>ב <sup>2</sup> ג"), countVisibleChars(stripped))
+        assertEquals(listOf(listOf<Any?>("1", "גוף")), query(db, "SELECT marker, body FROM line_note"))
+        assertEquals(listOf(listOf<Any?>(1, null)), query(db, "SELECT charStart, charEnd FROM link_anchor"))
+    }
+
+    @Test
     fun `a second run changes nothing`() {
         val db = db(listOf(noted))
         connect(db).use { rebuildLineNoteIndex(it, logger) }

@@ -25,12 +25,41 @@ class InlineNotesTest {
     }
 
     @Test
-    fun `a note without a preceding marker sup is unanchored`() {
-        val line = "טקסט<sup>3</sup><i class=\"footnote\">א</i>.<i class=\"footnote\">ב</i>"
+    fun `a note without an adjacent sup is unanchored and a distant plain sup stays as is`() {
+        val line = "טקסט<sup>3</sup> מילה<i class=\"footnote\">א</i>.<i class=\"footnote\">ב</i>"
         val found = notes(line)
         assertEquals(listOf(null, null), found.map { it.marker })
-        assertEquals("טקסט<sup>3</sup>.", InlineNotes.strip(line, found))
+        assertEquals("טקסט<sup>3</sup> מילה.", InlineNotes.strip(line, found))
         assertEquals(0, InlineNotes.countMarkers(InlineNotes.strip(line, found)))
+    }
+
+    @Test
+    fun `a plain sup adjacent to a body anchors it and gains the marker class`() {
+        val line = "א<sup>1</sup>&nbsp;<i class=\"footnote\">גוף</i> ב<sup style=\"color:red\" class=\"x\">2</sup><i class=\"footnote\">שני</i>"
+        val found = notes(line)
+        assertEquals(listOf("1", "2"), found.map { it.marker })
+        val stripped = InlineNotes.strip(line, found)
+        assertEquals(
+            "א<sup class=\"footnote-marker\">1</sup>&nbsp; ב<sup class=\"footnote-marker\" style=\"color:red\">2</sup>",
+            stripped,
+        )
+        assertEquals(2, InlineNotes.countMarkers(stripped))
+    }
+
+    @Test
+    fun `classed and plain anchored markers in one line keep reading order`() {
+        val line = "<sup>א</sup> <i class=\"footnote\">1</i> <sup>ב</sup> טקסט " +
+            "<sup class=\"footnote-marker\">ג</sup><i class=\"footnote\">2</i> <sup>ד</sup><i class=\"footnote\">3</i>"
+        val found = notes(line)
+        assertEquals(listOf("א", "ג", "ד"), found.map { it.marker })
+        val stripped = InlineNotes.strip(line, found)
+        assertEquals(
+            "<sup class=\"footnote-marker\">א</sup>  <sup>ב</sup> טקסט " +
+                "<sup class=\"footnote-marker\">ג</sup> <sup class=\"footnote-marker\">ד</sup>",
+            stripped,
+        )
+        val sups = Regex("<sup class=\"footnote-marker\">(.*?)</sup>").findAll(stripped).map { it.groupValues[1] }.toList()
+        assertEquals(found.mapNotNull { it.marker }, sups)
     }
 
     @Test
