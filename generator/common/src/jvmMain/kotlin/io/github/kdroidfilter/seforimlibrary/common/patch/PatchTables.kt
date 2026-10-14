@@ -19,7 +19,7 @@ internal data class PatchTable(
 )
 
 /** Current `seforim.db` schema produced by this revision. */
-internal const val CURRENT_DB_SCHEMA_VERSION: Int = 6
+internal const val CURRENT_DB_SCHEMA_VERSION: Int = 7
 
 /** First schema that keeps line text in `line_content` (see SplitLineContentCli). */
 internal const val LINE_CONTENT_SPLIT_SCHEMA_VERSION: Int = 6
@@ -104,13 +104,26 @@ internal val PATCH_TABLES_IN_FK_ORDER: List<PatchTable> = listOf(
     PatchTable("default_commentator", listOf("bookId", "commentatorBookId"), updatable = true),
     PatchTable("default_targum",      listOf("bookId", "targumBookId"),      updatable = true),
 
+    // Schema 7. Per-book notices and per-line indexes built after every content writer.
+    PatchTable("book_banner",        listOf("bookId"),   updatable = true),
+    PatchTable("book_protection",    listOf("bookId"),   updatable = true),
+    PatchTable("line_divine_name",   listOf("lineId", "charStart"), updatable = true),
+    PatchTable("line_note",          listOf("lineId", "noteIndex"), updatable = true),
+
     // Versioning. Keyed by a string `key` column.
     PatchTable("schema_meta",        listOf("key"),      updatable = true),
 )
 
+/** Tables schema 7 added; a 6 -> 7 delta creates them through its migrations. */
+internal val SCHEMA_7_TABLES: Set<String> = setOf("book_banner", "book_protection", "line_divine_name", "line_note")
+
+/** Schema-6 contract, frozen. */
+internal val PATCH_TABLES_SCHEMA_6: List<PatchTable> =
+    PATCH_TABLES_IN_FK_ORDER.filterNot { it.name in SCHEMA_7_TABLES }
+
 /** Schema-5 contract, frozen: line text still lived in `line.content`. */
 internal val PATCH_TABLES_SCHEMA_5: List<PatchTable> =
-    PATCH_TABLES_IN_FK_ORDER.filterNot { it.name == "line_content" || it.name == "zstd_dict" }
+    PATCH_TABLES_SCHEMA_6.filterNot { it.name == "line_content" || it.name == "zstd_dict" }
 
 /** Schema-4 contract shipped in v26, before line_dh gained dhDisplay. */
 internal val PATCH_TABLES_SCHEMA_4: List<PatchTable> =
@@ -137,82 +150,45 @@ internal fun patchTablesForSchemaVersion(schemaVersion: Int): List<PatchTable> =
     3 -> PATCH_TABLES_SCHEMA_3
     4 -> PATCH_TABLES_SCHEMA_4
     5 -> PATCH_TABLES_SCHEMA_5
-    6 -> PATCH_TABLES_IN_FK_ORDER
+    6 -> PATCH_TABLES_SCHEMA_6
+    7 -> PATCH_TABLES_IN_FK_ORDER
     else -> error("Unsupported patch-table schema version $schemaVersion")
 }
 
 /**
- * A table outside the schema contract: never in [PATCH_TABLES_IN_FK_ORDER] or any
- * hash order. A patch carries a full snapshot of it (`optional_<name>`) plus its
- * [ddl], and the applier replaces the whole table; absent from a DB means "no data".
+ * DDL of the schema-7 tables, identical to Database.sq. Stages that fill one of them
+ * run it first, so they also work on a DB created before schema 7.
  */
-data class OptionalPatchTable(
-    val name: String,
-    val primaryKey: List<String>,
-    /** DDL column order — the columns copied from the snapshot. */
-    val columns: List<String>,
-    val ddl: String,
+val SCHEMA_7_TABLE_DDL: Map<String, String> = linkedMapOf(
+    "book_banner" to """
+        CREATE TABLE IF NOT EXISTS book_banner (
+            bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
+            text TEXT NOT NULL
+        )
+    """.trimIndent(),
+    "book_protection" to """
+        CREATE TABLE IF NOT EXISTS book_protection (
+            bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
+            level INTEGER NOT NULL CHECK (level >= 1)
+        )
+    """.trimIndent(),
+    "line_divine_name" to """
+        CREATE TABLE IF NOT EXISTS line_divine_name (
+            lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
+            charStart INTEGER NOT NULL,
+            charEnd INTEGER NOT NULL,
+            kind INTEGER NOT NULL,
+            source INTEGER NOT NULL,
+            PRIMARY KEY (lineId, charStart)
+        ) WITHOUT ROWID
+    """.trimIndent(),
+    "line_note" to """
+        CREATE TABLE IF NOT EXISTS line_note (
+            lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
+            noteIndex INTEGER NOT NULL,
+            marker TEXT,
+            body TEXT NOT NULL,
+            PRIMARY KEY (lineId, noteIndex)
+        ) WITHOUT ROWID
+    """.trimIndent(),
 )
-
-/** Patch table holding the DDL of each optional table it snapshots. */
-internal const val OPTIONAL_TABLE_DDL_TABLE: String = "optional_table_ddl"
-
-internal fun optionalSnapshotTable(name: String): String = "optional_$name"
-
-// TODO: when schema 7 is introduced, move these tables into its contract and drop the side channel.
-// Any column change here needs schema 7 too: every applier copies exactly these columns.
-val OPTIONAL_PATCH_TABLES: List<OptionalPatchTable> = listOf(
-    OptionalPatchTable(
-        name = "book_banner",
-        primaryKey = listOf("bookId"),
-        columns = listOf("bookId", "text"),
-        ddl = """
-            CREATE TABLE IF NOT EXISTS book_banner (
-                bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
-                text TEXT NOT NULL
-            )
-        """.trimIndent(),
-    ),
-    OptionalPatchTable(
-        name = "book_protection",
-        primaryKey = listOf("bookId"),
-        columns = listOf("bookId", "level"),
-        ddl = """
-            CREATE TABLE IF NOT EXISTS book_protection (
-                bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
-                level INTEGER NOT NULL CHECK (level >= 1)
-            )
-        """.trimIndent(),
-    ),
-    // Built by buildLineDivineNameIndex; every patch ships the whole table.
-    OptionalPatchTable(
-        name = "line_divine_name",
-        primaryKey = listOf("lineId", "charStart"),
-        columns = listOf("lineId", "charStart", "charEnd", "kind", "source"),
-        ddl = """
-            CREATE TABLE IF NOT EXISTS line_divine_name (
-                lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
-                charStart INTEGER NOT NULL,
-                charEnd INTEGER NOT NULL,
-                kind INTEGER NOT NULL,
-                source INTEGER NOT NULL,
-                PRIMARY KEY (lineId, charStart)
-            ) WITHOUT ROWID
-        """.trimIndent(),
-    ),
-)
-
-/**
- * Per-table logical hash of every optional table present in the DB on [conn], in
- * [OPTIONAL_PATCH_TABLES] order — the bytes [LogicalContentHasher] hashes for any table.
- */
-internal fun optionalTableContentHashes(conn: java.sql.Connection): LinkedHashMap<String, String> {
-    val present = OPTIONAL_PATCH_TABLES.map { it.name }.filter { name ->
-        conn.prepareStatement("SELECT 1 FROM main.sqlite_master WHERE type='table' AND name=?").use { ps ->
-            ps.setString(1, name)
-            ps.executeQuery().use { it.next() }
-        }
-    }
-    if (present.isEmpty()) return LinkedHashMap()
-    return LogicalContentHasher(present).computeReport(conn).tableHashes
-}

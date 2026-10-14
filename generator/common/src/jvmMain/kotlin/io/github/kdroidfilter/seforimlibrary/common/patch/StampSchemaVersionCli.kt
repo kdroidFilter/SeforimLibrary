@@ -57,6 +57,7 @@ internal fun stampSchemaVersion(conn: Connection, dbVersion: Int, dbSchemaVersio
     val requiredTables = when (dbSchemaVersion) {
         4, 5 -> setOf("line_ref", "line_dh")
         6 -> setOf("line_ref", "line_dh", "line_content", "version_line")
+        7 -> setOf("line_ref", "line_dh", "line_content", "version_line") + SCHEMA_7_TABLES
         else -> emptySet()
     }
     val existingTables = if (requiredTables.isEmpty()) {

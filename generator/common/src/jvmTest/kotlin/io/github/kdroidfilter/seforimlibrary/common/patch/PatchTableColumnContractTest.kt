@@ -31,11 +31,16 @@ class PatchTableColumnContractTest {
     val tmp = TemporaryFolder()
 
     // The DB schema and patch-artifact format are independent version axes.
-    // The generator writes the schema-5 working shape; SplitLineContentCli turns it into 6.
+    // The generator writes the schema-5 working shape; SplitLineContentCli turns it into 6/7.
 
     @Test
     fun `physical columns of every patch table match the committed expectation`() {
         assertColumns(CURRENT_DB_SCHEMA_VERSION, PATCH_TABLES_IN_FK_ORDER, split = true, compressed = true)
+    }
+
+    @Test
+    fun `the schema 6 tables still match the frozen schema 6 expectation`() {
+        assertColumns(6, PATCH_TABLES_SCHEMA_6, split = true, compressed = true)
     }
 
     @Test

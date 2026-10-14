@@ -70,6 +70,7 @@
 --     book_banner.bookId              -> book(id)                ON DELETE CASCADE
 --     book_protection.bookId          -> book(id)                ON DELETE CASCADE
 --     line_divine_name.lineId         -> line(id)                ON DELETE CASCADE
+--     line_note.lineId                -> line(id)                ON DELETE CASCADE
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- Schema-level metadata (db_version, db_schema_version, content_hash, ...)
@@ -617,8 +618,7 @@ CREATE TABLE IF NOT EXISTS default_targum (
 CREATE INDEX IF NOT EXISTS idx_default_targum_book ON default_targum(bookId);
 CREATE INDEX IF NOT EXISTS idx_default_targum_target ON default_targum(targumBookId);
 
--- Optional per-book publisher banner and protection level (sparse). Outside the
--- schema hash contract: patches ship them as a full snapshot (OPTIONAL_PATCH_TABLES).
+-- Schema 7. Per-book publisher banner and protection level (sparse).
 CREATE TABLE IF NOT EXISTS book_banner (
     bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
     text TEXT NOT NULL
@@ -629,10 +629,9 @@ CREATE TABLE IF NOT EXISTS book_protection (
     level INTEGER NOT NULL CHECK (level >= 1)
 );
 
--- Optional: verified sacred divine names of each line, in the visible-char
+-- Schema 7. Verified sacred divine names of each line, in the visible-char
 -- coordinates of link_anchor, for the app's display substitution (kind/source
--- codes in DivineNameModel.kt). Built by buildLineDivineNameIndex; outside the
--- schema hash contract, shipped as a full snapshot (OPTIONAL_PATCH_TABLES).
+-- codes in DivineNameModel.kt). Built by buildLineDivineNameIndex.
 CREATE TABLE IF NOT EXISTS line_divine_name (
     lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
     charStart INTEGER NOT NULL,
@@ -640,4 +639,16 @@ CREATE TABLE IF NOT EXISTS line_divine_name (
     kind INTEGER NOT NULL,
     source INTEGER NOT NULL,
     PRIMARY KEY (lineId, charStart)
+) WITHOUT ROWID;
+
+-- Schema 7. Inline footnote bodies moved out of the line text by buildLineNoteIndex.
+-- noteIndex is the reading order in the line; marker is the inner HTML of the
+-- <sup class="footnote-marker"> left in place before the note, NULL when the note
+-- had none. The k-th marker sup of the line belongs to the k-th row with a marker.
+CREATE TABLE IF NOT EXISTS line_note (
+    lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
+    noteIndex INTEGER NOT NULL,
+    marker TEXT,
+    body TEXT NOT NULL,
+    PRIMARY KEY (lineId, noteIndex)
 ) WITHOUT ROWID;

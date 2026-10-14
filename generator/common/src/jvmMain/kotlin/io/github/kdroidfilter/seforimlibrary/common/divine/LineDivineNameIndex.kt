@@ -1,7 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.common.divine
 
 import co.touchlab.kermit.Logger
-import io.github.kdroidfilter.seforimlibrary.common.patch.OPTIONAL_PATCH_TABLES
+import io.github.kdroidfilter.seforimlibrary.common.patch.SCHEMA_7_TABLE_DDL
 import org.sqlite.SQLiteConfig
 import org.sqlite.SQLiteOpenMode
 import java.nio.file.Files
@@ -93,9 +93,7 @@ fun rebuildLineDivineNameIndex(
     }
 }
 
-/** The table's DDL is the one the patch side channel ships (OPTIONAL_PATCH_TABLES). */
-internal val CREATE_LINE_DIVINE_NAME: String =
-    OPTIONAL_PATCH_TABLES.single { it.name == "line_divine_name" }.ddl
+internal val CREATE_LINE_DIVINE_NAME: String = SCHEMA_7_TABLE_DDL.getValue("line_divine_name")
 
 internal data class CorpusLine(val id: Long, val bookId: Long, val heRef: String?, val content: String, val verse: VerseRef?)
 

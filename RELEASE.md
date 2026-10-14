@@ -114,13 +114,12 @@ By default `release_meta.json.retentionWindow = 30`: the server can
 prune deltas with `fromVersion < latestVersion - 30`. Clients on a
 version older than the oldest delta are routed to the full bundle.
 
-## Optional tables (banners, protection)
+## Banners and protection
 
 `book_banner` / `book_protection` come from the optional ForDB files `book_banners.csv` /
 `book_protection.csv` (`seedBookNotices`). Both tables always exist in a new build (empty
-when the file is absent). They are outside the schema hash: each patch
-ships them as a full snapshot and the manifest adds `optionalTableContentHashes`, which
-`producePatchAndVerify` checks like the schema hashes (DELTA_UPDATE_WORKFLOW.md §1.5).
+when the file is absent). They are schema-7 contract tables like `line_divine_name` and
+`line_note` (DELTA_UPDATE_WORKFLOW.md §1.5).
 
 ## Private books
 

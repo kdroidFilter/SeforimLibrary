@@ -28,7 +28,13 @@ class PatchTablesContractTest {
             PATCH_TABLES_SCHEMA_3,
         )
         assertEquals(
-            PATCH_TABLES_IN_FK_ORDER.filterNot { it.name == "line_content" || it.name == "zstd_dict" },
+            PATCH_TABLES_IN_FK_ORDER.filterNot {
+                it.name in setOf("book_banner", "book_protection", "line_divine_name", "line_note")
+            },
+            PATCH_TABLES_SCHEMA_6,
+        )
+        assertEquals(
+            PATCH_TABLES_SCHEMA_6.filterNot { it.name == "line_content" || it.name == "zstd_dict" },
             PATCH_TABLES_SCHEMA_5,
         )
         assertEquals(
@@ -81,7 +87,14 @@ class PatchTablesContractTest {
             },
             LogicalContentHasher.TABLES_SCHEMA_6,
         )
-        assertEquals(PATCH_TABLES_IN_FK_ORDER, patchTablesForSchemaVersion(6))
+        assertEquals(
+            LogicalContentHasher.TABLES_SCHEMA_6.toMutableList().apply {
+                addAll(indexOf("schema_meta"), listOf("book_banner", "book_protection", "line_divine_name", "line_note"))
+            },
+            LogicalContentHasher.TABLES_SCHEMA_7,
+        )
+        assertEquals(PATCH_TABLES_IN_FK_ORDER, patchTablesForSchemaVersion(7))
+        assertEquals(PATCH_TABLES_SCHEMA_6, patchTablesForSchemaVersion(6))
         assertEquals(PATCH_TABLES_SCHEMA_5, patchTablesForSchemaVersion(5))
     }
 
@@ -89,9 +102,7 @@ class PatchTablesContractTest {
         fkOrder: List<PatchTable>,
         hashOrder: List<String>,
         schemaVersion: Int,
-        optionalTables: List<OptionalPatchTable>? = null,
     ): String {
-        fun strings(xs: List<String>) = xs.joinToString(", ") { "\"$it\"" }
         val b = StringBuilder()
         b.append("{\n")
         b.append("  \"schemaVersion\": ").append(schemaVersion).append(",\n")
@@ -111,21 +122,7 @@ class PatchTablesContractTest {
             if (i != hashOrder.lastIndex) b.append(",")
             b.append("\n")
         }
-        // Frozen pre-side-channel fixtures end at hashOrder.
-        if (optionalTables == null) {
-            b.append("  ]\n")
-        } else {
-            b.append("  ],\n")
-            b.append("  \"optionalTables\": [\n")
-            for ((i, t) in optionalTables.withIndex()) {
-                b.append("    { \"table\": \"").append(t.name)
-                    .append("\", \"pk\": [").append(strings(t.primaryKey))
-                    .append("], \"columns\": [").append(strings(t.columns)).append("] }")
-                if (i != optionalTables.lastIndex) b.append(",")
-                b.append("\n")
-            }
-            b.append("  ]\n")
-        }
+        b.append("  ]\n")
         b.append("}\n")
         return b.toString()
     }
@@ -137,20 +134,19 @@ class PatchTablesContractTest {
             PATCH_TABLES_IN_FK_ORDER,
             LogicalContentHasher.DEFAULT_TABLES,
             CURRENT_DB_SCHEMA_VERSION,
-            OPTIONAL_PATCH_TABLES,
         )
         assertEquals(expected, actual)
     }
 
     @Test
-    fun `optional tables stay outside the FK order and every hash order`() {
-        val names = OPTIONAL_PATCH_TABLES.map { it.name }.toSet()
-        assertEquals(OPTIONAL_PATCH_TABLES.size, names.size)
-        assertEquals(emptySet(), PATCH_TABLES_IN_FK_ORDER.map { it.name }.toSet() intersect names)
-        for (v in 1..CURRENT_DB_SCHEMA_VERSION) {
-            assertEquals(emptySet(), LogicalContentHasher.tablesForSchemaVersion(v).toSet() intersect names)
-            assertEquals(emptySet(), patchTablesForSchemaVersion(v).map { it.name }.toSet() intersect names)
-        }
+    fun `schema 6 canonical contract remains byte frozen`() {
+        val expected = fixture("/patch_tables_contract_schema_6.json")
+        val actual = canonicalContract(
+            PATCH_TABLES_SCHEMA_6,
+            LogicalContentHasher.TABLES_SCHEMA_6,
+            schemaVersion = 6,
+        )
+        assertEquals(expected, actual)
     }
 
     @Test

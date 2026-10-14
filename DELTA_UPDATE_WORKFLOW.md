@@ -254,20 +254,16 @@ The oracle for both sides is `logical_hash_contract.json` — byte-identical in
 `contract.yml`. Do not regenerate it unless both sides fail identically and
 the change is deliberate.
 
-### 1.5 Optional tables (side channel)
+### 1.5 Schema 7: the 6 -> 7 delta
 
-`book_banner` and `book_protection` (`OPTIONAL_PATCH_TABLES` in `PatchTables.kt`) are
-outside the schema-6 contract: not in the FK order, not in any hash order. A new build
-always has both (possibly empty); older DBs may lack them. For each one present in the new DB the patch carries its DDL in `optional_table_ddl(name, sql)` and a
-full snapshot in `optional_<name>`; the applier (after deletes, before `stat1_snapshot`)
-runs the DDL, empties the table and copies the snapshot. The manifest adds
-
-```json
-"optionalTableContentHashes": { "book_banner": "<hex>", "book_protection": "<hex>" }
-```
-
-— the same per-table hash, of the new DB, checked before COMMIT by the verify-apply gate
-and by new clients. Old clients ignore both. Schema 7 should fold the tables into the contract.
+Schema 7 adds `book_banner`, `book_protection`, `line_divine_name` and `line_note`
+(`SCHEMA_7_TABLES` in `PatchTables.kt`), right before `schema_meta` in both the FK order
+and the hash order. 6 -> 7 is an ordinary delta, not a full rebase: the producer treats
+the four tables as promoted, so the patch's `migrations` carry, per table,
+`DROP TABLE IF EXISTS` and the table's `CREATE TABLE` from the new DB, and every row of
+them is an upsert. The client checks the pre-apply hash in schema-6 order and the
+post-apply hash in schema-7 order. An app that reads schema 6 only gets the planner's
+"update the app" for that edge and keeps its schema-6 DB.
 
 ---
 

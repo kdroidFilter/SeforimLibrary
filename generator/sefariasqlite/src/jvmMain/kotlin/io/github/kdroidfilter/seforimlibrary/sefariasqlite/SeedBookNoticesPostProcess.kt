@@ -2,7 +2,7 @@ package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
-import io.github.kdroidfilter.seforimlibrary.common.patch.OPTIONAL_PATCH_TABLES
+import io.github.kdroidfilter.seforimlibrary.common.patch.SCHEMA_7_TABLE_DDL
 import io.github.kdroidfilter.seforimlibrary.common.reports.GeneratorReport
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -40,7 +40,7 @@ internal data class BookNoticesResult(
 )
 
 /**
- * Seeds the optional `book_banner` and `book_protection` tables from
+ * Seeds the `book_banner` and `book_protection` tables from
  * otzaria-library/ForDB/[BOOK_BANNERS_FILE] and [BOOK_PROTECTION_FILE].
  *
  * Both files are optional: an archive without one leaves its table empty. Runs after
@@ -146,7 +146,7 @@ internal fun applyBookNotices(
     logger: Logger,
     strict: Boolean = true,
 ): BookNoticesResult {
-    conn.createStatement().use { st -> OPTIONAL_PATCH_TABLES.forEach { st.execute(it.ddl) } }
+    conn.createStatement().use { st -> listOf("book_banner", "book_protection").forEach { st.execute(SCHEMA_7_TABLE_DDL.getValue(it)) } }
 
     data class Book(val id: Long, val title: String, val source: String)
     val books = conn.createStatement().use { st ->
