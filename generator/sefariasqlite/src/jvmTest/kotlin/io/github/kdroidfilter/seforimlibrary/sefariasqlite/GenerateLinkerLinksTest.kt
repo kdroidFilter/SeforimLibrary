@@ -520,6 +520,49 @@ class GenerateLinkerLinksTest {
     }
 
     @Test
+    fun nestedClosersAndUnicodeSpacesAreMappedThroughTheRealImporter() {
+        val stored = "(א) ראה <b>([א, ב</b>&nbsp;]\u00a0) וגם ((ג, ד))"
+        val first = stored.indexOf("([")
+        val second = stored.indexOf("((")
+        val body = record(first - 4, stored.indexOf("</b>") - 4, base = 0, hashedContent = stored.substring(4)) + "\n" +
+            record(second - 4, stored.indexOf("))") - 4, base = 0, hashedContent = stored.substring(4)) + "\n"
+        for (split in listOf(false, true)) {
+            val run = runLinkerMain(body, strict = "true", splitLineContent = split, storedSource = stored)
+            assertEquals(null, run.failure)
+            assertEquals(listOf(8 to 18, 23 to 31), run.anchorRanges)
+            assertEquals(1L, run.links, "multiple occurrences still share their stable link")
+        }
+    }
+
+    @Test
+    fun aClosingBracketOwnedByTheNextCitationIsNotTaken() {
+        val stored = "ראה (א, ב)"
+        val start = stored.indexOf('(')
+        val end = stored.indexOf(')')
+        val records = listOf(
+            record(start, end, base = 0, hashedContent = stored),
+            record(end, end + 1, base = 0, hashedContent = stored),
+        )
+        for (ordered in listOf(records, records.reversed(), listOf(records[0], records[0], records[1]))) {
+            val run = runLinkerMain(ordered.joinToString("\n"), strict = "true", storedSource = stored)
+            assertEquals(null, run.failure)
+            assertEquals(listOf(start to end, end to end + 1), run.anchorRanges)
+        }
+    }
+
+    @Test
+    fun aFootnoteNeverSuppliesOrHidesAClosingBracket() {
+        for (note in listOf(") הערה", "", " ", "&nbsp;")) {
+            val stored = "ראה (א, ב<i class=\"footnote\">$note</i>)"
+            val start = stored.indexOf('(')
+            val end = stored.indexOf("<i")
+            val run = runLinkerMain(record(start, end, base = 0, hashedContent = stored), strict = "true", storedSource = stored)
+            assertEquals(null, run.failure)
+            assertEquals(listOf(start to end), run.anchorRanges, "note=$note")
+        }
+    }
+
+    @Test
     fun corruptArtifactLineFailsTheRun() {
         val run = runLinkerMain(record(4, 15, base = 0) + "\n{\"book_key\":\n", strict = null)
         assertTrue(run.failure is SerializationException, "unexpected failure: ${run.failure}")

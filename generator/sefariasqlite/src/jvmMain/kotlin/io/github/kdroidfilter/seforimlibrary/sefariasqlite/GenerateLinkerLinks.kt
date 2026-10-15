@@ -285,9 +285,7 @@ fun main(args: Array<String>) = runBlocking {
         logger.i { "Processing ${artifactFiles.size} artifact files…" }
         for (file in artifactFiles) {
             file.bufferedReader(Charsets.UTF_8).useLines { lines ->
-                for (line in lines) {
-                    if (line.isBlank()) continue
-                    val rec = json.decodeFromString<ArtifactRecord>(line)
+                for ((rec, nextCitationStart) in boundedArtifactRecords(lines, json)) {
                     recordsParsed++
                     check((rec.context_ref == null) == (rec.relative_direction == null)) {
                         "Malformed contextual LINKER record in ${file.path}: context_ref and " +
@@ -362,7 +360,8 @@ fun main(args: Array<String>) = runBlocking {
                     // A separate clickable anchor for EACH citation occurrence (same line may cite
                     // the same ref twice at different offsets → one link, two anchors).
                     val cs = countVisibleChars(content, start)
-                    val ce = countVisibleChars(content, closeDanglingBrackets(content, start, end))
+                    val anchorLimit = maxOf(end, minOf(content.length, nextCitationStart?.let { it + shift } ?: content.length))
+                    val ce = countVisibleChars(content, closeDanglingBrackets(content, start, end, anchorLimit))
                     if (ce > cs) {
                         anchorBatch.add(LinkAnchor(linkId = linkId, side = 0, charStart = cs, charEnd = ce))
                     }
@@ -488,38 +487,152 @@ internal fun linkerOffsetShift(sourceName: String, content: String, sourceHash: 
 }
 
 /**
- * [end], or just past the ")" that closes a "(" the citation from [start] to [end] of the
- * stored line [content] opened, and then past the "]" of a "[" it opened. Sefaria's NER can
- * end a citation right before that bracket, as in "ובאיכה רבה (א, כו", and the app paints
- * exactly the anchor, so only part of the parentheses was marked (Otzaria/otzaria#2366).
- * The offsets index [content], where tags count for nothing: only spaces and tags may
- * stand before the bracket.
+ * Extend a raw UTF-16 citation range over immediately following closing brackets.
+ * Only brackets opened inside the citation may be closed, in nesting order. Whitespace,
+ * whitespace entities and inline formatting are transparent; notes, links and other HTML
+ * elements are barriers. The source text and the original start are never changed;
+ * ambiguous or non-matching suffixes are left outside the anchor.
+ *
+ * [limit] is an exclusive boundary, e.g. the next citation's start or a rehydrated note's
+ * start. Keep this step BEFORE #73's linkerStoredRange mapping to the stored line.
+ * The walk is linear in the citation and its adjacent suffix, with O(bracket depth) memory.
  */
-internal fun closeDanglingBrackets(content: String, start: Int, end: Int): Int =
-    closeDangling(content, start, closeDangling(content, start, end, '(', ')'), '[', ']')
-
-private fun closeDangling(content: String, start: Int, end: Int, open: Char, close: Char): Int {
-    var unclosed = 0
+internal fun closeDanglingBrackets(content: String, start: Int, end: Int, limit: Int = content.length): Int {
+    require(start in 0..end && end <= limit && limit <= content.length)
+    var pending: StringBuilder? = null
     var i = start
     while (i < end) {
+        val c: Char
+        val next: Int
         when (content[i]) {
-            '<' -> i = content.indexOf('>', i).takeIf { it >= 0 } ?: end
-            open -> unclosed++
-            close -> unclosed--
+            '<' -> {
+                i = bracketFormattingTagEnd(content, i, end) ?: return end
+                continue
+            }
+            '&' -> {
+                val entity = bracketEntity(content, i, end)
+                if (entity == null) { i++; continue }
+                c = entity.first
+                next = entity.second
+            }
+            else -> { c = content[i]; next = i + 1 }
         }
+        when (c) {
+            '(', '[' -> {
+                val stack = pending ?: StringBuilder().also { pending = it }
+                stack.append(if (c == '(') ')' else ']')
+            }
+            ')', ']' -> {
+                val stack = pending
+                if (stack != null && stack.isNotEmpty()) {
+                    if (stack.last() != c) return end // crossed/malformed brackets: do not guess
+                    stack.setLength(stack.length - 1)
+                }
+                // An unmatched closer at the start is outside our scope; never move start.
+            }
+        }
+        i = next
+    }
+    val stack = pending ?: return end
+    var extendedEnd = end
+    while (stack.isNotEmpty() && i < limit) {
+        val c: Char
+        val next: Int
+        when (content[i]) {
+            '<' -> {
+                i = bracketFormattingTagEnd(content, i, limit) ?: break
+                continue
+            }
+            '&' -> {
+                val entity = bracketEntity(content, i, limit) ?: break
+                c = entity.first
+                next = entity.second
+            }
+            else -> { c = content[i]; next = i + 1 }
+        }
+        when {
+            c.isWhitespace() -> Unit
+            c == stack.last() -> {
+                stack.setLength(stack.length - 1)
+                extendedEnd = next
+            }
+            else -> break
+        }
+        i = next
+    }
+    return extendedEnd
+}
+
+private val bracketFormattingTags = setOf("b", "strong", "i", "em", "span", "u", "s", "strike", "small", "big", "font", "sub")
+
+// Inspect attributes rather than searching the tag text: a title containing class="footnote"
+// is not a note, whereas a multi-valued, single-quoted or unquoted class may be one.
+private fun bracketFormattingTagEnd(content: String, start: Int, limit: Int): Int? {
+    var close = start + 1
+    while (close < limit && content[close] != '>') close++
+    if (close == limit) return null
+    var i = start + 1
+    if (content[i] == '/') i++
+    val nameStart = i
+    while (i < close && content[i].isLetterOrDigit()) i++
+    if (content.substring(nameStart, i).lowercase() !in bracketFormattingTags) return null
+    if (i < close && !content[i].isWhitespace() && content[i] != '/') return null
+    while (i < close) {
+        while (i < close && (content[i].isWhitespace() || content[i] == '/')) i++
+        if (i == close) break
+        val attrStart = i
+        while (i < close && !content[i].isWhitespace() && content[i] != '=') i++
+        val name = content.substring(attrStart, i)
+        if (name.equals("data-commentator", ignoreCase = true)) return null
+        while (i < close && content[i].isWhitespace()) i++
+        if (i == close || content[i] != '=') continue
         i++
-    }
-    if (unclosed <= 0) return end
-    var j = end
-    while (j < content.length) {
-        when (content[j]) {
-            ' ' -> j++
-            '<' -> j = (content.indexOf('>', j).takeIf { it >= 0 } ?: return end) + 1
-            close -> return j + 1
-            else -> return end
+        while (i < close && content[i].isWhitespace()) i++
+        if (i == close) return null
+        val quote = content[i].takeIf { it == '\'' || it == '"' }
+        if (quote != null) i++
+        val valueStart = i
+        while (i < close && if (quote != null) content[i] != quote else !content[i].isWhitespace()) i++
+        if (quote != null && i == close) return null
+        if (name.equals("class", ignoreCase = true)) {
+            val classes = content.substring(valueStart, i).splitToSequence(' ', '\t', '\n', '\r', '\u000c')
+            if (classes.any { it.equals("footnote", true) || it.equals("footnote-marker", true) }) return null
         }
+        if (quote != null) i++
     }
-    return end
+    return close + 1
+}
+
+// Only decode characters relevant to balancing and whitespace. Match the existing visible-char
+// counter's entity length bound so that raw and stored anchor coordinates stay consistent.
+private fun bracketEntity(content: String, start: Int, limit: Int): Pair<Char, Int>? {
+    val bound = minOf(limit, start + 10)
+    var end = start + 1
+    while (end < bound && content[end] != ';') end++
+    if (end == bound) return null
+    val entity = content.substring(start + 1, end)
+    val decoded = when (entity) {
+        "nbsp" -> '\u00a0'
+        "ensp" -> '\u2002'
+        "emsp" -> '\u2003'
+        "thinsp" -> '\u2009'
+        "lpar" -> '('
+        "rpar" -> ')'
+        "lbrack", "lsqb" -> '['
+        "rbrack", "rsqb" -> ']'
+        else -> {
+            val hex = entity.startsWith("#x", true)
+            val digits = when {
+                hex -> entity.substring(2)
+                entity.startsWith('#') -> entity.substring(1)
+                else -> return null
+            }
+            val number = digits.takeIf { it.isNotEmpty() && it[0] != '+' && it[0] != '-' }
+                ?.toIntOrNull(if (hex) 16 else 10)
+            number?.takeIf { it in 0..0xffff }?.toChar()
+        }
+    } ?: return null
+    return decoded to end + 1
 }
 
 /** SHA-1(UTF-8(content)) truncated to 16 hex chars. MUST equal linker_artifact.content_hash. */
@@ -548,6 +661,36 @@ internal fun targetIdentityMatches(
     actualBookId == expectedBookId &&
     actualLineIndex == entry.lineIndex - 1 &&
     actualHeRef == entry.heRef
+
+/**
+ * The producer groups each book's records by source line. Buffer only that line so a
+ * closing bracket cannot be taken from the next citation, even with duplicate targets or
+ * unsorted spans within the line. Preserve record order (and hence stable ID allocation).
+ */
+private fun boundedArtifactRecords(lines: Sequence<String>, json: Json): Sequence<Pair<ArtifactRecord, Int?>> = sequence {
+    val group = ArrayList<ArtifactRecord>()
+    suspend fun SequenceScope<Pair<ArtifactRecord, Int?>>.emitGroup() {
+        if (group.size == 1) {
+            yield(group.single() to null)
+        } else {
+            val starts = group.map { it.start }.distinct().sorted()
+            for (record in group) {
+                yield(record to starts.getOrNull(starts.binarySearch(record.start) + 1))
+            }
+        }
+        group.clear()
+    }
+    for (line in lines) {
+        if (line.isBlank()) continue
+        val record = json.decodeFromString<ArtifactRecord>(line)
+        val previous = group.lastOrNull()
+        if (previous != null && (previous.book_key != record.book_key || previous.line_index != record.line_index)) {
+            emitGroup()
+        }
+        group.add(record)
+    }
+    if (group.isNotEmpty()) emitGroup()
+}
 
 @Serializable
 private data class ArtifactBookKey(val source_name: String, val canonical_he_title: String)

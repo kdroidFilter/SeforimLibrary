@@ -639,6 +639,44 @@ runCatching {
 2. Parallel book processing (requires thread-safe repository)
 3. Precomputed citation lookup index
 
+## LINKER citation anchors
+
+Phase-2 (`:sefariasqlite:generateLinkerLinks`) completes trailing `()` and `[]`
+brackets in the clickable range when the NER included their opening brackets.
+Closers are matched in nesting order, including `])` and repeated `))`.
+Unicode whitespace, whitespace HTML entities and ordinary inline formatting may
+stand before a closer. Footnote bodies/markers, existing HTML links, commentary
+markers and structural tags stop extension, including empty footnote bodies.
+Malformed or crossed brackets are left unchanged; the source text, anchor start,
+link identity and target range are never rewritten.
+
+The producer writes records grouped by source book and line. Phase-2 buffers one
+such line, preserving record order, to cap extension at the next distinct citation
+start. Duplicates and unsorted spans inside that line remain supported. An existing
+overlap is preserved without further extension. No corpus-wide anchor map is kept.
+
+Offsets remain raw UTF-16 positions until the completed range is mapped through
+`countVisibleChars`. With PR #73's extracted notes, preserve its mapping and apply
+completion **before** it, retaining the next-citation boundary:
+
+```kotlin
+val storedRange = linkerStoredRange(
+    srcLine.noteBodies, start, closeDanglingBrackets(content, start, end, anchorLimit),
+)
+```
+
+Here `content` is the rehydrated line read by the linker, not `srcLine.stored`.
+The footnote opening tag is a hard barrier, so extending cannot make an otherwise
+valid range overlap a rehydrated note and disappear during this mapping.
+
+No schema migration, linker engine change or NER relink is required. Rerun Phase-2
+against matching artifacts/sidecar and regenerate the release/delta to ship the new
+anchors. Earlier corpus/delta measurements for PR #87 predate this broader rule;
+new release counts must be measured again.
+
+Validation: `./gradlew :sefariasqlite:jvmTest` (focused suites:
+`GenerateLinkerLinksTest` and `LinkerAnchorBracketsTest`).
+
 ## Logging
 
 Uses Kermit logger with tag `"SefariaDirectImporter"`:
