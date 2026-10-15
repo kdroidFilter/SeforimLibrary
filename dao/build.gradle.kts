@@ -14,11 +14,13 @@ kotlin {
     jvmToolchain(libs.versions.jvmToolchain.get().toInt())
 
     android {
-        namespace = "io.github.kdroidfilter.seforimlibrary"
+        namespace = "io.github.kdroidfilter.seforimlibrary.dao"
         compileSdk = 35
         minSdk = 21
     }
     jvm()
+    iosArm64()
+    iosSimulatorArm64()
 
     sourceSets {
         commonMain.dependencies {
@@ -28,6 +30,8 @@ kotlin {
             implementation(libs.kotlinx.serialization.protobuf)
             implementation(libs.kotlinx.datetime)
             implementation(libs.kermit)
+            implementation(libs.kotlinx.io.core)
+            implementation(libs.cachemap)
         }
 
         commonTest.dependencies {
@@ -46,6 +50,10 @@ kotlin {
         jvmMain.dependencies {
             implementation(libs.kotlinx.coroutines.swing)
             implementation(libs.sqlDelight.driver.sqlite)
+        }
+
+        iosMain.dependencies {
+            implementation(libs.sqlDelight.driver.native)
         }
 
     }
