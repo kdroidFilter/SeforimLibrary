@@ -8,10 +8,13 @@ import java.nio.file.Files
 import java.nio.file.Paths
 
 /**
- * Opens the Lucene search engine (and its backing repository) for the `search`/`books`/`facets`
+ * Opens the search engine (lexical, or the one [CliHost.searchEngine] wraps it into) (and its backing repository) for the `search`/`books`/`facets`
  * commands. Requires both the database and the Lucene index to exist.
  */
-fun createSearchEngine(config: CliConfig): Pair<SearchEngine, SeforimRepository> {
+fun createSearchEngine(
+    config: CliConfig,
+    host: CliHost = CliHost(),
+): Pair<SearchEngine, SeforimRepository> {
     val dbPath = config.dbPath.toAbsolutePath()
     require(Files.exists(dbPath)) { "Database not found: $dbPath" }
 
@@ -34,11 +37,12 @@ fun createSearchEngine(config: CliConfig): Pair<SearchEngine, SeforimRepository>
 
     val snippetProvider = if (config.noSnippets) null else CliSnippetProvider(repository)
 
-    val engine = LuceneSearchEngine(
+    val lexical = LuceneSearchEngine(
         indexDir = indexPath,
         snippetProvider = snippetProvider,
         dictionaryPath = dictPath,
     )
+    val engine = host.searchEngine(lexical, indexPath, repository)
 
     return engine to repository
 }

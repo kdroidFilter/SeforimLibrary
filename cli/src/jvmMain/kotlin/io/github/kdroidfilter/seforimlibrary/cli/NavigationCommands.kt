@@ -188,3 +188,32 @@ fun runLinks(config: CliConfig): Int {
     }
     return 0
 }
+
+/**
+ * `categories [parentId]` — browse the library tree: the root categories, or the children of
+ * [parentId]. Pair with `search --category <id>` / `facets` to scope a search to a branch.
+ */
+fun runCategories(config: CliConfig): Int {
+    val parentId = config.query.takeIf { it.isNotBlank() }?.let {
+        it.toLongOrNull() ?: run {
+            System.err.println("Error: <parentId> must be numeric")
+            return 1
+        }
+    }
+    val repository = createRepository(config)
+    try {
+        val categories = runBlocking {
+            if (parentId == null) repository.getRootCategories() else repository.getCategoryChildren(parentId)
+        }
+        val out = categories.map { CategoryOutput(it.id, it.parentId, it.title, it.level) }
+        if (config.jsonOutput) {
+            println(jsonPretty.encodeToString(CategoryListOutput(parentId, out)))
+        } else {
+            println(if (parentId == null) "Root categories: ${out.size}" else "Children of category $parentId: ${out.size}")
+            for (c in out) println("  [${c.id}] ${c.title}")
+        }
+    } finally {
+        repository.close()
+    }
+    return 0
+}

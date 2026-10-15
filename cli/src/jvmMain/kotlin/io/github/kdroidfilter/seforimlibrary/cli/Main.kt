@@ -1,5 +1,9 @@
 package io.github.kdroidfilter.seforimlibrary.cli
 
+import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
+import io.github.kdroidfilter.seforimlibrary.search.LuceneSearchEngine
+import io.github.kdroidfilter.seforimlibrary.search.SearchEngine
+import java.nio.file.Path
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlin.system.exitProcess
@@ -18,6 +22,19 @@ private fun suppressLuceneWarnings() {
 fun main(args: Array<String>): Unit = exitProcess(runCli(args))
 
 /**
+ * What a host app plugs into the CLI: the engines that live outside SeforimLibrary. The standalone
+ * `seforim-cli` keeps the defaults (lexical search, no reference lookup); the Zayit app passes its
+ * hybrid semantic search (official builds) and its acronym-aware lookup index.
+ */
+class CliHost(
+    /** Turns the lexical engine into the one `search`/`books`/`facets` use. */
+    val searchEngine: (lexical: LuceneSearchEngine, indexDir: Path, repository: SeforimRepository) -> SearchEngine =
+        { lexical, _, _ -> lexical },
+    /** Resolves a book title or acronym to books (`lookup`); null when unavailable. */
+    val lookup: ((dbPath: Path, query: String, limit: Int) -> LookupOutput)? = null,
+)
+
+/**
  * Runs a single CLI command and returns a process exit code (0 = success, non-zero = error).
  *
  * Kept free of [exitProcess] so the exact same entry point can be invoked in-process — e.g. the
@@ -25,7 +42,10 @@ fun main(args: Array<String>): Unit = exitProcess(runCli(args))
  * being able to kill the host JVM. The standalone [main] wrapper turns the returned code into an
  * actual process exit.
  */
-fun runCli(args: Array<String>): Int {
+fun runCli(
+    args: Array<String>,
+    host: CliHost = CliHost(),
+): Int {
     suppressLuceneWarnings()
 
     if (args.isEmpty()) {
@@ -36,9 +56,11 @@ fun runCli(args: Array<String>): Int {
     val config = parseArgs(args)
 
     return when (config.command) {
-        "search" -> runSearch(config)
-        "books" -> runBookSearch(config)
-        "facets" -> runFacets(config)
+        "search" -> runSearch(config, host)
+        "books" -> runBookSearch(config, host)
+        "facets" -> runFacets(config, host)
+        "lookup" -> runLookup(config, host)
+        "categories" -> runCategories(config)
         "book" -> runBook(config)
         "line" -> runLine(config)
         "lines" -> runLines(config)
@@ -62,10 +84,11 @@ fun printUsage() {
         Seforim Search CLI
 
         Usage:
-          Lucene search (relevance-ranked):
+          Search (relevance-ranked; hybrid lexical + semantic in the official Zayit app):
             seforim-cli search <query> [options]    Search for text in the database
             seforim-cli books <prefix>              Search books by title prefix (ids)
             seforim-cli facets <query>              Get hit counts by book/category
+            seforim-cli lookup <title>              Find books by title or acronym, e.g. שו"ע או"ח (app only)
 
           Database navigation (no SQL needed — covers everything):
             seforim-cli book <substring>            Find books by title (contains), full metadata
@@ -74,6 +97,7 @@ fun printUsage() {
             seforim-cli lines --toc <tocEntryId>    All lines of a TOC section (e.g. a siman)
             seforim-cli toc <bookId> [--text <s>]   Table of contents (filter by label substring)
             seforim-cli links <lineId>              ALL links both directions (commentaries + sources)
+            seforim-cli categories [parentId]      Library tree: root categories, or children of parentId
 
             seforim-cli help                        Show this help
 
@@ -98,6 +122,8 @@ fun printUsage() {
         Examples:
           seforim-cli search "בראשית ברא" --limit 10
           seforim-cli book "שולחן ערוך אורח חיים"
+          seforim-cli lookup 'שו"ע או"ח'
+          seforim-cli categories
           seforim-cli toc 382 --text "סימן תנא"
           seforim-cli lines --toc 12345 --strip
           seforim-cli line 266232

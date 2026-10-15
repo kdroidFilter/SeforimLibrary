@@ -116,3 +116,31 @@ data class LinksOutput(
     val count: Int,
     val links: List<LinkOutput>,
 )
+
+@Serializable
+data class CategoryOutput(
+    val id: Long,
+    val parentId: Long?,
+    val title: String,
+    val level: Int,
+)
+
+@Serializable
+data class CategoryListOutput(
+    val parentId: Long?,
+    val categories: List<CategoryOutput>,
+)
+
+@Serializable
+data class LookupBookOutput(
+    val id: Long,
+    val title: String,
+    val isBaseBook: Boolean,
+    val matchedAcronyms: List<String>,
+)
+
+@Serializable
+data class LookupOutput(
+    val query: String,
+    val books: List<LookupBookOutput>,
+)

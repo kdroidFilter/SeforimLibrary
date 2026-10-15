@@ -5,13 +5,13 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /** `search <query>` — relevance-ranked Lucene full-text search. */
-fun runSearch(config: CliConfig): Int {
+fun runSearch(config: CliConfig, host: CliHost = CliHost()): Int {
     if (config.query.isBlank()) {
         System.err.println("Error: Search query required")
         return 1
     }
 
-    val (engine, _) = createSearchEngine(config)
+    val (engine, _) = createSearchEngine(config, host)
     engine.use {
         val session = engine.openSession(
             query = config.query,
@@ -81,13 +81,13 @@ fun runSearch(config: CliConfig): Int {
 }
 
 /** `books <prefix>` — Lucene book-title prefix search, returning matching book IDs. */
-fun runBookSearch(config: CliConfig): Int {
+fun runBookSearch(config: CliConfig, host: CliHost = CliHost()): Int {
     if (config.query.isBlank()) {
         System.err.println("Error: Book prefix required")
         return 1
     }
 
-    val (engine, _) = createSearchEngine(config)
+    val (engine, _) = createSearchEngine(config, host)
     engine.use {
         val bookIds = engine.searchBooksByTitlePrefix(config.query, config.limit)
 
@@ -104,13 +104,13 @@ fun runBookSearch(config: CliConfig): Int {
 }
 
 /** `facets <query>` — hit counts grouped by book and by category for a search query. */
-fun runFacets(config: CliConfig): Int {
+fun runFacets(config: CliConfig, host: CliHost = CliHost()): Int {
     if (config.query.isBlank()) {
         System.err.println("Error: Search query required")
         return 1
     }
 
-    val (engine, _) = createSearchEngine(config)
+    val (engine, _) = createSearchEngine(config, host)
     engine.use {
         val facets = engine.computeFacets(
             query = config.query,
@@ -154,6 +154,33 @@ fun runFacets(config: CliConfig): Int {
                 .forEach { (catId, count) ->
                     println("  Category $catId: $count hits")
                 }
+        }
+    }
+    return 0
+}
+
+/**
+ * `lookup <title>` — resolve a book title or acronym (`שו"ע או"ח`) to books, acronym-aware, through
+ * the host's lookup index ([CliHost.lookup]); the standalone CLI has none. Then `toc <bookId> --text`
+ * reaches a siman.
+ */
+fun runLookup(config: CliConfig, host: CliHost): Int {
+    if (config.query.isBlank()) {
+        System.err.println("Error: Title or acronym required")
+        return 1
+    }
+    val lookup = host.lookup ?: run {
+        System.err.println("Error: lookup is only available from the Zayit app (zayit cli lookup ...)")
+        return 1
+    }
+    val out = lookup(config.dbPath.toAbsolutePath(), config.query, config.limit)
+    if (config.jsonOutput) {
+        println(jsonPretty.encodeToString(out))
+    } else {
+        println("Books (${out.books.size}):")
+        for (b in out.books) {
+            val acronyms = b.matchedAcronyms.takeIf { it.isNotEmpty() }?.joinToString(prefix = "  via ") ?: ""
+            println("  [${b.id}] ${b.title}${if (b.isBaseBook) " (base)" else ""}$acronyms")
         }
     }
     return 0
