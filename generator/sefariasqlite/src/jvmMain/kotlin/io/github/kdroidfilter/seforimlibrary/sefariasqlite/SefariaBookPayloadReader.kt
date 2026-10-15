@@ -39,6 +39,10 @@ internal class SefariaBookPayloadReader(
     // ריק כברירת מחדל, כך שכל ספר שאינו במיפוי נקרא בדיוק כמו קודם.
     private val preferredVersions: SefariaPreferredVersions = SefariaPreferredVersions.Empty,
 ) {
+    // Set by the read entry points before any book is walked (see readBaseTexts).
+    @Volatile
+    private var baseTextLetters: BaseTextLetters = BaseTextLetters.EMPTY
+
     internal data class SelectedBookReadStats(
         val mergedFilesScanned: Int,
         val payloadsLoaded: Int,
@@ -76,6 +80,7 @@ internal class SefariaBookPayloadReader(
         }
 
         logger.i { "Found ${mergedFiles.size} merged.json files to process" }
+        val baseTexts = readBaseTexts(mergedFiles, schemaDir, schemaLookup)
 
         // Process files in parallel with limited concurrency
         val semaphore = Semaphore(SefariaImportTuning.FILE_PARALLELISM)
@@ -86,7 +91,7 @@ internal class SefariaBookPayloadReader(
                     // Derive the text-only per-line values here, on the worker that
                     // already holds the book's text, so the single-threaded insert
                     // loop is left with nothing but id allocation and inserts.
-                    parseBookFile(textPath, schemaDir, schemaLookup)?.precomputeLineData()
+                    (baseTexts[textPath] ?: parseBookFile(textPath, schemaDir, schemaLookup))?.precomputeLineData()
                 }
             }
         }.awaitAll().filterNotNull()
@@ -111,6 +116,7 @@ internal class SefariaBookPayloadReader(
                 .sorted()
                 .toList()
         }
+        readBaseTexts(mergedFiles, schemaDir, schemaLookup)
         for (textPath in mergedFiles) {
             scanned++
             val header = readTopLevelTitles(textPath)
@@ -131,6 +137,35 @@ internal class SefariaBookPayloadReader(
             }
         }
         return SelectedBookReadStats(scanned, loaded)
+    }
+
+    /** Reads the books whose itags letter another book's notes, ahead of that book. */
+    private fun readBaseTexts(
+        mergedFiles: List<Path>,
+        schemaDir: Path,
+        schemaLookup: Map<String, Path>,
+    ): Map<Path, BookPayload> {
+        val bases = mergedFiles
+            .filter { readLeadingTitle(it) in BASE_TEXT_LETTERING_BASES }
+            .mapNotNull { path -> parseBookFile(path, schemaDir, schemaLookup)?.let { path to it } }
+            .filter { (_, payload) -> payload.enTitle in BASE_TEXT_LETTERING_BASES }
+            .toMap()
+        baseTextLetters = BaseTextLetters.from(bases.values)
+        return bases
+    }
+
+    // "title" opens every merged.json, so this reads a few bytes of each file.
+    private fun readLeadingTitle(path: Path): String? {
+        JsonFactory().createParser(path.toFile()).use { parser ->
+            if (parser.nextToken() != JsonToken.START_OBJECT) return null
+            while (parser.nextToken() == JsonToken.FIELD_NAME) {
+                val name = parser.currentName
+                val token = parser.nextToken()
+                if (name == "title") return if (token == JsonToken.VALUE_STRING) parser.text else null
+                parser.skipChildren()
+            }
+        }
+        return null
     }
 
     private fun readTopLevelTitles(path: Path): Pair<String?, String?> {
@@ -807,10 +842,32 @@ internal class SefariaBookPayloadReader(
             0
         }
 
-        val prefixesLeaf = addressTypes.getOrNull(addressTypes.size - depth) != "Integer" || numbersIntegerLeaf
+        val currentAddressType = addressTypes.getOrNull(addressTypes.size - depth)
+        val prefixesLeaf = currentAddressType != "Integer" || numbersIntegerLeaf
+
+        fun childRefPrefix(idx: Int) = buildString {
+            append(refPrefix)
+            val shiftedIdx = idx + 1 + refIndexOffset
+            append(if (currentAddressType == "Talmud") toEnglishDaf(shiftedIdx) else shiftedIdx.toString())
+            append(":")
+        }
+
+        // The letters the base text prints on these notes, when it letters them (BaseTextLetters).
+        val baseLetters: List<String?>? = if (depth == 1 && text.isNotEmpty()) {
+            baseTextLetters.forBook(bookEnTitle)?.let { letters ->
+                text.indices.map { idx -> letters[canonicalCitation(trimTrailingSeparators(childRefPrefix(idx)))] }
+            }?.takeIf { found -> found.any { it != null } }
+        } else {
+            null
+        }
+        baseLetters?.forEachIndexed { idx, label ->
+            if (label == null && !text[idx].isTriviallyEmpty()) {
+                throw SefariaSchemaException("${trimTrailingSeparators(childRefPrefix(idx))}: no letter in its base text")
+            }
+        }
 
         // Their segments open with their own printed marker (upstream 641666f4).
-        val selfLabeledBook = hasSelfLabeledSegments(bookEnTitle)
+        val selfLabeledBook = hasSelfLabeledSegments(bookEnTitle) || baseLetters != null
 
         // Items that drop the generated prefix because they already carry their own
         // label for that same number. Most shapes are enough alone. Two can also be
@@ -836,7 +893,6 @@ internal class SefariaBookPayloadReader(
         text.forEachIndexed { idx, item ->
             if (item.isTriviallyEmpty()) return@forEachIndexed
 
-            val currentAddressType = addressTypes.getOrNull(addressTypes.size - depth)
             val letter = when (currentAddressType) {
                 "Talmud" -> toDaf(idx + 1)
                 "Integer" -> toGematria(idx + 1)
@@ -851,7 +907,11 @@ internal class SefariaBookPayloadReader(
             val numbered = depth == 1 && isReferenceable && prefixesLeaf && nonEmptyCount > 1 && !selfLabeledBook
             val selfLabelled = numbered && currentAddressType != "Talmud" && ownLabelled?.get(idx) == true
             if (numbered) labels.count(selfLabelled)
-            val nextLinePrefix = if (isNumberedParagraph || (numbered && !selfLabelled)) "($letter) " else ""
+            val nextLinePrefix = when {
+                baseLetters != null -> baseTextLetterPrefix(baseLetters[idx]!!, (item as? JsonPrimitive)?.content.orEmpty())
+                isNumberedParagraph || (numbered && !selfLabelled) -> "($letter) "
+                else -> ""
+            }
 
             if (depth > 1 && sectionName?.isBlank() != true && isReferenceable) {
                 val tag = when (level) {
@@ -872,16 +932,7 @@ internal class SefariaBookPayloadReader(
             // Paragraph/ref offset from index_offsets_by_depth (Zohar-style):
             // for the current iteration's element i, children should build refs
             // as "(i+1):(offset[i]+childIdx+1)".
-            val shiftedIdx = idx + 1 + refIndexOffset
-            val newRefPrefix = buildString {
-                append(refPrefix)
-                val refNumber = when (currentAddressType) {
-                    "Talmud" -> toEnglishDaf(shiftedIdx)
-                    else -> shiftedIdx.toString()
-                }
-                append(refNumber)
-                append(":")
-            }
+            val newRefPrefix = childRefPrefix(idx)
             val newHeRefPrefix = buildString {
                 append(heRefPrefix)
                 append(letter)
