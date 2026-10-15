@@ -1,0 +1,3 @@
+# The JNI of the Java runtime the iOS app embeds (OpenJDK mobile, statically linked into the app: see IOS_RUNTIME.md)
+headers = jni.h
+package = io.github.kdroidfilter.seforimlibrary.search.jni
