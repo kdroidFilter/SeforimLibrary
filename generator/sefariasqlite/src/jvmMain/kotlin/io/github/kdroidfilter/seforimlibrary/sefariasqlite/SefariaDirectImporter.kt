@@ -253,6 +253,7 @@ class SefariaDirectImporter(
 
         // Before any book id is allocated.
         registerBookAliases(orderedBookPayloads)
+        val issuedBookIds = HashMap<Long, String>()
 
         logger.i { "Inserting books and lines..." }
         var processedBooks = 0
@@ -276,6 +277,10 @@ class SefariaDirectImporter(
                 ?: error("Payload '${payload.heTitle}' precompute was already released")
             val catId = ensureCategoryPath(payload.categoriesHe)
             val bookId = allocator.bookId(sourceName, canonicalHeTitle(payload))
+            // Otzaria: an alias must never give one id to two books.
+            issuedBookIds.putIfAbsent(bookId, payload.heTitle)?.let { other ->
+                check(other == payload.heTitle) { "Book id $bookId went to both '$other' and '${payload.heTitle}' (book alias)" }
+            }
             val bookPath = buildBookPath(payload.categoriesHe, payload.heTitle)
             val canonicalTitle = canonicalHeTitle(payload)
             val previousCanonicalTitle = canonicalTitleByBookPath.putIfAbsent(bookPath, canonicalTitle)
@@ -737,7 +742,8 @@ class SefariaDirectImporter(
     internal fun registerBookAliases(payloads: List<BookPayload>) {
         val currentBooks = payloads.associateBy { BookKey(sourceName, canonicalHeTitle(it)) }
         val currentTitles = currentBooks.keys.mapTo(HashSet()) { it.canonicalHeTitle }
-        BookIdContinuity(allocator).registerAliases(
+        val continuity = BookIdContinuity(allocator)
+        continuity.registerAliases(
             currentKeys = currentBooks.keys,
             inScope = { it.sourceName == sourceName || it.canonicalHeTitle in currentTitles },
             atVersion = buildVersion,
@@ -752,6 +758,7 @@ class SefariaDirectImporter(
                 }
             },
         )
+        continuity.settleCrossSourceAliases(currentBooks.keys, buildVersion)
     }
 }
 

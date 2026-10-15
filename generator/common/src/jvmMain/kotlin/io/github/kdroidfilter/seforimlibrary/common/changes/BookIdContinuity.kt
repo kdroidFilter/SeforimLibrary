@@ -103,6 +103,42 @@ class BookIdContinuity(
     }
 
     /**
+     * Otzaria: drops the alias of each of [currentKeys] that leads to a book [keepsId] gives the
+     * id to: that key is a book of its own again, beside the book its alias leads to.
+     */
+    fun dropAliasesLeadingTo(currentKeys: Set<BookKey>, keepsId: (BookKey) -> Boolean) {
+        for (key in currentKeys) {
+            val target = allocator.aliasedBookKey(key) ?: continue
+            if (!keepsId(target)) continue
+            logger.w { "Book $key is back beside $target, the book its alias leads to; it takes a new id" }
+            allocator.dropBookAlias(key)
+        }
+    }
+
+    /**
+     * Otzaria: for the Sefaria importer, whose [currentKeys] the Otzaria importer skips by exact
+     * title. An alias leading to another source's book of the same title gives that id back (as
+     * [registerAliases] does unless the title is ambiguous); one leading to a book Otzaria still
+     * imports is dropped, so that book keeps the id.
+     */
+    fun settleCrossSourceAliases(currentKeys: Set<BookKey>, atVersion: Int) {
+        val sources = currentKeys.mapTo(HashSet()) { it.sourceName }
+        val titles = currentKeys.mapTo(HashSet()) { it.canonicalHeTitle }
+        for (key in currentKeys) {
+            val target = allocator.aliasedBookKey(key) ?: continue
+            if (target.sourceName in sources) continue
+            if (target.canonicalHeTitle == key.canonicalHeTitle &&
+                allocator.peekBookId(key.sourceName, key.canonicalHeTitle) == null
+            ) {
+                logger.i { "Book $key takes back its id from $target, which it covers" }
+                allocator.registerBookAlias(target, key, atVersion)
+            }
+        }
+        // A book of a current title is skipped, so its id stays where the alias leads.
+        dropAliasesLeadingTo(currentKeys) { it.sourceName !in sources && it.canonicalHeTitle !in titles }
+    }
+
+    /**
      * Previous books whose id is not in [currentBooks] while a current book has
      * the same normalised title: the book survived but changed id.
      * Books really removed upstream (title gone) are not reported.
