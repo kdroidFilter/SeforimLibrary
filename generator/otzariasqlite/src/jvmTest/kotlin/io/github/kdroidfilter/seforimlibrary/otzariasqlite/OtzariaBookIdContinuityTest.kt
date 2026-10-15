@@ -39,7 +39,8 @@ class OtzariaBookIdContinuityTest {
     /**
      * Builds [files] against [state], on a DB already holding the Sefaria books [sefaria],
      * and returns each book's (source, title) with its id. files_manifest.json leaves out
-     * the book titled [unhashed].
+     * the book titled [unhashed]. [sefariaKeyed] are Sefaria books the build state holds,
+     * key title to display title, as the Sefaria importer leaves them.
      */
     private fun build(
         state: Path,
@@ -47,6 +48,7 @@ class OtzariaBookIdContinuityTest {
         files: List<BookFile>,
         sefaria: List<String> = emptyList(),
         unhashed: String? = null,
+        sefariaKeyed: Map<String, String> = emptyMap(),
     ): Map<Pair<String, String>, Long> = runBlocking {
         val driver = JdbcSqliteDriver(url = "jdbc:sqlite::memory:")
         SeforimDb.Schema.create(driver)
@@ -60,6 +62,14 @@ class OtzariaBookIdContinuityTest {
                 }
             }
             val allocator = InMemoryIdAllocator.load(state.takeIf { Files.exists(it) })
+            if (sefariaKeyed.isNotEmpty()) {
+                val sourceId = repo.insertSource("Sefaria")
+                val categoryId = repo.insertCategory(Category(title = "Sefaria"))
+                sefariaKeyed.forEach { (key, display) ->
+                    val id = allocator.bookId("Sefaria", key)
+                    repo.insertBook(Book(id = id, categoryId = categoryId, sourceId = sourceId, title = display, heRef = key))
+                }
+            }
             val sourceDir = library(files).also(::writeFilesManifest)
             if (unhashed != null) {
                 val manifest = sourceDir.resolve("files_manifest.json")
@@ -189,5 +199,28 @@ class OtzariaBookIdContinuityTest {
         val first = build(state, 1, listOf(live, gone))
         build(state, 2, listOf(live))
         assertEquals(first, build(state, 3, listOf(live, gone)))
+    }
+
+    @Test
+    fun aBookSefariaDroppedKeepsItsIdInOtzaria() {
+        val state = newState()
+        val before = build(state, 1, listOf(BookFile("A", "x", "y", body)), sefariaKeyed = mapOf("Dropped" to "Dropped"))
+        val after = build(state, 2, listOf(BookFile("A", "x", "y", body), BookFile("MoreBooks", "x", "Dropped", body)))
+        assertEquals(before.getValue("Sefaria" to "Dropped"), after.getValue("MoreBooks" to "Dropped"))
+    }
+
+    @Test
+    fun aLiveSefariaBookTitledApartFromItsKeyKeepsItsId() {
+        // Upstream compared keys with DB titles: this book looked gone, and the Otzaria
+        // book of the same normalised title would have taken its id.
+        val state = newState()
+        val sefaria = mapOf("Maharsha \"A\"" to "Maharsha display")
+        build(state, 1, listOf(BookFile("A", "x", "y", body)), sefariaKeyed = sefaria)
+        val after = build(
+            state, 2,
+            listOf(BookFile("A", "x", "y", body), BookFile("MoreBooks", "x", "Maharsha ״A״", body)),
+            sefariaKeyed = sefaria,
+        )
+        assertNotEquals(after.getValue("Sefaria" to "Maharsha display"), after.getValue("MoreBooks" to "Maharsha ״A״"))
     }
 }

@@ -734,7 +734,7 @@ class SefariaDirectImporter(
      * space) and of books another source held that Sefaria now provides: the
      * Otzaria importer skips any title Sefaria has, so the id moves here.
      */
-    private fun registerBookAliases(payloads: List<BookPayload>) {
+    internal fun registerBookAliases(payloads: List<BookPayload>) {
         val currentBooks = payloads.associateBy { BookKey(sourceName, canonicalHeTitle(it)) }
         val currentTitles = currentBooks.keys.mapTo(HashSet()) { it.canonicalHeTitle }
         BookIdContinuity(allocator).registerAliases(

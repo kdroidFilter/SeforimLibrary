@@ -1776,16 +1776,16 @@ class DatabaseGenerator(
         val currentBooks = collectCurrentBooks()
         plannedBookKeys = currentBooks.keys
         previousImportBookKeys = previousImportKeys()
-        val sefariaSourceId = repository.getSourceByName(SEFARIA_SOURCE)?.id
-        val sefariaTitles = repository.getAllBooks()
-            .filter { it.sourceId == sefariaSourceId }
-            .mapTo(HashSet()) { it.title }
+        // Otzaria: Sefaria keys by id, not by title: a book's title is not always its key
+        // (sefariaDisplayTitle), and a live book in scope would hand its id to an Otzaria book.
+        val liveIds = repository.getAllBooks().mapTo(HashSet()) { it.id }
+        val previousIds = allocator.bookIds()
         continuity.registerAliases(
             currentKeys = currentBooks.keys,
             // Otzaria: only books the previous build had.
             inScope = {
                 if (it.sourceName != SEFARIA_SOURCE) it in previousImportBookKeys
-                else it.canonicalHeTitle !in sefariaTitles
+                else previousIds.getValue(it) !in liveIds
             },
             atVersion = buildVersion,
             currentLineHashes = { key ->
