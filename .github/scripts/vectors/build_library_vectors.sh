@@ -427,11 +427,11 @@ build_family() {  # <name> <release prefix>: steps 2 to 7 of one family, in a su
       echo "Family: \`$name\`, chunking identity \`$(jq -r .chunking_identity "$FAMILY")\`."
       echo
       jq -er '.gates[] | select(.gate == "G3") | .metrics |
-        select([.sourceTextChars, .windowedTextChars, .unwindowedTextChars, .partiallyWindowedLines, .unwindowedLines] |
+        select([.standaloneTextChars, .windowedStandaloneChars, .unwindowedStandaloneChars, .partiallyWindowedStandaloneLines, .unwindowedStandaloneLines, .borrowedContextLines] |
           all(type == "number" and . >= 0)) |
-        "Source text: \(.windowedTextChars) / \(.sourceTextChars) normalized characters inside emitted window spans; \(.unwindowedTextChars) outside, \(.partiallyWindowedLines) partially windowed lines, \(.unwindowedLines) nonempty lines with no window."' \
+        "Standalone source text: \(.windowedStandaloneChars) / \(.standaloneTextChars) normalized standalone characters inside emitted window spans; \(.unwindowedStandaloneChars) outside, \(.partiallyWindowedStandaloneLines) partially windowed standalone lines, \(.unwindowedStandaloneLines) standalone lines with no window; \(.borrowedContextLines) context-borrowing lines excluded."' \
         "$FW/release/validation.json"
-      echo "G3 certifies coverage of the windows this bounded recipe emits. It does not certify complete source text coverage or semantic recall; declared spans estimate source coverage, neighbour context can change literal model input, and duplicate window suppression can make the span count conservative."
+      echo "G3 certifies coverage of the windows this bounded recipe emits. It does not certify complete source text coverage or semantic recall; character counts cover standalone lines only, exclude short lines which borrow neighbour context, and duplicate window suppression can make the span count conservative."
       echo
     fi
     echo "Manifest: \`$STEM.manifest.json\`, SHA-256 \`$MANIFEST_SHA\` — check it before trusting the files it lists."

@@ -447,8 +447,8 @@ g3=$(verdict G3); g4=$(verdict G4); g6v=$(verdict G6); passed=true
 for v in $g3 $g4 $g6v; do case "$v" in passed|skipped) ;; *) passed=false ;; esac; done
 [ -z "$report" ] || jq -n --argjson passed "$passed" --arg g3 "$g3" --arg g4 "$g4" --arg g6 "$g6v" \
   '{tool: "validate_semantic_vectors", reportVersion: 1, passed: $passed,
-    gates: [{gate: "G3", status: $g3, metrics: {sourceTextChars: 10000, windowedTextChars: 8700,
-      unwindowedTextChars: 1300, partiallyWindowedLines: 2, unwindowedLines: 0}},
+    gates: [{gate: "G3", status: $g3, metrics: {standaloneTextChars: 10000, windowedStandaloneChars: 8700,
+      unwindowedStandaloneChars: 1300, partiallyWindowedStandaloneLines: 2, unwindowedStandaloneLines: 0, borrowedContextLines: 3}},
       {gate: "G4", status: $g4}, {gate: "G6", status: $g6}]}' > "$report"
 [ "$passed" = true ]
 """
@@ -1247,8 +1247,9 @@ class Driver(unittest.TestCase):
         self.assertEqual([l.split(":")[0] for l in legacy[1:] if l], ["Manifest", "Gates"])
         windows = (self.root / f"uploaded.tsv.notes.vectors-windows-{TAG}").read_text()
         self.assertIn(f"Family: `{WINDOWS}`, chunking identity `{CHUNKING_IDENTITY[WINDOWS]}`.", windows)
-        self.assertIn("Source text: 8700 / 10000 normalized characters", windows)
-        self.assertIn("1300 outside, 2 partially windowed lines, 0 nonempty lines with no window", windows)
+        self.assertIn("Standalone source text: 8700 / 10000 normalized standalone characters", windows)
+        self.assertIn("1300 outside, 2 partially windowed standalone lines, 0 standalone lines with no window", windows)
+        self.assertIn("3 context-borrowing lines excluded", windows)
         self.assertIn("does not certify complete source text coverage or semantic recall", windows)
 
     def test_a_family_leaves_only_what_it_needs_before_the_next_starts(self):
