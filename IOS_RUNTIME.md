@@ -18,12 +18,13 @@ JvmLuceneIndex ── CBOR over JNI (EmbeddedJvm.call) ──▶ IndexBridgeServ
 ```
 
 - `search/src/commonMain/.../index/LuceneIndex.kt`: the only part of the search that runs Lucene: analysis, searches
-  (`IndexQuery`, plain data), cursors, facets, KNN. The JVM and Android implement it in process
-  (`LuceneIndexBackend`, `androidJvmMain`); iOS through the bridge (`iosMain/.../bridge`), with the same implementation
-  running in the embedded runtime.
+  (`IndexQuery`, plain data), cursors, facets, KNN. Lucene runs on a JVM only (ART can't keep up with the Java versions
+  Lucene requires: Java 21 for 10, 25 for 11): the desktop implements it in process (`LuceneIndexBackend`), the mobile
+  apps through the bridge (`BridgedLuceneIndex`), with the same implementation running in the Java runtime they embed:
+  in the app on iOS (JNI), in a process of the app's own on Android.
 - `EmbeddedJvm` starts the runtime (`JNI_CreateJavaVM`), attaches the calling threads, calls
   `IndexBridgeServer.call(byte[]): byte[]` (CBOR of `BridgeRequest` / `BridgeResponse`).
-- Lucene runs unpatched there (Zero is HotSpot): no ART patch (`lucene-android`), `NIOFSDirectory` (no Panama mmap).
+- Lucene runs unpatched there (Zero is HotSpot), with `NIOFSDirectory` (no Panama mmap on Zero).
 
 Verified in the simulator on the real index (7M documents): the same facets, snippets, highlights, title suggestions
 and find-in-book candidates as the desktop, and the same hits but for Lucene's score noise (see `SearchDump`); the whole
@@ -73,7 +74,7 @@ holds:
 
 ```
 App.app/lib/{conf,lib,modules}/...   (the runtime's lib/: java.base, java.logging, java.management, jdk.unsupported)
-App.app/lib/app/*.jar                (./gradlew :search:iosJvmClasspath: search-jvm, lucene-core, kotlin-stdlib, kotlinx-serialization)
+App.app/lib/app/*.jar                (./gradlew :search:mobileJvmClasspath: search-jvm, lucene-core, kotlin-stdlib, kotlinx-serialization)
 ```
 
 About 50 MB uncompressed. Zayit's `./gradlew :searchkit:assembleIosJavaRuntimeDevice` assembles `static/` and `lib/`
@@ -93,8 +94,18 @@ hashes), so the comparison allows score differences: facets, snippets and highli
 
 ## Android
 
-Android 15+ (API 35) only: ART runs Lucene in process, with two classes patched (`lucene-android`: a guard in
-`VectorizationProvider.lookup` and in `HotspotVMOptions`, checked against the upstream classes' SHA-256 so a Lucene bump
-can't ship a stale patch). Before 15, ART lacks the Java 21 APIs Lucene 10 needs, and a Java runtime beside the app
-would cost those older devices too much: they aren't supported. `:search:androidDeviceTest` runs the dump on a device
-or an emulator.
+Android 10+ (API 29: HotSpot's aarch64 code needs native ELF TLS). ART and HotSpot can't share a process (both define
+`JNI_CreateJavaVM`, both handle `SIGSEGV`), so Lucene runs in a Java process of the app's own, the server VM (with its
+JIT, which Android allows) of the same release's Android runtime (`jdk-mobile-27-android-aarch64-b35.1.tar.gz`), behind
+the same bridge as iOS, its calls carried on the process's standard input and output (`JavaProcessTransport`,
+`IndexBridgeServer.main`) rather than JNI.
+
+- The runtime holds the launcher, `jniLibs/arm64-v8a/libjvmlauncher.so`: an executable with the VM and the JDK's
+  natives in, packaged as a library (Android only executes native code from the APK; the app sets
+  `packaging.jniLibs.useLegacyPackaging = true` so it is installed as a file), and `lib/`, its `java.home`. The
+  launcher runs `IndexBridgeServer.main`; everything the VM prints goes to standard error, standard output carries the
+  answers.
+- The process starts on the first call and again after it ends (Android may kill an app's child processes in the
+  background): the calls sent to a process that ends fail, the next ones start another.
+- `JavaProcessTransportTest` runs the same transport on the desktop, a `java` standing for the launcher. On a device,
+  Zayit's `searchkit-check` app runs the whole search.
