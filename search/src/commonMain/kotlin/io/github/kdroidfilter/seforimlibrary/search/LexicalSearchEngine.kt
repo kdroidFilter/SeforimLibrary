@@ -10,6 +10,7 @@ import io.github.kdroidfilter.seforimlibrary.search.index.Occur
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
+import kotlin.concurrent.Volatile
 
 private val logger = Logger.withTag("LexicalSearchEngine")
 
@@ -45,9 +46,21 @@ private val HIT_FIELDS = setOf("book_id", "book_title", "line_id", "line_index",
 class LexicalSearchEngine(
     private val index: LuceneIndex,
     private val snippetProvider: SnippetProvider? = null,
-    dictionary: Lazy<MagicDictionaryIndex?> = lazyOf(null),
+    private val dictionary: Lazy<MagicDictionaryIndex?> = lazyOf(null),
 ) : SearchEngine {
-    private val magicDict: MagicDictionaryIndex? by dictionary
+    @Volatile
+    private var closed = false
+
+    // A dictionary that finished loading after close() is closed by its first reader: close() couldn't see it
+    private val magicDict: MagicDictionaryIndex?
+        get() {
+            val dict = dictionary.value
+            if (closed) {
+                dict?.close()
+                return null
+            }
+            return dict
+        }
 
     // --- SearchEngine interface implementation ---
 
@@ -157,7 +170,7 @@ class LexicalSearchEngine(
     private fun buildHighlightPlan(
         tokens: List<String>,
         hasHashem: Boolean,
-        exactPhrases: List<String>,
+        exactPhrases: List<List<String>>,
     ): HighlightPlan {
         val forms =
             tokens.distinct().map { token ->
@@ -175,7 +188,7 @@ class LexicalSearchEngine(
             }
         val phrases =
             exactPhrases
-                .map { index.analyze(it).joinToString(" ") }
+                .map { it.joinToString(" ") }
                 .filter { it.isNotBlank() }
         return HighlightPlan.build(forms, phrases)
     }
@@ -220,7 +233,11 @@ class LexicalSearchEngine(
         }
 
     override fun close() {
+        closed = true
         index.close()
+        // The engine owns its dictionary (and its SQLite connections) once loaded; one still loading is closed by
+        // magicDict
+        if (dictionary.isInitialized()) dictionary.value?.close()
     }
 
     override fun computeFacets(
@@ -339,6 +356,8 @@ class LexicalSearchEngine(
             parsed.exactPhrases
                 .map { HebrewTextUtils.normalizeHebrew(it) }
                 .filter { it.isNotBlank() }
+        // Analyzed once, for both the phrase clauses and the highlights (a bridge call on iOS)
+        val exactPhraseTokens = exactPhrasesNorm.map { index.analyze(it) }
 
         if (norm.isBlank() && exactPhrasesNorm.isEmpty()) return null
 
@@ -373,7 +392,7 @@ class LexicalSearchEngine(
             }
 
         // What the snippets highlight: built on first use (facets need none)
-        val highlightPlan = lazy { buildHighlightPlan(analyzedStd, hasHashem, exactPhrasesNorm) }
+        val highlightPlan = lazy { buildHighlightPlan(analyzedStd, hasHashem, exactPhraseTokens) }
 
         val builder = BoolBuilder()
         // Mirrors every required clause of builder (the facets need only the hit set)
@@ -401,8 +420,8 @@ class LexicalSearchEngine(
         }
         // Quoted phrases: each must appear verbatim as an exact, in-order, adjacent phrase.
         var exactClausesAdded = 0
-        for (phrase in exactPhrasesNorm) {
-            val exactQuery = buildExactPhraseQuery(phrase) ?: continue
+        for ((phrase, tokens) in exactPhrasesNorm.zip(exactPhraseTokens)) {
+            val exactQuery = buildExactPhraseQuery(phrase, tokens) ?: continue
             require(exactQuery, Occur.MUST)
             exactClausesAdded++
             logger.d { "[DEBUG] Added exact-phrase MUST for: \"$phrase\"" }
@@ -565,8 +584,11 @@ class LexicalSearchEngine(
      * Nikud and final letters are still normalised (the segment is normalised by the caller and
      * tokenised like the index) so that the phrase matches the indexed form.
      */
-    private fun buildExactPhraseQuery(phraseNorm: String): IndexQuery? {
-        if (phraseNorm.isBlank() || index.analyze(phraseNorm).isEmpty()) return null
+    private fun buildExactPhraseQuery(
+        phraseNorm: String,
+        tokens: List<String>,
+    ): IndexQuery? {
+        if (phraseNorm.isBlank() || tokens.isEmpty()) return null
         return IndexQuery.AnalyzedPhrase("text", phraseNorm, 0)
     }
 

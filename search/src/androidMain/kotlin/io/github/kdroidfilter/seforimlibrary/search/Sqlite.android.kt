@@ -21,5 +21,7 @@ private class AndroidSqliteReader(
             rows
         }
 
-    override fun close() = db.close()
+    override fun close() {
+        if (db.isOpen) db.close()
+    }
 }
