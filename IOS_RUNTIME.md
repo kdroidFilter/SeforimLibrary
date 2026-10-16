@@ -14,7 +14,7 @@ snippets, highlights, hybrid fusion, semantic model
 (ONNX Runtime C API), view models...
         │ LuceneIndex
         ▼
-JvmLuceneIndex ── JSON over JNI (EmbeddedJvm.call) ──▶ IndexBridgeServer ──▶ LuceneIndexBackend (Lucene 10)
+JvmLuceneIndex ── CBOR over JNI (EmbeddedJvm.call) ──▶ IndexBridgeServer ──▶ LuceneIndexBackend (Lucene 10)
 ```
 
 - `search/src/commonMain/.../index/LuceneIndex.kt`: the only part of the search that runs Lucene: analysis, searches
@@ -22,7 +22,7 @@ JvmLuceneIndex ── JSON over JNI (EmbeddedJvm.call) ──▶ IndexBridgeServ
   (`LuceneIndexBackend`, `androidJvmMain`); iOS through the bridge (`iosMain/.../bridge`), with the same implementation
   running in the embedded runtime.
 - `EmbeddedJvm` starts the runtime (`JNI_CreateJavaVM`), attaches the calling threads, calls
-  `IndexBridgeServer.call(byte[]): byte[]` (UTF-8 JSON of `BridgeRequest` / `BridgeResponse`).
+  `IndexBridgeServer.call(byte[]): byte[]` (CBOR of `BridgeRequest` / `BridgeResponse`).
 - Lucene runs unpatched there (Zero is HotSpot): no ART patch (`lucene-android`), `NIOFSDirectory` (no Panama mmap).
 
 Verified in the simulator on the real index (7M documents): the same facets, snippets, highlights, title suggestions

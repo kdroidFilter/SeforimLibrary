@@ -35,12 +35,12 @@ class IndexBridgeServerTest {
     }
 
     private fun call(request: BridgeRequest): BridgeResponse =
-        BridgeJson.decodeFromString(
+        BridgeCbor.decodeFromByteArray(
             BridgeResponse.serializer(),
-            IndexBridgeServer.call(BridgeJson.encodeToString(BridgeRequest.serializer(), request).encodeToByteArray()).decodeToString(),
+            IndexBridgeServer.call(BridgeCbor.encodeToByteArray(BridgeRequest.serializer(), request)),
         )
 
-    private fun callInt(request: BridgeRequest): Int = BridgeJson.decodeFromJsonElement(Int.serializer(), assertNotNull(call(request).result))
+    private fun callInt(request: BridgeRequest): Int = BridgeCbor.decodeFromByteArray(Int.serializer(), assertNotNull(call(request).result))
 
     @Test
     fun `a cursor reads its pages until closed`() {

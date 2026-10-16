@@ -459,7 +459,7 @@ class LuceneIndexBackend(
                     }
                 }
             }
-            // A sorted search has no score: NaN can't cross the iOS bridge's JSON
+            // A sorted search has no score (NaN): 0 instead, the same on every platform
             IndexDoc(if (sd.score.isNaN()) 0f else sd.score, longs, strings)
         }
 
