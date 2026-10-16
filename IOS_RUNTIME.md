@@ -32,12 +32,15 @@ app search (Zayit's `searchkit`, hybrid with the semantic search) gives the same
 ## The runtime
 
 The runtimes are built by the CI of [kdroidFilter/openjdk-mobile](https://github.com/kdroidFilter/openjdk-mobile)
-(branch `mobile-runtime`: openjdk/mobile at the tested commit, its fixes, `mobile-runtime/build.sh`) and published as
-the assets of its `mobile-runtime-*` releases; the build downloads them and checks their SHA-256 (`search`'s
-`javaRuntime<Target>` tasks: `mobileRuntimeRelease`, `mobileRuntimeSha256`, in `search/build/javaRuntime/<target>`).
-A new runtime is a new release there and its tag and checksums here.
+(branch `mobile-runtime`: the recipe, `openjdk-mobile.patch` and `build.sh`): a stable OpenJDK, 27 (`openjdk/jdk27u`'s GA
+releases), with openjdk/mobile's port (which follows the JDK's mainline) ported to it. Every day, a new GA or recipe gets
+its release, named like the JBR's, `jdk-mobile-<version>b<build>.<revision>` (`jdk-mobile-27b35.1`: `jdk-27-ga`, the
+JDK's build 35, the first release there). The build downloads one of them and checks its SHA-256 (`search`'s `javaRuntime<Target>` tasks:
+`jdkMobileVersion`, `jdkMobileBuild`, `jdkMobileRevision`, `mobileRuntimeSha256`, extracted in
+`search/build/javaRuntime/<target>`; the iOS bindings only need its `include/`, extracted per target and release in
+`search/build/jni`); moving to a newer runtime is changing those, then running the tests below.
 
-The fixes, for Zero on iOS:
+Besides openjdk/mobile's port, the patch carries two fixes for Zero on iOS:
 
 1. `os_bsd_zero.cpp`: the W^X state (`DefaultWXWriteMode`, `os::_jit_exec_enabled`, `Thread::wx_enable_write`...) the
    shared code needs on Apple aarch64 is only defined for the C1/C2 port (`bsd_aarch64`): Zero gets its own, without page
@@ -45,10 +48,10 @@ The fixes, for Zero on iOS:
 2. `os_bsd.cpp`: `pd_commit_memory` asks for executable pages (the code cache), which iOS refuses without the JIT
    entitlement; Zero never executes them, so they are committed read-write.
 
-`jdk-ios-simulator.tar.gz` and `jdk-ios-device.tar.gz` hold `static/` (`libjvm.a`, the JDK's native libraries,
-`libffi.a`) and `lib/` (the runtime's `java.home`: `conf/`, `lib/`, `modules/<module>/...`). `make images` and
-`make jmods` don't work for iOS (they link a dynamic libjvm): the runtime boots from an exploded image instead of a
-`lib/modules` jimage.
+The assets (`jdk-mobile-27-ios-simulator-aarch64-b35.1.tar.gz`, `…-ios-device-…`) hold `static/` (`libjvm.a`, the JDK's
+native libraries, `libffi.a`), `include/` (`jni.h`, `jni_md.h`: the iOS bindings' headers) and `lib/` (the runtime's
+`java.home`: `conf/`, `lib/`, `modules/<module>/...`). `make images` and `make jmods` don't work for iOS (they link a
+dynamic libjvm): the runtime boots from an exploded image instead of a `lib/modules` jimage.
 
 ## Packaging it in the app
 
