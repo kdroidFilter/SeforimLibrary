@@ -462,8 +462,15 @@ internal class SefariaLinksImporter(
                 // below as link_range + link_coverage rows.
                 val canonical1 = canonicalCitation(c1)
                 val canonical2 = canonicalCitation(c2)
-                val range1 = parseCitationRange(canonical1)
-                val range2 = parseCitationRange(canonical2)
+                val parallelSiman1 = turShulchanArukhSimanRange(csvConnectionType, canonical1, canonical2)
+                val parallelSiman2 = turShulchanArukhSimanRange(csvConnectionType, canonical2, canonical1)
+                val rowConnectionType = if (parallelSiman1 != null || parallelSiman2 != null) {
+                    ConnectionType.RELATED
+                } else {
+                    csvConnectionType
+                }
+                val range1 = parallelSiman1 ?: parseCitationRange(canonical1)
+                val range2 = parallelSiman2 ?: parseCitationRange(canonical2)
                 if (range1 != null || range2 != null) rangedRowsSeen.increment()
                 // Whole perek/parasha side: range kept, coverage skipped, so the
                 // link surfaces once at the unit's head. [SefariaWholeUnitRefs]
@@ -521,7 +528,7 @@ internal class SefariaLinksImporter(
                             ) ?: csvConnectionType
                         } else {
                             reclassifyProvenanceConnectionType(
-                                type = csvConnectionType,
+                                type = rowConnectionType,
                                 srcMeta = bookMetaById[srcBookId],
                                 tgtMeta = bookMetaById[tgtBookId],
                             )

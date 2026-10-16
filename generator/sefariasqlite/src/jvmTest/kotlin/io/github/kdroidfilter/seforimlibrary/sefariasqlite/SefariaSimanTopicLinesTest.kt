@@ -112,6 +112,15 @@ class SefariaSimanTopicLinesTest {
     }
 
     @Test
+    fun `tur halachot heading moves above its first seif`() {
+        val by = """<i data-commentator="Beit Yosef" data-order="1.1"></i>"""
+        val built = build("טור", listOf("<b>הלכות דיינים</b><br> $by רבן שמעון בן גמליאל אומר", "שני"))
+
+        assertEquals(listOf("<b>הלכות דיינים</b>", "(א) $by רבן שמעון בן גמליאל אומר"), built.lines.subList(2, 4))
+        assertEquals(setOf(2), built.simanTopicLines)
+    }
+
+    @Test
     fun `a book without seif prefixes splits the same way`() {
         // ערוך השולחן: the leaf is a פסקה, so the se'if line carries no "(א) ".
         val built = buildWith(paragraphSchema, "ערוך השולחן", listOf("<b>דיני מליחת הלב והריאה. ובו י\"ח סעיפים</b> <br>יש בלב", "שני"))

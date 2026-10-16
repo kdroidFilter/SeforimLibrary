@@ -118,12 +118,16 @@ internal fun parseTableOfContentsMetadata(
         "Parsed TOC metadata: ${categoryOrders.size} category orders, " +
             "${bookOrders.size} book orders, ${categoryDescriptions.size} descriptions"
     }
+    categoryOrders.putAll(CATEGORY_ORDER_OVERRIDES)
     return ParsedTableOfContents(
         categoryOrders = categoryOrders.toMap(),
         bookOrders = bookOrders.toMap(),
         categoryDescriptions = categoryDescriptions.toMap(),
     )
 }
+
+// Sefaria lists Bavli reference works before the Rishonim; we place them after all commentators.
+internal val CATEGORY_ORDER_OVERRIDES = mapOf("תלמוד בבלי/ספרות עזר" to 65)
 
 internal fun normalizePriorityEntry(raw: String): String {
     var entry = raw.trim().replace('\\', '/')
