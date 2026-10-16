@@ -7,9 +7,9 @@ import io.github.kdroidfilter.seforimlibrary.search.index.IndexPage
 import io.github.kdroidfilter.seforimlibrary.search.index.LuceneIndex
 import io.github.kdroidfilter.seforimlibrary.search.index.LuceneIndexBackend
 import io.github.kdroidfilter.seforimlibrary.search.index.VectorEncoding
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.LongArraySerializer
-import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.nullable
 import kotlinx.serialization.builtins.serializer
 import java.nio.file.Path
