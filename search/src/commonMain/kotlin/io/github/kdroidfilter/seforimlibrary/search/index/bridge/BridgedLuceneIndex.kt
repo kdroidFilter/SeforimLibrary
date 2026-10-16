@@ -15,11 +15,9 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.LongArraySerializer
 import kotlinx.serialization.builtins.nullable
 import kotlinx.serialization.builtins.serializer
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
 
 /**
- * How the calls reach the Java runtime Lucene runs in: one [BridgeRequest] in, its [BridgeResponse] out, both UTF-8 JSON.
+ * How the calls reach the Java runtime Lucene runs in: one [BridgeRequest] in, its [BridgeResponse] out, both CBOR.
  * Thread-safe: calls may overlap.
  */
 fun interface BridgeTransport {
@@ -29,8 +27,8 @@ fun interface BridgeTransport {
 private const val ANALYZE_CACHE_SIZE = 64
 
 /**
- * The [LuceneIndex] at [indexDir] where Lucene can't run in process: in the Java runtime an iOS app embeds, in the Java
- * process an Android app before 15 starts. Lucene runs there with the same implementation as on the JVM and Android 15+
+ * The [LuceneIndex] at [indexDir] where Lucene can't run in process: in the Java runtime an iOS app embeds. Lucene runs
+ * there with the same implementation as on the JVM and Android 15+
  * (`LuceneIndexBackend`, behind `IndexBridgeServer`); this side only carries the calls, through [transport].
  *
  * @param cacheQueries see `LuceneIndexBackend`
@@ -95,10 +93,10 @@ class BridgedLuceneIndex(
         request: BridgeRequest,
         result: DeserializationStrategy<T>?,
     ): T {
-        val bytes = transport.call(BridgeJson.encodeToString(BridgeRequest.serializer(), request).encodeToByteArray())
-        val response = BridgeJson.decodeFromString(BridgeResponse.serializer(), bytes.decodeToString())
+        val bytes = transport.call(BridgeCbor.encodeToByteArray(BridgeRequest.serializer(), request))
+        val response = BridgeCbor.decodeFromByteArray(BridgeResponse.serializer(), bytes)
         response.error?.let { throw IllegalStateException("Lucene failed in the Java runtime: $it") }
         @Suppress("UNCHECKED_CAST")
-        return if (result == null) Unit as T else BridgeJson.decodeFromJsonElement(result, response.result ?: JsonNull as JsonElement)
+        return if (result == null) Unit as T else BridgeCbor.decodeFromByteArray(result, checkNotNull(response.result) { "No result" })
     }
 }

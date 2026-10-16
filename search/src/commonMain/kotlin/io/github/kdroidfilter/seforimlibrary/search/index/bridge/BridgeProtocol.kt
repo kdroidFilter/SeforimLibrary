@@ -3,14 +3,14 @@ package io.github.kdroidfilter.seforimlibrary.search.index.bridge
 import io.github.kdroidfilter.seforimlibrary.search.index.IndexQuery
 import io.github.kdroidfilter.seforimlibrary.search.index.KnnRequest
 import io.github.kdroidfilter.seforimlibrary.search.index.SortField
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.cbor.Cbor
 
 /**
  * The calls of a [io.github.kdroidfilter.seforimlibrary.search.index.LuceneIndex] across the bridge between the iOS
- * app and the Java runtime it embeds: JSON in UTF-8 both ways, each index and cursor named by a handle.
+ * app and the Java runtime it embeds: CBOR both ways, each index and cursor named by a handle.
  */
 @Serializable
 internal sealed interface BridgeRequest {
@@ -102,16 +102,15 @@ internal sealed interface BridgeRequest {
     ) : BridgeRequest
 }
 
-/** The result of a call ([result], its type depending on the call), or the failure it raised ([error]). */
+/**
+ * The result of a call ([result]: CBOR of a type depending on the call, decoded by the caller; none for a call without
+ * one), or the failure it raised ([error]).
+ */
 @Serializable
 internal class BridgeResponse(
-    val result: JsonElement? = null,
+    val result: ByteArray? = null,
     val error: String? = null,
 )
 
-internal val BridgeJson =
-    Json {
-        ignoreUnknownKeys = true
-        // Scores and vectors are plain floats; a NaN would mean a bug on the Lucene side, not data to carry
-        allowSpecialFloatingPointValues = false
-    }
+@OptIn(ExperimentalSerializationApi::class)
+internal val BridgeCbor = Cbor { ignoreUnknownKeys = true }

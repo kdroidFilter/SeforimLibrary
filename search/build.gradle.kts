@@ -128,7 +128,7 @@ kotlin {
         commonMain.dependencies {
             api(project(":core"))
             implementation(libs.kotlinx.coroutines.core)
-            implementation(libs.kotlinx.serialization.json)
+            implementation(libs.kotlinx.serialization.cbor)
             implementation(libs.kotlinx.io.core)
             implementation(libs.atomicfu)
             implementation(libs.kermit)
@@ -189,7 +189,7 @@ val iosJvmClasspath by tasks.registering(Sync::class) {
     from(tasks.named("jvmJar"))
     from(
         configurations.named("jvmRuntimeClasspath").map { classpath ->
-            classpath.filter { jar -> listOf("lucene-core", "kotlin-stdlib", "kotlinx-serialization-core", "kotlinx-serialization-json").any { jar.name.startsWith(it) } }
+            classpath.filter { jar -> listOf("lucene-core", "kotlin-stdlib", "kotlinx-serialization-core", "kotlinx-serialization-cbor").any { jar.name.startsWith(it) } }
         },
     )
     into(layout.buildDirectory.dir("iosJvmClasspath"))
