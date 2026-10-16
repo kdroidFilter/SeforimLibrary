@@ -96,6 +96,12 @@ interface IdAllocator {
      */
     fun retireBookKey(key: BookKey): Long
 
+    /** Otzaria: the key [key]'s aliases lead to now, or `null` when it has none. */
+    fun aliasedBookKey(key: BookKey): BookKey?
+
+    /** Otzaria: forgets [key]'s alias, so [bookId] takes it as a book of its own. */
+    fun dropBookAlias(key: BookKey)
+
     /**
      * Records the canonical sha256 source hash for a book observed at the
      * current build. Persisted in build_state.db and consumed by

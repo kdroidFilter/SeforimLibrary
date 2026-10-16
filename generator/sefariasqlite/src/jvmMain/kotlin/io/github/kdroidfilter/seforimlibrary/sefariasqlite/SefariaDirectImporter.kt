@@ -2,8 +2,10 @@ package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookKey
+import io.github.kdroidfilter.seforimlibrary.common.changes.BookIdContinuity
 import io.github.kdroidfilter.seforimlibrary.common.changes.SefariaSourceHashComputer
 import io.github.kdroidfilter.seforimlibrary.common.changes.TouchedBookDetector
+import io.github.kdroidfilter.seforimlibrary.common.changes.previousOtzariaImportKeys
 import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocator
 import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings
 import io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator
@@ -250,6 +252,10 @@ class SefariaDirectImporter(
         // runs after all lines are inserted so ref→lineId joins always land.
         val versionBookInputs = mutableListOf<SefariaVersionsImporter.BookInput>()
 
+        // Before any book id is allocated.
+        registerBookAliases(orderedBookPayloads)
+        val issuedBookIds = HashMap<Long, String>()
+
         logger.i { "Inserting books and lines..." }
         var processedBooks = 0
 
@@ -272,6 +278,10 @@ class SefariaDirectImporter(
                 ?: error("Payload '${payload.heTitle}' precompute was already released")
             val catId = ensureCategoryPath(payload.categoriesHe)
             val bookId = allocator.bookId(sourceName, canonicalHeTitle(payload))
+            // Otzaria: an alias must never give one id to two books.
+            issuedBookIds.putIfAbsent(bookId, payload.heTitle)?.let { other ->
+                check(other == payload.heTitle) { "Book id $bookId went to both '$other' and '${payload.heTitle}' (book alias)" }
+            }
             val bookPath = buildBookPath(payload.categoriesHe, payload.heTitle)
             val canonicalTitle = canonicalHeTitle(payload)
             val previousCanonicalTitle = canonicalTitleByBookPath.putIfAbsent(bookPath, canonicalTitle)
@@ -724,13 +734,51 @@ class SefariaDirectImporter(
 
         logger.i { "Direct Sefaria import completed." }
     }
+
+    /**
+     * Keeps the previous id of books Sefaria renamed (e.g. a title losing a stray
+     * space) and of books another source held that Sefaria now provides: the
+     * Otzaria importer skips any title Sefaria has, so the id moves here.
+     */
+    internal fun registerBookAliases(payloads: List<BookPayload>) {
+        val currentBooks = payloads.associateBy { BookKey(sourceName, canonicalHeTitle(it)) }
+        val currentTitles = currentBooks.keys.mapTo(HashSet()) { it.canonicalHeTitle }
+        val currentLineHashes = { key: BookKey ->
+            // Same natural-key hash as the line ids allocated below.
+            // Otzaria: our key is content-only and precomputed on the parse workers.
+            currentBooks[key]?.let { payload ->
+                val precomputed = payload.precomputed
+                    ?: error("Payload '${payload.heTitle}' reached book aliasing without precomputed line data")
+                precomputed.lineKeyHashes?.toList()
+                    ?: error("Payload '${payload.heTitle}' precompute was already released")
+            }
+        }
+        // Otzaria: first the Otzaria books of the previous build, so that a key of a book gone
+        // since never makes their title ambiguous; then those keys, for the books still new.
+        val previousOtzaria = allocator.previousOtzariaImportKeys(sourceName, buildVersion)
+        BookIdContinuity(allocator).registerAliases(
+            currentKeys = currentBooks.keys,
+            inScope = { it.sourceName == sourceName || (it.canonicalHeTitle in currentTitles && it in previousOtzaria) },
+            atVersion = buildVersion,
+            currentLineHashes = currentLineHashes,
+        )
+        val continuity = BookIdContinuity(allocator)
+        continuity.registerAliases(
+            currentKeys = currentBooks.keys,
+            // Otzaria: the current keys stay ours, so only the books still new are matched.
+            inScope = { it in currentBooks || (it.canonicalHeTitle in currentTitles && it !in previousOtzaria) },
+            atVersion = buildVersion,
+            currentLineHashes = currentLineHashes,
+        )
+        continuity.settleCrossSourceAliases(currentBooks.keys, buildVersion)
+    }
 }
 
 /**
  * Canonical hebrew-title key used as part of a book's natural key. Picking
  * `heTitle` (the raw payload key) keeps the natural key stable as long as
- * Sefaria doesn't rename the title; a renamed book is handled by the alias
- * mechanism (§4.5) in a later phase.
+ * Sefaria doesn't rename the title; a renamed book keeps its id through
+ * [SefariaDirectImporter.registerBookAliases].
  */
 private fun canonicalHeTitle(payload: BookPayload): String = payload.heTitle
 

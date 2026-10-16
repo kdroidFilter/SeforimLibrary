@@ -335,6 +335,12 @@ class InMemoryIdAllocator private constructor(
         return id
     }
 
+    override fun aliasedBookKey(key: BookKey): BookKey? = currentKeyOf(key)
+
+    override fun dropBookAlias(key: BookKey) {
+        bookAliases.remove(key)
+    }
+
     override fun recordSourceHash(key: BookKey, sourceHash: BookSourceHash) {
         currentSourceHashes[key] = sourceHash
     }
