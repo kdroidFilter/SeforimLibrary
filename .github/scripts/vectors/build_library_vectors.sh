@@ -426,6 +426,13 @@ build_family() {  # <name> <release prefix>: steps 2 to 7 of one family, in a su
     if [ "$name" != "$first" ]; then
       echo "Family: \`$name\`, chunking identity \`$(jq -r .chunking_identity "$FAMILY")\`."
       echo
+      jq -er '.gates[] | select(.gate == "G3") | .metrics |
+        select([.sourceTextChars, .windowedTextChars, .unwindowedTextChars, .partiallyWindowedLines, .unwindowedLines] |
+          all(type == "number" and . >= 0)) |
+        "Source text: \(.windowedTextChars) / \(.sourceTextChars) normalized characters inside emitted window spans; \(.unwindowedTextChars) outside, \(.partiallyWindowedLines) partially windowed lines, \(.unwindowedLines) nonempty lines with no window."' \
+        "$FW/release/validation.json"
+      echo "G3 certifies coverage of the windows this bounded recipe emits. It does not certify complete source text coverage or semantic recall; declared spans estimate source coverage, neighbour context can change literal model input, and duplicate window suppression can make the span count conservative."
+      echo
     fi
     echo "Manifest: \`$STEM.manifest.json\`, SHA-256 \`$MANIFEST_SHA\` — check it before trusting the files it lists."
     echo
@@ -451,7 +458,12 @@ build_family() {  # <name> <release prefix>: steps 2 to 7 of one family, in a su
   LEDGER=$LEDGERS/$ID8
   next="$LEDGER.next"
   rm -rf "$next"; mkdir -p "$next"
-  cp "$FW"/release/ledger-v"$VERSION".* "$FW"/release/pairs-v"$VERSION".bin "$next/"   # the ledger: keys, pairs, manifest
+  cp "$FW"/release/ledger-v"$VERSION".* "$FW"/release/pairs-v"$VERSION".bin "$next/"   # keys, pairs, manifest
+  # Windowed ledgers also retain each parent's occurrence metadata for the next delta.
+  # The anchor family's older ledger remains byte-compatible and has no such file.
+  if [ -f "$FW/release/occurrences-v$VERSION.bin" ]; then
+    cp "$FW/release/occurrences-v$VERSION.bin" "$next/"
+  fi
   jq -n --arg tag "$TAG" --arg release "$RELEASE_TAG" --arg manifest "$STEM.manifest.json" --arg sha "$MANIFEST_SHA" \
     '{published: $release, library_release_tag: $tag, manifest: $manifest, manifest_sha256: $sha}' > "$next/published.json"
   rm -rf "$LEDGER.prev"; [ ! -d "$LEDGER" ] || mv "$LEDGER" "$LEDGER.prev"

@@ -360,7 +360,10 @@ case "$sub" in
     mkdir -p "$out"; head -c 3000 /dev/urandom > "$out/segment.oxv"
     # the identity is the family's: its digest, the hash of the model the plan was made with
     jq -n --arg d "$(sha256sum < "$plan/model.json" | cut -c1-16)" '{identityDigest: $d, toLibraryVersion: 30}' > "$out/release.json"
-    for f in ledger-v30.keys pairs-v30.bin ledger-v30.manifest.json; do echo "$f" > "$out/$f"; done ;;
+    for f in ledger-v30.keys pairs-v30.bin ledger-v30.manifest.json; do echo "$f" > "$out/$f"; done
+    if [ "$(jq -r .chunking_identity "$plan/model.json")" = 320260894818558297 ]; then
+      echo 'windowed occurrence metadata' > "$out/occurrences-v30.bin"
+    fi ;;
   release-files)
     for f in "${files[@]}"; do [ -f "$f" ] || { echo "Could not read release file $f" >&2; exit 1; }; done
     jq -cn --args '$ARGS.positional' "${files[@]}" >> "$RELEASE_FILE_ARGS"
@@ -444,7 +447,9 @@ g3=$(verdict G3); g4=$(verdict G4); g6v=$(verdict G6); passed=true
 for v in $g3 $g4 $g6v; do case "$v" in passed|skipped) ;; *) passed=false ;; esac; done
 [ -z "$report" ] || jq -n --argjson passed "$passed" --arg g3 "$g3" --arg g4 "$g4" --arg g6 "$g6v" \
   '{tool: "validate_semantic_vectors", reportVersion: 1, passed: $passed,
-    gates: [{gate: "G3", status: $g3}, {gate: "G4", status: $g4}, {gate: "G6", status: $g6}]}' > "$report"
+    gates: [{gate: "G3", status: $g3, metrics: {sourceTextChars: 10000, windowedTextChars: 8700,
+      unwindowedTextChars: 1300, partiallyWindowedLines: 2, unwindowedLines: 0}},
+      {gate: "G4", status: $g4}, {gate: "G6", status: $g6}]}' > "$report"
 [ "$passed" = true ]
 """
 
@@ -862,8 +867,11 @@ class Driver(unittest.TestCase):
                 # nothing reaches the release after it is published
                 self.assertFalse([c for c in calls[edit + 1:] if f" {release} " in c + " "])
                 ledger = self.state / "ledger" / self.id8(name)
-                self.assertEqual(sorted(f.name for f in ledger.iterdir()),
-                                 ["ledger-v30.keys", "ledger-v30.manifest.json", "pairs-v30.bin", "published.json"])
+                expected = ["ledger-v30.keys", "ledger-v30.manifest.json", "pairs-v30.bin", "published.json"]
+                if name == WINDOWS:
+                    expected.append("occurrences-v30.bin")
+                    self.assertEqual((ledger / "occurrences-v30.bin").read_text(), "windowed occurrence metadata\n")
+                self.assertEqual(sorted(f.name for f in ledger.iterdir()), sorted(expected))
                 published = json.loads((ledger / "published.json").read_text())
                 self.assertEqual(published["published"], release)
                 self.assertEqual(published["manifest"], self.stem(name) + ".manifest.json")
@@ -1239,6 +1247,9 @@ class Driver(unittest.TestCase):
         self.assertEqual([l.split(":")[0] for l in legacy[1:] if l], ["Manifest", "Gates"])
         windows = (self.root / f"uploaded.tsv.notes.vectors-windows-{TAG}").read_text()
         self.assertIn(f"Family: `{WINDOWS}`, chunking identity `{CHUNKING_IDENTITY[WINDOWS]}`.", windows)
+        self.assertIn("Source text: 8700 / 10000 normalized characters", windows)
+        self.assertIn("1300 outside, 2 partially windowed lines, 0 nonempty lines with no window", windows)
+        self.assertIn("does not certify complete source text coverage or semantic recall", windows)
 
     def test_a_family_leaves_only_what_it_needs_before_the_next_starts(self):
         for mode in ("base", "dry-run"):
