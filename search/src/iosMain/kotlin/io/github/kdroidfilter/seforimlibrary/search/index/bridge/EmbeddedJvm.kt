@@ -42,7 +42,7 @@ import kotlinx.cinterop.value
  * linked statically into the app. Lucene runs there; the app calls it through [call].
  *
  * The runtime reads its classes from `<app executable dir>/lib` (its `java.home`, set by the VM itself); [classPath]
- * names the jars of the search (see the `iosJvmClasspath` task of SeforimLibrary's `search` module).
+ * names the jars of the search (see the `mobileJvmClasspath` task of SeforimLibrary's `search` module).
  */
 class EmbeddedJvm private constructor(
     private val vm: CPointer<JavaVMVar>,

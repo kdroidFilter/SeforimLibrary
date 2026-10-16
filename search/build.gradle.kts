@@ -23,6 +23,7 @@ val mobileRuntimeSha256 =
     mapOf(
         "ios-simulator" to "0471359fb8711b9638c6f4432d170d74f8ece94994fe613c84406f690d661ded",
         "ios-device" to "b5ca69777a83df475c2287ced5eb1df2fddefe2a9a235e9320ef0e488e509201",
+        "android" to "290039f7149558cb7eb7d2a317b24002928d0a65296b2582adf65c11d9fbc5b8",
     )
 
 fun runtimeTaskSuffix(target: String): String = target.split("-").joinToString("") { it.replaceFirstChar(Char::uppercase) }
@@ -58,7 +59,8 @@ val downloadJavaRuntimes =
         }
     }
 
-// build/javaRuntime/<target>: static/ (the libraries an app links), include/ (its JNI headers) and lib/ (its java.home)
+// build/javaRuntime/<target>: include/ (its JNI headers), lib/ (its java.home) and, on iOS, static/ (the libraries an app
+// links), on Android jniLibs/ (the launcher of the Java process)
 val javaRuntimes =
     downloadJavaRuntimes.mapValues { (target, download) ->
         tasks.register<Sync>("javaRuntime${runtimeTaskSuffix(target)}") {
@@ -103,12 +105,8 @@ kotlin {
     android {
         namespace = "io.github.kdroidfilter.seforimlibrary.search"
         compileSdk = 35
-        // Lucene 10 needs the Java 21 APIs ART only has from Android 15
-        minSdk = 35
-        // The search on ART, on a device or an emulator (the parity dump on a real index, see SearchDump)
-        withDeviceTestBuilder { sourceSetTreeName = "test" }.configure {
-            instrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        }
+        // Lucene runs in a Java process of the app's own (JavaProcessTransport), from Android 10
+        minSdk = 29
     }
     // The iOS tests link the runtime and run the search end to end in the simulator
     iosSimulatorArm64 {
@@ -143,11 +141,11 @@ kotlin {
             implementation(libs.kermit)
         }
 
-        // Lucene runs in process on the JVM and Android (ART, API 35+): the same code serves both
+        // Lucene runs on a JVM only: in process on the desktop, in the Java runtime the mobile apps embed (a process of
+        // the app's own on Android, in the app on iOS), behind the same bridge. The JVM and Android share the rest
         val androidJvmMain by creating {
             dependsOn(commonMain.get())
             dependencies {
-                compileOnly(libs.lucene.core)
                 implementation(libs.jsoup)
             }
         }
@@ -159,13 +157,7 @@ kotlin {
                 implementation(libs.sqlite.jdbc)
             }
         }
-        androidMain {
-            dependsOn(androidJvmMain)
-            dependencies {
-                // lucene-core patched for ART
-                implementation(project(":lucene-android"))
-            }
-        }
+        androidMain { dependsOn(androidJvmMain) }
 
         // The manual source set above turns off the default hierarchy: iOS shares its own one by hand
         val iosMain by creating {
@@ -176,12 +168,6 @@ kotlin {
         }
         iosArm64Main { dependsOn(iosMain) }
         iosSimulatorArm64Main { dependsOn(iosMain) }
-
-        getByName("androidDeviceTest").dependencies {
-            implementation(kotlin("test"))
-            implementation(libs.androidx.test.runner)
-            implementation(libs.androidx.test.junit)
-        }
 
         jvmTest.dependencies {
             implementation(kotlin("test"))
@@ -199,15 +185,15 @@ iosRuntimeTargets.forEach { (konanTarget, runtimeTarget) ->
 }
 
 // The jars the embedded Java runtime runs: this module (its Lucene side and IndexBridgeServer), Lucene, Kotlin
-val iosJvmClasspath by tasks.registering(Sync::class) {
-    description = "Collects the jars the Java runtime of an iOS app runs for the search."
+val mobileJvmClasspath by tasks.registering(Sync::class) {
+    description = "Collects the jars the Java runtime of a mobile app runs for the search (iOS, Android)."
     from(tasks.named("jvmJar"))
     from(
         configurations.named("jvmRuntimeClasspath").map { classpath ->
             classpath.filter { jar -> listOf("lucene-core", "kotlin-stdlib", "kotlinx-serialization-core", "kotlinx-serialization-cbor").any { jar.name.startsWith(it) } }
         },
     )
-    into(layout.buildDirectory.dir("iosJvmClasspath"))
+    into(layout.buildDirectory.dir("mobileJvmClasspath"))
 }
 
 run {
@@ -217,7 +203,7 @@ run {
     val iosTestRuntime by tasks.registering(Sync::class) {
         dependsOn(javaRuntimes.getValue("ios-simulator"))
         from(iosSimulatorRuntime.resolve("lib"))
-        from(iosJvmClasspath) { into("app") }
+        from(mobileJvmClasspath) { into("app") }
         into(testBinaryDir.map { it.dir("lib") })
         filePermissions { user { write = true } }
     }
@@ -225,7 +211,7 @@ run {
     tasks.withType<KotlinNativeSimulatorTest>().configureEach {
         dependsOn(iosTestRuntime)
         device.set(providers.gradleProperty("seforim.iosSimulator").orElse("iPhone 17 Pro"))
-        val jars = iosJvmClasspath.map { sync -> sync.destinationDir.listFiles().orEmpty().map { testBinaryDir.get().dir("lib/app/${it.name}").asFile.path } }
+        val jars = mobileJvmClasspath.map { sync -> sync.destinationDir.listFiles().orEmpty().map { testBinaryDir.get().dir("lib/app/${it.name}").asFile.path } }
         val indexDir = providers.gradleProperty("indexDir")
         val parityOut = layout.buildDirectory.file("parity/ios.txt")
         val luceneQueryCache = providers.gradleProperty("luceneQueryCache")

@@ -69,7 +69,6 @@ dependencyResolutionManagement {
 include(":core")
 include(":dao")
 include(":search")
-include(":lucene-android")
 include(":cli")
 include(":catalog")
 include(":searchindex")

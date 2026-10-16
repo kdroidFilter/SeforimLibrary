@@ -61,8 +61,8 @@ private const val FIELD_ANCESTOR_CATEGORY_IDS = "ancestor_category_ids"
 private const val MIN_DOCS_PER_SLICE = 100_000
 
 /**
- * The [LuceneIndex] of a Lucene directory, read with Lucene in this process: on the JVM, on Android (ART, API 35+),
- * and inside the Java runtime the iOS app embeds (see `IndexBridgeServer`).
+ * The [LuceneIndex] of a Lucene directory, read with Lucene in this process: on the JVM, and inside the Java runtimes
+ * the mobile apps embed (see `IndexBridgeServer`).
  *
  * @param indexDir the index directory
  * @param cacheQueries whether to cache any query seen often (small indexes: the lookup index); else only the filters
@@ -516,7 +516,7 @@ class LuceneIndexBackend(
     companion object {
         /**
          * The directory of [path]: memory-mapped where Lucene can (HotSpot), read through NIO where its Panama-based
-         * mapping isn't available (GraalVM native image, Android, the iOS Java runtime).
+         * mapping isn't available (GraalVM native image, the iOS Java runtime).
          */
         fun openDirectory(path: Path): Directory = if (mmapAvailable) FSDirectory.open(path) else NIOFSDirectory(path)
 
@@ -524,7 +524,6 @@ class LuceneIndexBackend(
 
         private val mmapAvailable: Boolean by lazy {
             System.getProperty("org.graalvm.nativeimage.imagecode") == null &&
-                System.getProperty("java.vm.vendor")?.contains("Android") != true &&
                 System.getProperty("os.name") != "Darwin" &&
                 System.getProperty("java.vm.name")?.contains("Zero") != true
         }
