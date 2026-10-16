@@ -14,21 +14,26 @@ group = "io.github.kdroidfilter.seforimlibrary"
 
 // The Java runtime Lucene runs in on iOS (OpenJDK's mobile port, see IOS_RUNTIME.md), built by the CI of
 // kdroidFilter/openjdk-mobile (branch mobile-runtime) and downloaded from its release, checked: OpenJDK 27 GA (the JDK's
-// build 35) with openjdk/mobile's port, its first release there (jdk-mobile-27b35.1)
+// build 35) with openjdk/mobile's port, its second release there (jdk-mobile-27b35.2: x86_64 Android added)
 val jdkMobileVersion = "27"
 val jdkMobileBuild = "35"
-val jdkMobileRevision = "1"
+val jdkMobileRevision = "2"
 val jdkMobileRelease = "jdk-mobile-${jdkMobileVersion}b$jdkMobileBuild.$jdkMobileRevision"
 val mobileRuntimeSha256 =
     mapOf(
-        "ios-simulator" to "0471359fb8711b9638c6f4432d170d74f8ece94994fe613c84406f690d661ded",
-        "ios-device" to "b5ca69777a83df475c2287ced5eb1df2fddefe2a9a235e9320ef0e488e509201",
-        "android" to "290039f7149558cb7eb7d2a317b24002928d0a65296b2582adf65c11d9fbc5b8",
+        "ios-simulator" to "5cebc9571c2162832ded028a4c5ab916983f12b290c67ba03d314d64f6611361",
+        "ios-device" to "b8d81c33fe36f73f70ed319500fdf00b5ff140f297764afa5b015891913c4456",
+        "android-aarch64" to "0f5d13d3726896a30423f2bdae7d60083ec4a4f3bf71b72c4706677cf2a418e5",
+        "android-x64" to "05e432d86b9f12ffa236b1c476b10102b520f7e085034dc0ffb8aa11f5d0cdd4",
     )
 
 fun runtimeTaskSuffix(target: String): String = target.split("-").joinToString("") { it.replaceFirstChar(Char::uppercase) }
 
-fun runtimeAsset(target: String): String = "jdk-mobile-$jdkMobileVersion-$target-aarch64-b$jdkMobileBuild.$jdkMobileRevision.tar.gz"
+// The asset of a target, named like the JBR's archives: <platform>-<arch> (the iOS runtimes are arm64 only)
+fun runtimeAsset(target: String): String {
+    val platform = if (target.startsWith("ios-")) "$target-aarch64" else target
+    return "jdk-mobile-$jdkMobileVersion-$platform-b$jdkMobileBuild.$jdkMobileRevision.tar.gz"
+}
 
 fun runtimeArchive(target: String) = layout.buildDirectory.file("javaRuntime/${runtimeAsset(target)}")
 

@@ -35,8 +35,8 @@ app search (Zayit's `searchkit`, hybrid with the semantic search) gives the same
 The runtimes are built by the CI of [kdroidFilter/openjdk-mobile](https://github.com/kdroidFilter/openjdk-mobile)
 (branch `mobile-runtime`: the recipe, `openjdk-mobile.patch` and `build.sh`): a stable OpenJDK, 27 (`openjdk/jdk27u`'s GA
 releases), with openjdk/mobile's port (which follows the JDK's mainline) ported to it. Every day, a new GA or recipe gets
-its release, named like the JBR's, `jdk-mobile-<version>b<build>.<revision>` (`jdk-mobile-27b35.1`: `jdk-27-ga`, the
-JDK's build 35, the first release there). The build downloads one of them and checks its SHA-256 (`search`'s `javaRuntime<Target>` tasks:
+its release, named like the JBR's, `jdk-mobile-<version>b<build>.<revision>` (`jdk-mobile-27b35.2`: `jdk-27-ga`, the
+JDK's build 35, the second release there). The build downloads one of them and checks its SHA-256 (`search`'s `javaRuntime<Target>` tasks:
 `jdkMobileVersion`, `jdkMobileBuild`, `jdkMobileRevision`, `mobileRuntimeSha256`, extracted in
 `search/build/javaRuntime/<target>`; the iOS bindings only need its `include/`, extracted per target and release in
 `search/build/jni`); moving to a newer runtime is changing those, then running the tests below.
@@ -49,7 +49,7 @@ Besides openjdk/mobile's port, the patch carries two fixes for Zero on iOS:
 2. `os_bsd.cpp`: `pd_commit_memory` asks for executable pages (the code cache), which iOS refuses without the JIT
    entitlement; Zero never executes them, so they are committed read-write.
 
-The assets (`jdk-mobile-27-ios-simulator-aarch64-b35.1.tar.gz`, `…-ios-device-…`) hold `static/` (`libjvm.a`, the JDK's
+The assets (`jdk-mobile-27-ios-simulator-aarch64-b35.2.tar.gz`, `…-ios-device-…`) hold `static/` (`libjvm.a`, the JDK's
 native libraries, `libffi.a`), `include/` (`jni.h`, `jni_md.h`: the iOS bindings' headers) and `lib/` (the runtime's
 `java.home`: `conf/`, `lib/`, `modules/<module>/...`). `make images` and `make jmods` don't work for iOS (they link a
 dynamic libjvm): the runtime boots from an exploded image instead of a `lib/modules` jimage.
@@ -96,13 +96,15 @@ hashes), so the comparison allows score differences: facets, snippets and highli
 
 Android 10+ (API 29: HotSpot's aarch64 code needs native ELF TLS). ART and HotSpot can't share a process (both define
 `JNI_CreateJavaVM`, both handle `SIGSEGV`), so Lucene runs in a Java process of the app's own, the server VM (with its
-JIT, which Android allows) of the same release's Android runtime (`jdk-mobile-27-android-aarch64-b35.1.tar.gz`), behind
+JIT, which Android allows) of the same release's Android runtimes (`jdk-mobile-27-android-aarch64-b35.2.tar.gz` and
+`…-android-x64-…`: devices and x86_64 emulators, the CI smoke-testing the latter on one), behind
 the same bridge as iOS, its calls carried on the process's standard input and output (`JavaProcessTransport`,
 `IndexBridgeServer.main`) rather than JNI.
 
-- The runtime holds the launcher, `jniLibs/arm64-v8a/libjvmlauncher.so`: an executable with the VM and the JDK's
+- A runtime holds the launcher, `jniLibs/<abi>/libjvmlauncher.so`: an executable with the VM and the JDK's
   natives in, packaged as a library (Android only executes native code from the APK; the app sets
-  `packaging.jniLibs.useLegacyPackaging = true` so it is installed as a file), and `lib/`, its `java.home`. The
+  `packaging.jniLibs.useLegacyPackaging = true` so it is installed as a file), and `lib/`, its `java.home` (one per
+  architecture: some of its generated classes, `UnixConstants` among them, depend on it). The
   launcher runs `IndexBridgeServer.main`; everything the VM prints goes to standard error, standard output carries the
   answers.
 - The process starts on the first call and again after it ends (Android may kill an app's child processes in the
