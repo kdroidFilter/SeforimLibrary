@@ -4,7 +4,6 @@ package io.github.kdroidfilter.seforimlibrary.search.index.bridge
 
 import io.github.kdroidfilter.seforimlibrary.search.jni.JNIEnvVar
 import io.github.kdroidfilter.seforimlibrary.search.jni.JNI_CreateJavaVM
-import io.github.kdroidfilter.seforimlibrary.search.jni.JNI_EDETACHED
 import io.github.kdroidfilter.seforimlibrary.search.jni.JNI_GetCreatedJavaVMs
 import io.github.kdroidfilter.seforimlibrary.search.jni.JNI_OK
 import io.github.kdroidfilter.seforimlibrary.search.jni.JNI_TRUE
@@ -17,11 +16,13 @@ import io.github.kdroidfilter.seforimlibrary.search.jni.jclass
 import io.github.kdroidfilter.seforimlibrary.search.jni.jintVar
 import io.github.kdroidfilter.seforimlibrary.search.jni.jmethodID
 import io.github.kdroidfilter.seforimlibrary.search.jni.jvalue
+import io.github.kdroidfilter.seforimlibrary.search.jni.seforim_attach_current_thread
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.CPointerVar
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.IntVar
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.allocArray
@@ -48,8 +49,8 @@ class EmbeddedJvm private constructor(
 ) {
     private val lock = SynchronizedObject()
 
-    // One bridge method per process (IndexBridgeServer.call)
-    private var bridge: Pair<jclass, jmethodID>? = null
+    // The static methods called so far, by "class.method"
+    private val methods = HashMap<String, Pair<jclass, jmethodID>>()
 
     /**
      * Calls the static method `byte[] method(byte[])` of [className] with [request], from the calling thread
@@ -59,10 +60,19 @@ class EmbeddedJvm private constructor(
         className: String,
         method: String,
         request: ByteArray,
+    ): ByteArray =
+        withAttachedEnv { env ->
+            callStatic(env, className, method, request)
+        }
+
+    private fun callStatic(
+        env: CPointer<JNIEnvVar>,
+        className: String,
+        method: String,
+        request: ByteArray,
     ): ByteArray {
-        val env = attachedEnv()
         val functions = env.pointed.pointed!!
-        val (clazz, methodId) = bridgeMethod(env, className, method)
+        val (clazz, methodId) = staticMethod(env, className, method)
         val array = functions.NewByteArray!!(env, request.size) ?: throwPending(env, "NewByteArray")
         try {
             if (request.isNotEmpty()) {
@@ -95,36 +105,34 @@ class EmbeddedJvm private constructor(
         }
     }
 
-    // The class and method are resolved once: a global reference keeps the class
-    private fun bridgeMethod(
+    // Each class and method is resolved once: a global reference keeps the class
+    private fun staticMethod(
         env: CPointer<JNIEnvVar>,
         className: String,
         method: String,
     ): Pair<jclass, jmethodID> =
         synchronized(lock) {
-            bridge ?: memScoped {
+            methods["$className.$method"] ?: memScoped {
                 val functions = env.pointed.pointed!!
                 val local = functions.FindClass!!(env, className.replace('.', '/').cstr.getPointer(this)) ?: throwPending(env, className)
                 val global = functions.NewGlobalRef!!(env, local)!!
                 functions.DeleteLocalRef!!(env, local)
                 val methodId = functions.GetStaticMethodID!!(env, global, method.cstr.getPointer(this), "([B)[B".cstr.getPointer(this))
                     ?: throwPending(env, "$className.$method")
-                (global to methodId).also { bridge = it }
+                (global to methodId).also { methods["$className.$method"] = it }
             }
         }
 
-    private fun attachedEnv(): CPointer<JNIEnvVar> =
+    // Attached once per thread, detached when the thread exits (see jni.def), or after the call when that can't be
+    private inline fun <T> withAttachedEnv(block: (CPointer<JNIEnvVar>) -> T): T =
         memScoped {
-            val env = alloc<CPointerVar<JNIEnvVar>>()
-            val invoke = vm.pointed.pointed!!
-            val status = invoke.GetEnv!!(vm, env.ptr.reinterpret(), JNI_VERSION_21)
-            if (status == JNI_EDETACHED) {
-                // Daemon: an attached Kotlin worker never holds the runtime up at exit
-                check(invoke.AttachCurrentThreadAsDaemon!!(vm, env.ptr.reinterpret(), null) == JNI_OK) { "Can't attach the thread to the Java runtime" }
-            } else {
-                check(status == JNI_OK) { "GetEnv failed: $status" }
+            val detachAfter = alloc<IntVar>()
+            val env = seforim_attach_current_thread(vm, detachAfter.ptr) ?: error("Can't attach the thread to the Java runtime")
+            try {
+                block(env)
+            } finally {
+                if (detachAfter.value != 0) vm.pointed.pointed!!.DetachCurrentThread!!(vm)
             }
-            env.value!!
         }
 
     private fun throwPending(

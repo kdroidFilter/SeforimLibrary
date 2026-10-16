@@ -1,5 +1,6 @@
 package io.github.kdroidfilter.seforimlibrary.search.index.bridge
 
+import io.github.kdroidfilter.seforimlibrary.search.LruCache
 import io.github.kdroidfilter.seforimlibrary.search.SearchFacets
 import io.github.kdroidfilter.seforimlibrary.search.index.IndexCursor
 import io.github.kdroidfilter.seforimlibrary.search.index.IndexDoc
@@ -25,6 +26,8 @@ fun interface BridgeTransport {
     fun call(request: ByteArray): ByteArray
 }
 
+private const val ANALYZE_CACHE_SIZE = 64
+
 /**
  * The [LuceneIndex] at [indexDir] where Lucene can't run in process: in the Java runtime an iOS app embeds, in the Java
  * process an Android app before 15 starts. Lucene runs there with the same implementation as on the JVM and Android 15+
@@ -39,7 +42,11 @@ class BridgedLuceneIndex(
 ) : LuceneIndex {
     private val handle: Int = call(BridgeRequest.Open(indexDir, cacheQueries), Int.serializer())
 
-    override fun analyze(text: String): List<String> = call(BridgeRequest.Analyze(handle, text), ListSerializer(String.serializer()))
+    // Analysis depends on the text alone: the same query is analyzed by its facets, its session and its highlights
+    private val analyzed = LruCache<String, List<String>>(ANALYZE_CACHE_SIZE)
+
+    override fun analyze(text: String): List<String> =
+        analyzed[text] ?: call(BridgeRequest.Analyze(handle, text), ListSerializer(String.serializer())).also { analyzed[text] = it }
 
     override fun search(
         query: IndexQuery,

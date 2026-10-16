@@ -23,7 +23,29 @@ import java.util.concurrent.atomic.AtomicInteger
 object IndexBridgeServer {
     private val ids = AtomicInteger()
     private val indexes = ConcurrentHashMap<Int, LuceneIndex>()
-    private val cursors = ConcurrentHashMap<Int, IndexCursor>()
+    private val cursors = ConcurrentHashMap<Int, OpenCursor>()
+
+    // A cursor with the index it reads, closed with it. Its calls take turns: a page being read when the index
+    // closes finishes before its searcher is released
+    private class OpenCursor(
+        val index: Int,
+        private val cursor: IndexCursor,
+    ) {
+        private var closed = false
+
+        @Synchronized
+        fun next(limit: Int): IndexPage {
+            check(!closed) { "Closed cursor" }
+            return cursor.next(limit)
+        }
+
+        @Synchronized
+        fun close() {
+            if (closed) return
+            closed = true
+            cursor.close()
+        }
+    }
 
     /** Runs the call [request] (a [BridgeRequest] as UTF-8 JSON) and returns its [BridgeResponse] (UTF-8 JSON). */
     @JvmStatic
@@ -45,6 +67,8 @@ object IndexBridgeServer {
                 BridgeJson.encodeToJsonElement(Int.serializer(), id)
             }
             is BridgeRequest.Close -> {
+                // The cursors left open hold the index's reader: closed first
+                cursors.filterValues { it.index == request.index }.keys.forEach { cursors.remove(it)?.close() }
                 indexes.remove(request.index)?.close()
                 JsonNull
             }
@@ -54,7 +78,7 @@ object IndexBridgeServer {
                 page(index(request.index).search(request.query, request.limit, request.fields, request.sort))
             is BridgeRequest.OpenCursor -> {
                 val id = ids.incrementAndGet()
-                cursors[id] = index(request.index).openCursor(request.query, request.fields)
+                cursors[id] = OpenCursor(request.index, index(request.index).openCursor(request.query, request.fields))
                 BridgeJson.encodeToJsonElement(Int.serializer(), id)
             }
             is BridgeRequest.CursorNext ->

@@ -2,6 +2,7 @@
 
 package io.github.kdroidfilter.seforimlibrary.search
 
+import io.github.kdroidfilter.seforimlibrary.search.sqlite3.SQLITE_DONE
 import io.github.kdroidfilter.seforimlibrary.search.sqlite3.SQLITE_OK
 import io.github.kdroidfilter.seforimlibrary.search.sqlite3.SQLITE_OPEN_FULLMUTEX
 import io.github.kdroidfilter.seforimlibrary.search.sqlite3.SQLITE_OPEN_READONLY
@@ -18,6 +19,8 @@ import io.github.kdroidfilter.seforimlibrary.search.sqlite3.sqlite3_open_v2
 import io.github.kdroidfilter.seforimlibrary.search.sqlite3.sqlite3_prepare_v2
 import cnames.structs.sqlite3_stmt
 import io.github.kdroidfilter.seforimlibrary.search.sqlite3.sqlite3_step
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
 import kotlinx.cinterop.CFunction
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.CPointer
@@ -31,7 +34,7 @@ import kotlinx.cinterop.toCPointer
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.value
 
-/** Through the system SQLite, one connection in serialized mode: its queries are safe from any thread. */
+/** Through the system SQLite, one connection whose queries take turns: safe from any thread. */
 actual fun openReadOnlySqlite(path: String): SqliteReader = NativeSqliteReader(path)
 
 // SQLITE_TRANSIENT: SQLite copies the bound text (a C macro cinterop can't map)
@@ -53,7 +56,21 @@ private class NativeSqliteReader(
             opened
         }
 
+    // Queries take turns (the connection serializes them anyway): an error message is then the failing query's, and
+    // close never frees the connection under a running query
+    private val lock = SynchronizedObject()
+    private var closed = false
+
     override fun query(
+        sql: String,
+        args: List<String>,
+    ): List<Map<String, String?>> =
+        synchronized(lock) {
+            check(!closed) { "SQLite: the database is closed" }
+            queryLocked(sql, args)
+        }
+
+    private fun queryLocked(
         sql: String,
         args: List<String>,
     ): List<Map<String, String?>> =
@@ -65,16 +82,25 @@ private class NativeSqliteReader(
                 args.forEachIndexed { i, arg -> sqlite3_bind_text(stmt, i + 1, arg, -1, TRANSIENT) }
                 val columns = (0 until sqlite3_column_count(stmt)).map { sqlite3_column_name(stmt, it)?.toKString() ?: "" }
                 val rows = ArrayList<Map<String, String?>>()
-                while (sqlite3_step(stmt) == SQLITE_ROW) {
+                var status = sqlite3_step(stmt)
+                while (status == SQLITE_ROW) {
                     rows += columns.indices.associate { columns[it] to sqlite3_column_text(stmt, it)?.reinterpret<kotlinx.cinterop.ByteVar>()?.toKString() }
+                    status = sqlite3_step(stmt)
                 }
+                // Any other end is a failure (busy, I/O, corruption), not the last row: thrown, as the JVM and Android do
+                check(status == SQLITE_DONE) { "SQLite: ${sqlite3_errmsg(db)?.toKString()}" }
                 rows
             } finally {
                 sqlite3_finalize(stmt)
             }
         }
 
+    // Closing twice would free the connection twice
     override fun close() {
-        sqlite3_close_v2(db)
+        synchronized(lock) {
+            if (closed) return
+            closed = true
+            sqlite3_close_v2(db)
+        }
     }
 }
