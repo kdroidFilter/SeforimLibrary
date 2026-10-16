@@ -94,4 +94,9 @@ class KnnRequest(
     val byteVector: ByteArray? = null,
     val filter: IndexQuery? = null,
     val oversample: Int = 1,
-)
+) {
+    init {
+        // A NaN or infinite component means a broken embedding: its neighbors would be meaningless
+        require(floatVector?.all { it.isFinite() } != false) { "KNN vector with a NaN or infinite component" }
+    }
+}

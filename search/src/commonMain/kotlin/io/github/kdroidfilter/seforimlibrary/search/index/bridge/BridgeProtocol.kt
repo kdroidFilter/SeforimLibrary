@@ -113,4 +113,9 @@ internal class BridgeResponse(
 )
 
 @OptIn(ExperimentalSerializationApi::class)
-internal val BridgeCbor = Cbor { ignoreUnknownKeys = true }
+internal val BridgeCbor =
+    Cbor {
+        ignoreUnknownKeys = true
+        // Byte arrays (results, byte vectors) as one CBOR byte string, not an array of one integer per byte
+        alwaysUseByteString = true
+    }
