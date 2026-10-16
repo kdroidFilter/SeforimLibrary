@@ -5,6 +5,7 @@ import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookKey
 import io.github.kdroidfilter.seforimlibrary.common.changes.BookIdContinuity
 import io.github.kdroidfilter.seforimlibrary.common.changes.SefariaSourceHashComputer
 import io.github.kdroidfilter.seforimlibrary.common.changes.TouchedBookDetector
+import io.github.kdroidfilter.seforimlibrary.common.changes.previousOtzariaImportKeys
 import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocator
 import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocatorBindings
 import io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator
@@ -742,21 +743,32 @@ class SefariaDirectImporter(
     internal fun registerBookAliases(payloads: List<BookPayload>) {
         val currentBooks = payloads.associateBy { BookKey(sourceName, canonicalHeTitle(it)) }
         val currentTitles = currentBooks.keys.mapTo(HashSet()) { it.canonicalHeTitle }
+        val currentLineHashes = { key: BookKey ->
+            // Same natural-key hash as the line ids allocated below.
+            // Otzaria: our key is content-only and precomputed on the parse workers.
+            currentBooks[key]?.let { payload ->
+                val precomputed = payload.precomputed
+                    ?: error("Payload '${payload.heTitle}' reached book aliasing without precomputed line data")
+                precomputed.lineKeyHashes?.toList()
+                    ?: error("Payload '${payload.heTitle}' precompute was already released")
+            }
+        }
+        // Otzaria: first the Otzaria books of the previous build, so that a key of a book gone
+        // since never makes their title ambiguous; then those keys, for the books still new.
+        val previousOtzaria = allocator.previousOtzariaImportKeys(sourceName, buildVersion)
+        BookIdContinuity(allocator).registerAliases(
+            currentKeys = currentBooks.keys,
+            inScope = { it.sourceName == sourceName || (it.canonicalHeTitle in currentTitles && it in previousOtzaria) },
+            atVersion = buildVersion,
+            currentLineHashes = currentLineHashes,
+        )
         val continuity = BookIdContinuity(allocator)
         continuity.registerAliases(
             currentKeys = currentBooks.keys,
-            inScope = { it.sourceName == sourceName || it.canonicalHeTitle in currentTitles },
+            // Otzaria: the current keys stay ours, so only the books still new are matched.
+            inScope = { it in currentBooks || (it.canonicalHeTitle in currentTitles && it !in previousOtzaria) },
             atVersion = buildVersion,
-            currentLineHashes = { key ->
-                // Same natural-key hash as the line ids allocated below.
-                // Otzaria: our key is content-only and precomputed on the parse workers.
-                currentBooks[key]?.let { payload ->
-                    val precomputed = payload.precomputed
-                        ?: error("Payload '${payload.heTitle}' reached book aliasing without precomputed line data")
-                    precomputed.lineKeyHashes?.toList()
-                        ?: error("Payload '${payload.heTitle}' precompute was already released")
-                }
-            },
+            currentLineHashes = currentLineHashes,
         )
         continuity.settleCrossSourceAliases(currentBooks.keys, buildVersion)
     }

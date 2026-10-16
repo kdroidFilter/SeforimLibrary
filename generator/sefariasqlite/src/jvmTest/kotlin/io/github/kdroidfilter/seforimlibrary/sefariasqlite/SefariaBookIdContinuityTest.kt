@@ -100,6 +100,29 @@ class SefariaBookIdContinuityTest {
     }
 
     @Test
+    fun anOtzariaKeyGoneSinceDoesNotKeepSefariaFromTakingOverItsTitle() {
+        val state = newState()
+        val unrelated = BookKey("MoreBooks", "Unrelated")
+        build(state, 1, emptyMap(), listOf(unrelated, BookKey("MoreBooks", "Taken")))
+        build(state, 2, emptyMap(), listOf(unrelated))
+        val otzaria = BookKey("KSK", "Taken")
+        val before = build(state, 3, emptyMap(), listOf(unrelated, otzaria))
+        val after = build(state, 4, mapOf("Taken" to body))
+        assertEquals(before.getValue(otzaria), after.getValue(sefaria("Taken")))
+    }
+
+    @Test
+    fun aBookGoneFromOtzariaBeforeSefariaTakesItOverKeepsItsId() {
+        val state = newState()
+        val unrelated = BookKey("MoreBooks", "Unrelated")
+        val otzaria = BookKey("MoreBooks", "Taken")
+        val before = build(state, 1, emptyMap(), listOf(unrelated, otzaria))
+        build(state, 2, emptyMap(), listOf(unrelated))
+        val after = build(state, 3, mapOf("Taken" to body))
+        assertEquals(before.getValue(otzaria), after.getValue(sefaria("Taken")))
+    }
+
+    @Test
     fun aSefariaBookBackWithoutACompetitorKeepsItsOldId() {
         val state = newState()
         val first = build(state, 1, mapOf("Back" to body))

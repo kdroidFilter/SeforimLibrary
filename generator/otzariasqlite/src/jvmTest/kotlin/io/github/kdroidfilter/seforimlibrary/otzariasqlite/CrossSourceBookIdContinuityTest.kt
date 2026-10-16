@@ -4,6 +4,7 @@ import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookKey
 import io.github.kdroidfilter.seforimlibrary.common.changes.BookIdContinuity
+import io.github.kdroidfilter.seforimlibrary.common.changes.previousOtzariaImportKeys
 import io.github.kdroidfilter.seforimlibrary.common.ids.InMemoryIdAllocator
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
@@ -40,7 +41,7 @@ class CrossSourceBookIdContinuityTest {
     private class Built(val ids: Map<Pair<String, String>, Long>, val lines: Map<Long, Long>)
 
     /**
-     * One build: the Sefaria step as the Sefaria importer registers aliases and allocates
+     * One build: the Sefaria step as the Sefaria importer registers aliases (in its two passes) and allocates
      * [sefaria] (no line hashes: they never match Otzaria's), then Otzaria phase 1 on [files].
      */
     private fun build(state: Path, version: Int, files: List<BookFile>, sefaria: List<String> = emptyList()): Built = runBlocking {
@@ -52,10 +53,17 @@ class CrossSourceBookIdContinuityTest {
             val sourceId = repo.insertSource("Sefaria")
             val categoryId = repo.insertCategory(Category(title = "Sefaria"))
             val keys = sefaria.mapTo(LinkedHashSet()) { BookKey("Sefaria", it) }
+            val previousOtzaria = allocator.previousOtzariaImportKeys("Sefaria", version)
+            BookIdContinuity(allocator).registerAliases(
+                currentKeys = keys,
+                inScope = { it.sourceName == "Sefaria" || (it.canonicalHeTitle in sefaria && it in previousOtzaria) },
+                atVersion = version,
+                currentLineHashes = { null },
+            )
             val continuity = BookIdContinuity(allocator)
             continuity.registerAliases(
                 currentKeys = keys,
-                inScope = { it.sourceName == "Sefaria" || it.canonicalHeTitle in sefaria },
+                inScope = { it in keys || (it.canonicalHeTitle in sefaria && it !in previousOtzaria) },
                 atVersion = version,
                 currentLineHashes = { null },
             )
@@ -152,14 +160,16 @@ class CrossSourceBookIdContinuityTest {
 
     @Test
     fun aBookBlacklistedInAndOutOfSefariaKeepsItsIdBesideADeadKeyOfItsTitle() {
-        // The dead (A, T) makes the title ambiguous for registerAliases; the alias still
-        // gives the id back to Sefaria, which the Otzaria importer skips (C, T) for.
+        // The dead (A, T) is matched only after the books of the previous build, so it never
+        // makes the title ambiguous; the alias gives the id on to Sefaria, which the Otzaria
+        // importer skips (C, T) for.
         val state = newState()
         val t = { source: String -> BookFile(source, "x", "T", body) }
         build(state, 1, listOf(other, t("A")))
         build(state, 2, listOf(other))
-        build(state, 3, listOf(other, t("C")))
+        val first = build(state, 3, listOf(other, t("C"))).ids.getValue("C" to "T")
         val id = build(state, 4, listOf(other, t("C")), sefaria = listOf("T")).ids.getValue("Sefaria" to "T")
+        assertEquals(first, id)
         assertEquals(id, build(state, 5, listOf(other, t("C"))).ids.getValue("C" to "T"))
         assertEquals(id, build(state, 6, listOf(other, t("C")), sefaria = listOf("T")).ids.getValue("Sefaria" to "T"))
         assertEquals(id, build(state, 7, listOf(other, t("C"))).ids.getValue("C" to "T"))

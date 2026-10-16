@@ -6,6 +6,7 @@ import io.github.kdroidfilter.seforimlibrary.common.buildstate.BookSourceHash
 import io.github.kdroidfilter.seforimlibrary.common.changes.BookIdContinuity
 import io.github.kdroidfilter.seforimlibrary.common.changes.OtzariaSourceHashComputer
 import io.github.kdroidfilter.seforimlibrary.common.changes.TouchedBookDetector
+import io.github.kdroidfilter.seforimlibrary.common.changes.previousOtzariaImportKeys
 import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
 import io.github.kdroidfilter.seforimlibrary.common.ids.CategoryLabels
 import io.github.kdroidfilter.seforimlibrary.common.ids.IdAllocator
@@ -1822,26 +1823,8 @@ class DatabaseGenerator(
         }
     }
 
-    /**
-     * Otzaria: the Otzaria keys the previous import brought in, i.e. whose source hash it
-     * recorded (it records one for every book it imports). The build state keeps every key
-     * it ever saw (v32 held 12 dead keys whose title lives on under another id), so only
-     * these are aliased or reported lost.
-     */
-    private fun previousImportKeys(): Set<BookKey> {
-        val previous = allocator.bookIds().keys.filter { it.sourceName != SEFARIA_SOURCE }
-        val recorded = previous.mapNotNull { key -> allocator.previousSourceHash(key)?.let { key to it.lastSeenVersion } }
-        check(previous.isEmpty() || recorded.isNotEmpty()) {
-            "The build state holds ${previous.size} Otzaria books but no source hash for any of them " +
-                "(files_manifest.json), so the books of the previous build are unknown"
-        }
-        val last = recorded.maxOfOrNull { it.second } ?: return emptySet()
-        // Older builds' books are told apart by an older version only.
-        check(last < buildVersion) {
-            "Build version $buildVersion is not after the previous build's ($last), so its books are unknown"
-        }
-        return recorded.filter { it.second == last }.mapTo(HashSet()) { it.first }
-    }
+    /** Otzaria: the Otzaria keys the previous import brought in (see [previousOtzariaImportKeys]). */
+    private fun previousImportKeys(): Set<BookKey> = allocator.previousOtzariaImportKeys(SEFARIA_SOURCE, buildVersion)
 
     /** Fails the build when a previous book is still there under another id. */
     private suspend fun checkNoLostBookIds(continuity: BookIdContinuity) {
