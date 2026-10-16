@@ -252,7 +252,7 @@ class LexicalSearchEngine(
         val context =
             buildSearchContext(query, near, bookFilter, categoryFilter, bookIds, lineIds, baseBookOnly)
                 ?: return null
-        return index.facets(context.matchQuery)
+        return index.facets(context.matchQuery).let { SearchFacets(it.totalHits, it.categoryCounts, it.bookCounts) }
     }
 
     // --- Inner SearchSession class ---

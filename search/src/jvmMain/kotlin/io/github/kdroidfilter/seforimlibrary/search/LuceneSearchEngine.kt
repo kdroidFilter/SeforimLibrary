@@ -2,16 +2,13 @@ package io.github.kdroidfilter.seforimlibrary.search
 
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.search.index.LuceneIndex
-import io.github.kdroidfilter.seforimlibrary.search.index.LuceneIndexBackend
-import org.apache.lucene.analysis.Analyzer
-import org.apache.lucene.analysis.standard.StandardAnalyzer
 import java.nio.file.Path
 
 private val logger = Logger.withTag("LuceneSearchEngine")
 
 /**
- * The desktop's [SearchEngine]: the common [LexicalSearchEngine] over the Lucene index at [indexDir], read in process,
- * with the lexical dictionary found beside it (or at [dictionaryPath], `-DmagicDict`, `SEFORIM_MAGIC_DICT`).
+ * The desktop's [SearchEngine]: the common [LexicalSearchEngine] over the Lucene index at [indexDir] (the façade's, in
+ * this JVM), with the lexical dictionary found beside it (or at [dictionaryPath], `-DmagicDict`, `SEFORIM_MAGIC_DICT`).
  */
 class LuceneSearchEngine private constructor(
     /** The Lucene index this engine reads, for the searches that share it (the semantic search's vectors). */
@@ -31,9 +28,8 @@ class LuceneSearchEngine private constructor(
     constructor(
         indexDir: Path,
         snippetProvider: SnippetProvider? = null,
-        analyzer: Analyzer = StandardAnalyzer(),
         dictionaryPath: Path? = null,
-    ) : this(LuceneIndexBackend(indexDir, analyzer = analyzer), indexDir, snippetProvider, dictionaryPath)
+    ) : this(LuceneIndex(indexDir.toString()), indexDir, snippetProvider, dictionaryPath)
 
     suspend fun searchAllText(
         rawQuery: String,

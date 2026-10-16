@@ -1,6 +1,5 @@
-package io.github.kdroidfilter.seforimlibrary.search.index
+package io.github.kdroidfilter.seforimlibrary.search.lucene
 
-import io.github.kdroidfilter.seforimlibrary.search.SearchFacets
 import org.apache.lucene.analysis.Analyzer
 import org.apache.lucene.analysis.standard.StandardAnalyzer
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute
@@ -61,19 +60,19 @@ private const val FIELD_ANCESTOR_CATEGORY_IDS = "ancestor_category_ids"
 private const val MIN_DOCS_PER_SLICE = 100_000
 
 /**
- * The [LuceneIndex] of a Lucene directory, read with Lucene in this process: on the JVM, and inside the Java runtimes
- * the mobile apps embed (see `IndexBridgeServer`).
+ * What [LuceneIndex] runs: a Lucene directory, read with Lucene in this JVM (the desktop's, the mobile apps' embedded
+ * one).
  *
  * @param indexDir the index directory
  * @param cacheQueries whether to cache any query seen often (small indexes: the lookup index); else only the filters
  *   every search repeats
  * @param analyzer the analyzer the index was written with
  */
-class LuceneIndexBackend(
+internal class LuceneIndexBackend(
     private val indexDir: Path,
     private val cacheQueries: Boolean = false,
     private val analyzer: Analyzer = StandardAnalyzer(),
-) : LuceneIndex {
+) : AutoCloseable {
     // Open lazily to avoid any I/O at app startup
     private val dir: Directory by lazy { openDirectory(indexDir) }
 
@@ -138,7 +137,7 @@ class LuceneIndexBackend(
         }
     }
 
-    override fun analyze(text: String): List<String> =
+    fun analyze(text: String): List<String> =
         try {
             val out = mutableListOf<String>()
             analyzer.tokenStream("text", text).use { ts ->
@@ -155,7 +154,7 @@ class LuceneIndexBackend(
             emptyList()
         }
 
-    override fun search(
+    fun search(
         query: IndexQuery,
         limit: Int,
         fields: Set<String>,
@@ -172,16 +171,16 @@ class LuceneIndexBackend(
             top.toPage(searcher.storedFields(), fields)
         }
 
-    override fun openCursor(
+    fun openCursor(
         query: IndexQuery,
         fields: Set<String>,
-    ): IndexCursor = Cursor(toLucene(query), fields, acquire())
+    ): BackendCursor = Cursor(toLucene(query), fields, acquire())
 
     private inner class Cursor(
         private val query: Query,
         private val fields: Set<String>,
         private val searcher: IndexSearcher,
-    ) : IndexCursor {
+    ) : BackendCursor {
         private var after: ScoreDoc? = null
         private var totalHits: Long? = null
         private var closed = false
@@ -200,7 +199,7 @@ class LuceneIndexBackend(
         }
     }
 
-    override fun facets(query: IndexQuery): SearchFacets =
+    fun facets(query: IndexQuery): IndexFacets =
         withSearcher { searcher ->
             // Only book ids are read per hit (doc values when the index has them, else the first stored field);
             // category counts follow from the book counts, as every line of a book shares its ancestors. One
@@ -254,17 +253,17 @@ class LuceneIndexBackend(
 
             searcher.search(
                 toLucene(query),
-                object : CollectorManager<FacetCollector, SearchFacets> {
+                object : CollectorManager<FacetCollector, IndexFacets> {
                     override fun newCollector() = FacetCollector()
 
-                    override fun reduce(collectors: Collection<FacetCollector>): SearchFacets {
+                    override fun reduce(collectors: Collection<FacetCollector>): IndexFacets {
                         val bookCounts = HashMap<Long, Int>()
                         collectors.forEach { c -> c.bookCounts.forEach { (book, n) -> bookCounts.merge(book, n, Int::plus) } }
                         val categoryCounts = HashMap<Long, Int>()
                         for ((bookId, count) in bookCounts) {
                             bookAncestors[bookId]?.forEach { categoryCounts.merge(it, count, Int::plus) }
                         }
-                        return SearchFacets(
+                        return IndexFacets(
                             totalHits = collectors.sumOf { it.totalHits },
                             categoryCounts = categoryCounts,
                             bookCounts = bookCounts,
@@ -274,7 +273,7 @@ class LuceneIndexBackend(
             )
         }
 
-    override fun collectLongs(
+    fun collectLongs(
         query: IndexQuery,
         field: String,
     ): LongArray =
@@ -323,9 +322,9 @@ class LuceneIndexBackend(
             )
         }
 
-    override fun count(query: IndexQuery): Int = withSearcher { it.count(toLucene(query)) }
+    fun count(query: IndexQuery): Int = withSearcher { it.count(toLucene(query)) }
 
-    override fun vectorEncoding(field: String): VectorEncoding? =
+    fun vectorEncoding(field: String): VectorEncoding? =
         withSearcher { searcher ->
             searcher.indexReader
                 .leaves()
@@ -333,7 +332,7 @@ class LuceneIndexBackend(
                 ?.let { if (it.vectorEncoding == LuceneVectorEncoding.BYTE) VectorEncoding.BYTE else VectorEncoding.FLOAT32 }
         }
 
-    override fun knn(request: KnnRequest): List<IndexDoc> =
+    fun knn(request: KnnRequest): List<IndexDoc> =
         withSearcher { searcher ->
             val filter = request.filter?.let { toLucene(it) }
             val byteVector = request.byteVector
@@ -430,8 +429,8 @@ class LuceneIndexBackend(
         LuceneSortField(
             field,
             when (type) {
-                SortField.Type.INT -> LuceneSortField.Type.INT
-                SortField.Type.LONG -> LuceneSortField.Type.LONG
+                SortType.INT -> LuceneSortField.Type.INT
+                SortType.LONG -> LuceneSortField.Type.LONG
             },
             reverse,
         )
@@ -574,4 +573,9 @@ private object StableFiltersCachingPolicy : QueryCachingPolicy {
             is PointRangeQuery -> query.field == "is_base_book"
             else -> false
         }
+}
+
+/** A cursor of the backend, behind an [IndexCursor]. */
+internal interface BackendCursor : AutoCloseable {
+    fun next(limit: Int): IndexPage
 }
