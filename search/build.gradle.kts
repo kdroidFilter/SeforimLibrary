@@ -13,72 +13,63 @@ plugins {
 group = "io.github.kdroidfilter.seforimlibrary"
 
 // The Java runtime Lucene runs in on iOS (OpenJDK's mobile port, see IOS_RUNTIME.md), built by the CI of
-// kdroidFilter/openjdk-mobile (branch mobile-runtime) and downloaded from its release, checked
-val mobileRuntimeRelease = "mobile-runtime-1"
+// kdroidFilter/openjdk-mobile (branch mobile-runtime) and downloaded from its release, checked: OpenJDK 27 GA (the JDK's
+// build 35) with openjdk/mobile's port, its first release there (jdk-mobile-27b35.1)
+val jdkMobileVersion = "27"
+val jdkMobileBuild = "35"
+val jdkMobileRevision = "1"
+val jdkMobileRelease = "jdk-mobile-${jdkMobileVersion}b$jdkMobileBuild.$jdkMobileRevision"
 val mobileRuntimeSha256 =
     mapOf(
-        "ios-simulator" to "5f392f51cece76b0bc318bced666738e3ce16fa559a7a385d345ab3955458384",
-        "ios-device" to "62ca2a74da57913613ae076905cb812d117afcec6472ffae3574488682fbf758",
+        "ios-simulator" to "0471359fb8711b9638c6f4432d170d74f8ece94994fe613c84406f690d661ded",
+        "ios-device" to "b5ca69777a83df475c2287ced5eb1df2fddefe2a9a235e9320ef0e488e509201",
     )
 
-// build/javaRuntime/<target>: static/ (the libraries an app links) and lib/ (its java.home)
-val javaRuntimes =
+fun runtimeTaskSuffix(target: String): String = target.split("-").joinToString("") { it.replaceFirstChar(Char::uppercase) }
+
+fun runtimeAsset(target: String): String = "jdk-mobile-$jdkMobileVersion-$target-aarch64-b$jdkMobileBuild.$jdkMobileRevision.tar.gz"
+
+fun runtimeArchive(target: String) = layout.buildDirectory.file("javaRuntime/${runtimeAsset(target)}")
+
+val downloadJavaRuntimes =
     mobileRuntimeSha256.mapValues { (target, sha256) ->
-        val suffix = target.split("-").joinToString("") { it.replaceFirstChar(Char::uppercase) }
-        val archive = layout.buildDirectory.file("javaRuntime/jdk-$target.tar.gz")
-        val download =
-            tasks.register("downloadJavaRuntime$suffix") {
-                description = "Downloads the Java runtime for $target ($mobileRuntimeRelease)."
-                val url = "https://github.com/kdroidFilter/openjdk-mobile/releases/download/$mobileRuntimeRelease/jdk-$target.tar.gz"
-                inputs.property("url", url)
-                inputs.property("sha256", sha256)
-                outputs.file(archive)
-                doLast {
-                    val file = archive.get().asFile.apply { parentFile.mkdirs() }
-                    val digest = MessageDigest.getInstance("SHA-256")
-                    DigestInputStream(URI(url).toURL().openStream(), digest).use { input ->
-                        file.outputStream().use { input.copyTo(it) }
-                    }
-                    val actual = digest.digest().joinToString("") { "%02x".format(it) }
-                    if (actual != sha256) {
-                        file.delete()
-                        error("Unexpected jdk-$target.tar.gz from $url (SHA-256 $actual)")
-                    }
+        val asset = runtimeAsset(target)
+        val archive = runtimeArchive(target)
+        tasks.register("downloadJavaRuntime${runtimeTaskSuffix(target)}") {
+            description = "Downloads the Java runtime for $target ($jdkMobileRelease)."
+            val url = "https://github.com/kdroidFilter/openjdk-mobile/releases/download/$jdkMobileRelease/$asset"
+            inputs.property("url", url)
+            inputs.property("sha256", sha256)
+            outputs.file(archive)
+            doLast {
+                // Not a download for nothing: a release's checksums are set here once it is published
+                check(sha256.matches(Regex("[0-9a-f]{64}"))) { "No SHA-256 for $asset yet: set it in mobileRuntimeSha256 (see IOS_RUNTIME.md)" }
+                val file = archive.get().asFile.apply { parentFile.mkdirs() }
+                val digest = MessageDigest.getInstance("SHA-256")
+                DigestInputStream(URI(url).toURL().openStream(), digest).use { input ->
+                    file.outputStream().use { input.copyTo(it) }
+                }
+                val actual = digest.digest().joinToString("") { "%02x".format(it) }
+                if (actual != sha256) {
+                    file.delete()
+                    error("Unexpected $asset from $url (SHA-256 $actual)")
                 }
             }
-        tasks.register<Sync>("javaRuntime$suffix") {
+        }
+    }
+
+// build/javaRuntime/<target>: static/ (the libraries an app links), include/ (its JNI headers) and lib/ (its java.home)
+val javaRuntimes =
+    downloadJavaRuntimes.mapValues { (target, download) ->
+        tasks.register<Sync>("javaRuntime${runtimeTaskSuffix(target)}") {
             description = "Extracts the Java runtime for $target."
             dependsOn(download)
-            from(tarTree(archive))
+            from(tarTree(runtimeArchive(target)))
             into(layout.buildDirectory.dir("javaRuntime/$target"))
             // Some of the JDK's files are read-only: the next sync couldn't replace them
             filePermissions { user { write = true } }
         }
     }
-
-// The JNI headers of that runtime, for the iOS bindings (cinterop "jni"): from the sources of the same release
-val jniHeaders = layout.buildDirectory.dir("jni/$mobileRuntimeRelease/include")
-val downloadJniHeaders by tasks.registering {
-    description = "Downloads the JNI headers of the Java runtime ($mobileRuntimeRelease) for the iOS bindings."
-    val sources = "https://raw.githubusercontent.com/kdroidFilter/openjdk-mobile/$mobileRuntimeRelease/src/java.base"
-    val headers =
-        mapOf(
-            "jni.h" to ("$sources/share/native/include/jni.h" to "1e03bd83d1662ac00647f7a06c11d32333767ee537803ec1d153e89888414520"),
-            "jni_md.h" to ("$sources/unix/native/include/jni_md.h" to "8232a5a68d36060aaa426fbfdb4537983ecfdfc5fe07a43230005ddd1a4b986a"),
-        )
-    val dir = jniHeaders
-    inputs.property("headers", headers.toString())
-    outputs.dir(dir)
-    doLast {
-        headers.forEach { (name, source) ->
-            val (url, sha256) = source
-            val bytes = URI(url).toURL().readBytes()
-            val actual = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-            check(actual == sha256) { "Unexpected $name from $url (SHA-256 $actual)" }
-            dir.get().file(name).asFile.apply { parentFile.mkdirs() }.writeBytes(bytes)
-        }
-    }
-}
 
 // The runtime's static libraries an iOS binary links (force-loaded: the runtime finds its natives by name)
 val jdkStaticLibs =
@@ -87,6 +78,23 @@ val jdkStaticLibs =
         "libfallbackLinker.a", "libsyslookup.a",
     )
 val iosSimulatorRuntime = layout.buildDirectory.dir("javaRuntime/ios-simulator").get().asFile
+
+// The JNI headers of each target's runtime, for its iOS bindings (cinterop "jni"): extracted alone (compiling needs
+// nothing else of the runtime), in a directory per release, so a new runtime regenerates the bindings
+val jniHeaders =
+    downloadJavaRuntimes.mapValues { (target, download) ->
+        tasks.register<Sync>("jniHeaders${runtimeTaskSuffix(target)}") {
+            description = "Extracts the JNI headers of the Java runtime for $target."
+            dependsOn(download)
+            from(tarTree(runtimeArchive(target))) { include("include/**") }
+            into(layout.buildDirectory.dir("jni/$jdkMobileRelease/$target"))
+        }
+    }
+
+fun jniHeadersDir(target: String): File = layout.buildDirectory.dir("jni/$jdkMobileRelease/$target/include").get().asFile
+
+// The runtime target of each Kotlin/Native target
+val iosRuntimeTargets = mapOf("iosArm64" to "ios-device", "iosSimulatorArm64" to "ios-simulator")
 
 kotlin {
     jvmToolchain(libs.versions.jvmToolchain.get().toInt())
@@ -116,7 +124,8 @@ kotlin {
         target.compilations.getByName("main").cinterops {
             create("jni") {
                 definitionFile.set(project.file("src/nativeInterop/cinterop/jni.def"))
-                includeDirs(jniHeaders)
+                // The target's own runtime's
+                includeDirs(jniHeadersDir(iosRuntimeTargets.getValue(target.name)))
             }
             create("sqlite3") {
                 definitionFile.set(project.file("src/nativeInterop/cinterop/sqlite3.def"))
@@ -181,7 +190,13 @@ kotlin {
     }
 }
 
-tasks.matching { it.name.startsWith("cinteropJni") }.configureEach { dependsOn(downloadJniHeaders) }
+iosRuntimeTargets.forEach { (konanTarget, runtimeTarget) ->
+    tasks.matching { it.name == "cinteropJni${konanTarget.replaceFirstChar(Char::uppercase)}" }.configureEach {
+        dependsOn(jniHeaders.getValue(runtimeTarget))
+        // The headers' content, not only their directory: the bindings follow them
+        inputs.dir(jniHeadersDir(runtimeTarget)).withPathSensitivity(PathSensitivity.RELATIVE)
+    }
+}
 
 // The jars the embedded Java runtime runs: this module (its Lucene side and IndexBridgeServer), Lucene, Kotlin
 val iosJvmClasspath by tasks.registering(Sync::class) {
