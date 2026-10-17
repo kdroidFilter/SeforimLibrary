@@ -25,6 +25,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":core"))
+            implementation(project(":cache"))
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlinx.serialization.protobuf)
@@ -53,8 +54,6 @@ kotlin {
 
         iosMain.dependencies {
             implementation(libs.sqlDelight.driver.native)
-            // The concurrent caches (see ConcurrentCache.ios.kt)
-            implementation(libs.cachemap)
         }
 
     }
