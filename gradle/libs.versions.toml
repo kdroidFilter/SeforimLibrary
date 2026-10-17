@@ -3,7 +3,7 @@
 filekitCore = "0.13.0"
 kotlin = "2.4.20"
 # Nucleus JVM Access: Lucene on a JVM on every platform (the search's façade, search-facade)
-nja = "0.2.0"
+nja = "0.3.0"
 agp = "9.1.1"
 jvmToolchain = "25"
 lucene = "10.5.2"

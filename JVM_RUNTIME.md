@@ -32,10 +32,9 @@ NJA from the façade's sources)                        LuceneIndexBackend (inter
 The mobile JVMs are jdk-mobile's: a stable OpenJDK (27, `openjdk/jdk27u`'s GA releases) with openjdk/mobile's port,
 built by the CI of [NucleusFramework/openjdk-mobile](https://github.com/NucleusFramework/openjdk-mobile) and published
 as releases named like the JBR's, `jdk-mobile-<version>b<build>.<revision>` (`jdk-mobile-27b35.3`: `jdk-27-ga`, the
-JDK's build 35, its third release there). `search` downloads the four runtimes (`android-aarch64`, `android-x64`,
-`ios-simulator-aarch64`, `ios-device-aarch64`), checks their SHA-256 and stages them in `search/build/jdkMobile`, where
-NJA reads them (`nucleusJvm.jdkMobile`); moving to a newer runtime is changing `jdkMobileVersion`, `jdkMobileBuild`,
-`jdkMobileRevision` and `jdkMobileSha256`, then running the tests below.
+JDK's build 35). NJA downloads the latest one (the runtimes `search` needs: arm64-v8a and x86_64 Android, iOS),
+checks them against their `.sha256`, keeps them in Gradle's cache and extracts them into `search/build/nja/jdkMobile`;
+`nucleusJvm.jdkMobileRelease` pins one.
 
 - **Android**: NJA links HotSpot and the JDK's natives into `libnja.so` (one per ABI: arm64-v8a, x86_64) and puts the
   runtime (`java.home` per ABI, the façade's class path, the VM's options) in `search`'s assets, extracted once per
