@@ -147,10 +147,15 @@ class Workflow(unittest.TestCase):
 
         output, log = gate({f"{first}-{TAG}": "published"})
         self.assertIn("proceed=false", output)
-        self.assertIn(f"Not published: {second}-{TAG}", log)
+        self.assertIn(f"Incomplete: {second}-{TAG} (missing)", log)
+        self.assertIn("dispatch this workflow with the affected family", log)
+        output, log = gate({f"{first}-{TAG}": "published", f"{second}-{TAG}": "draft"})
+        self.assertIn("proceed=false", output)
+        self.assertIn(f"Incomplete: {second}-{TAG} (draft)", log)
+        self.assertIn("delete any draft", log)
         output, log = gate({f"{first}-{TAG}": "published", f"{second}-{TAG}": "published"})
         self.assertIn("proceed=false", output)
-        self.assertNotIn("Not published", log)
+        self.assertNotIn("Incomplete:", log)
         # a release not built yet, or a draft a failed publish left, still reaches the driver
         for releases in ({}, {f"{first}-{TAG}": "draft"}):
             output, _ = gate(releases)

@@ -105,11 +105,17 @@ jobs:
               FIRST=${FAMILIES%% *}
               # A draft a failed publish left goes on to the driver, which says how to retry it.
               if [ "$(gh release view "${FIRST#*:}-$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" = false ]; then
-                MISSING=""
+                INCOMPLETE=""
                 for family in $FAMILIES; do
-                  gh release view "${family#*:}-$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || MISSING="$MISSING ${family#*:}-$TAG"
+                  family_tag="${family#*:}-$TAG"
+                  family_draft=$(gh release view "$family_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null) || family_draft=missing
+                  if [ "$family_draft" = true ]; then
+                    INCOMPLETE="$INCOMPLETE $family_tag (draft)"
+                  elif [ "$family_draft" != false ]; then
+                    INCOMPLETE="$INCOMPLETE $family_tag (missing)"
+                  fi
                 done
-                echo "::notice::${FIRST#*:}-$TAG is published already, so this index rebuild embeds nothing.${MISSING:+ Not published:$MISSING — dispatch this workflow with its family to build it.}"
+                echo "::notice::${FIRST#*:}-$TAG is published already, so this index rebuild embeds nothing.${INCOMPLETE:+ Incomplete:$INCOMPLETE — delete any draft, then dispatch this workflow with the affected family to build it.}"
                 echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
               fi
             fi
