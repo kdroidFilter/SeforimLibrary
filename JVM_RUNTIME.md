@@ -49,11 +49,6 @@ NJA reads them (`nucleusJvm.jdkMobile`); moving to a newer runtime is changing `
 - The VM's options are `nucleusJvm.jvmOptions` (a 128 MB heap: about 140 MB of memory on Android, 160 MB on iOS, on
   real data).
 
-## Building with NJA's sources
-
-Until a release of NJA has what the search needs (JVM targets, primitive arrays, sealed value hierarchies),
-`-Pnja.local=<its checkout>` builds its plugins and runtimes from its sources (settings.gradle.kts).
-
 ## Tests
 
 ```bash
