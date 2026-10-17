@@ -31,7 +31,7 @@ on:
         type: string
         required: true
       mode:
-        description: 'auto: base, and a delta where the chain allows; base: build, verify and publish each family''s base; dry-run: build and verify only'
+        description: 'auto: base, and a delta where the chain allows; base: build, verify and publish each family''s base; dry-run: build and verify only, reporting G6 recall in the job summary (one family alone measures a new codec)'
         type: choice
         required: true
         default: dry-run

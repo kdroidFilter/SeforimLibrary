@@ -32,13 +32,21 @@
 #
 # Mode auto is mode base, and for a family of DELTA_PREFIXES also a delta from the release it
 # published last, when that chain can be extended: the plan is split against that release's
-# ledger, the delta is assembled and gated (a delta past G7's share of its base is dropped, and
-# the release planned again as a base alone), and validated installed after that release's base;
-# the base is assembled in the ledger's codec epoch (--keep-epoch). The delta is published as the
-# prerelease <prefix>-delta-<tag> after the base. A base alone is built instead when there is no
-# ledger, it is not the last published release's, or the passage package, the codec or the plan's
-# identity changed. Such a family keeps that base's assembly beside its ledger, and backs the
-# ledger up in the prerelease vectors-ledger-<tag> for a runner that lost its own.
+# ledger, the delta is assembled and gated (a delta past G7's share of its base is dropped), and
+# validated installed after that release's base; the base is assembled in the ledger's codec
+# epoch and alias threshold (--keep-epoch). The delta is published as the prerelease
+# <prefix>-delta-<tag> after the base. A base in a new epoch is built instead when there is no
+# ledger, it is not the last published release's, or the passage package, the codec, the alias
+# threshold or the plan's identity changed. Such a family keeps that base's assembly beside its
+# ledger, and backs the ledger up in the prerelease vectors-ledger-<tag> for a runner that lost
+# its own.
+#
+# A new rot192-i8i4 epoch takes its rotation from rotation/<family>.bin when ROTATIONS pins its
+# SHA-256, else from the one this runner fitted before (ledger/rotations/<family>.bin), else
+# fit-rotation fits one on the warehouse; a fitted one is kept after a publish and uploaded with
+# the ledger backup, to be committed and pinned. A chain's later bases keep the ledger's epoch.
+# Every validation prints G6's recall (and adds it to the job summary): a dry run of one family
+# measures a new codec before anything is published.
 #
 # A family that fails stops the build there and the families before it stay published; retry it
 # alone with --family NAME. The first family, which applications install, never waits on a later one.
@@ -81,13 +89,14 @@ echo "$TAG" | grep -Eq '^v[0-9]+-[0-9]{14}$' || { echo "::error::'$TAG' is not a
 case "$MODE" in auto|base|dry-run) ;; *) echo "::error::--mode is auto, base or dry-run, not '$MODE'"; exit 64 ;; esac
 PRERELEASE=${LIBRARY_VECTORS_PRERELEASE:-true}
 case "$PRERELEASE" in true|false) ;; *) echo "::error::LIBRARY_VECTORS_PRERELEASE is true or false, not '$PRERELEASE'"; exit 64 ;; esac
-# The families built: <name>, <release prefix> and <codec> ("" for the sidecar's), in FAMILY_CONFIGS's order
-NAMES=(); PREFIXES=(); CODECS=()
+# The families built: <name>, <release prefix>, <codec> ("" for the sidecar's) and <alias
+# threshold> ("" for none), in FAMILY_CONFIGS's order
+NAMES=(); PREFIXES=(); CODECS=(); THRESHOLDS=()
 for family in $FAMILY_CONFIGS; do
-  IFS=: read -r config prefix codec <<< "$family"
+  IFS=: read -r config prefix codec threshold <<< "$family"
   name=${config##*/}
   if [ "${#WANTED[@]}" -gt 0 ] && [[ " ${WANTED[*]} " != *" $name "* ]]; then continue; fi
-  NAMES+=("$name"); PREFIXES+=("$prefix"); CODECS+=("$codec")
+  NAMES+=("$name"); PREFIXES+=("$prefix"); CODECS+=("$codec"); THRESHOLDS+=("$threshold")
 done
 DEFAULT_CODEC=i8-sym-vec    # the sidecar's, when FAMILY_CONFIGS names none
 LEDGER_BACKUPS=vectors-ledger
@@ -359,7 +368,7 @@ previous_base() {  # PREV_RELEASE: the assembled base of $PREV_TAG, kept beside 
   PREV_RELEASE=$d
 }
 
-previous_chain() {  # <prefix> <codec>: PREV, PV and PREV_TAG of the chain a delta extends, or why there is none
+previous_chain() {  # <prefix> <codec> <alias threshold>: PREV, PV and PREV_TAG of the chain a delta extends, or why there is none
   local prefix=$1 tags latest pv
   tags=$("$GH" release list --repo "$REPO" --limit 200 --json tagName,isDraft --jq '.[] | select(.isDraft | not) | .tagName') \
     || { no_delta "the published releases could not be listed"; return 1; }
@@ -382,10 +391,31 @@ previous_chain() {  # <prefix> <codec>: PREV, PV and PREV_TAG of the chain a del
   [ "$(jq -r '.passage_package.checksum // empty' "$ledger/ledger-v$pv.manifest.json")" = "$PASSAGE_PACKAGE_CHECKSUM" ] \
     || { no_delta "the ledger's passages were embedded with another package"; return 1; }
   [ "$(pub .codec)" = "$2" ] || { no_delta "the ledger is in codec '$(pub .codec)', and this family's is $2"; return 1; }
+  [ "$(pub .alias_threshold)" = "$3" ] \
+    || { no_delta "the ledger shares short lines' vectors at '$(pub .alias_threshold)', and this family at '$3'"; return 1; }
   [ -n "$(pub .plan_identity_sha256)" ] || { no_delta "the ledger records no identity"; return 1; }
   PREV=$ledger; PV=$pv; PREV_TAG=$prefix-$latest
   previous_base || { PREV=""; no_delta "the base of $PREV_TAG could not be had to validate the delta on"; return 1; }
   echo "a delta from $PREV_TAG: ledger $PREV, its base $PREV_RELEASE"
+}
+
+epoch_rotation() {  # <name>: ROTATION, the rot192-i8i4 epoch a new base of the family starts, and ROTATION_FITTED
+  local entry pinned="" printed
+  for entry in ${ROTATIONS:-}; do [ "${entry%%=*}" != "$1" ] || pinned=${entry#*=}; done
+  ROTATION_FITTED=""
+  if [ -n "$pinned" ]; then
+    ROTATION=$HERE/rotation/$1.bin
+    [ "$(sha256sum < "$ROTATION" | cut -d' ' -f1)" = "$pinned" ] || die "$ROTATION is not the rotation ROTATIONS pins ($pinned)"
+  elif [ -f "$LEDGERS/rotations/$1.bin" ]; then
+    ROTATION=$LEDGERS/rotations/$1.bin; ROTATION_FITTED=1
+    echo "rotation: the one fitted here before, $ROTATION"
+  else
+    ROTATION=$FW/rotation.bin; ROTATION_FITTED=1
+    "$CLI" fit-rotation --warehouse "$WAREHOUSE" --out "$ROTATION" | tee "$FW/fit-rotation.log"
+    printed=$(sed -n 's/^Epoch SHA-256: *\([0-9a-f]\{64\}\)$/\1/p' "$FW/fit-rotation.log")
+    [ -n "$printed" ] || die "fit-rotation printed no epoch SHA-256"
+    [ "$(sha256sum < "$ROTATION" | cut -d' ' -f1)" = "$printed" ] || die "fit-rotation wrote no rotation that hashes to the epoch it printed"
+  fi
 }
 
 make_plan() {  # $FW/plan, split against the warehouse and, with one, against $PREV
@@ -417,7 +447,7 @@ validated() {  # <what> <release>...: the set those releases install, validated 
   # the releases as a device installs them (into a set under the work directory), and holds it to
   # the index and the plan (G3, G4) and the recall of its scan with the int8 query model the
   # application runs against the exact f32 scan of the warehouse (G6). Its report is published.
-  local what=$1 releases=() r report validated
+  local what=$1 releases=() r report validated g6
   shift
   for r in "$@"; do releases+=(--release "$r"); report=$r/validation.json; done
   set +e
@@ -427,6 +457,14 @@ validated() {  # <what> <release>...: the set those releases install, validated 
   validated=$?
   set -e
   jq -c '{passed, gates: [.gates[] | {gate, status}]}' "$report" 2>/dev/null || true
+  # G6's recall against its floors, also when it failed: what a dry run of a new codec measures
+  g6=$(jq -r '.gates[] | select(.gate == "G6") | .metrics | select(type == "object" and .recallAt10 != null) |
+    "G6 recall@10 \(.recallAt10) (floor \(.minRecallAt10)), recall@50 \(.recallAt50) (floor \(.minRecallAt50)), \(.queries) queries"' \
+    "$report" 2>/dev/null) || g6=""
+  if [ -n "$g6" ]; then
+    echo "$name, $what: $g6"
+    [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "- \`$name\` ($MODE), $what: $g6" >> "$GITHUB_STEP_SUMMARY"
+  fi
   [ "$validated" -eq 0 ] || { echo "::error::validate_semantic_vectors exited $validated: the $what did not pass G3, G4 and G6; nothing is published"; exit 2; }
 }
 
@@ -469,18 +507,18 @@ publish() {  # <release tag> <notes file> <prerelease> <file>...: a draft first,
   "$GH" release edit "$tag" --repo "$REPO" --draft=false --latest=false
 }
 
-build_family() {  # <name> <release prefix> <codec, or "">: steps 2 to 7 of one family, in a subshell of its own
-  local name=$1 prefix=$2 codec=$3
+build_family() {  # <name> <release prefix> <codec, or ""> <alias threshold, or "">: steps 2 to 7 of one family, in a subshell of its own
+  local name=$1 prefix=$2 codec=$3 threshold=$4
   local FAMILY=$STATE/bin/families/$name/model.json FW=$WORK/$name RELEASE_TAG=$prefix-$TAG FRESH="" first
   first=${FAMILY_CONFIGS%% *}; first=${first%%:*}; first=${first##*/}
   need_free_space   # the families before this one hold space too
   mkdir -p "$FW/shards" "$FW/files"
-  PREV=""; PV=""; PREV_TAG=""; PREV_RELEASE=""; PREVIOUS=()
+  PREV=""; PV=""; PREV_TAG=""; PREV_RELEASE=""; PREVIOUS=(); ROTATION=""; ROTATION_FITTED=""
 
   # ─── 2 plan ──────────────────────────────────────────────────────────────
   group "2 plan ($name)"
   [ -f "$WAREHOUSE/warehouse.json" ] || FRESH=1
-  if delta_family "$prefix"; then previous_chain "$prefix" "${codec:-$DEFAULT_CODEC}" || true; fi
+  if delta_family "$prefix"; then previous_chain "$prefix" "${codec:-$DEFAULT_CODEC}" "$threshold" || true; fi
   make_plan
   if [ -n "$PREV" ] && [ "$PLAN_IDENTITY" != "$(jq -r '.plan_identity_sha256 // empty' "$PREV/published.json")" ]; then
     no_delta "the plan's identity is not the one the ledger of $PREV_TAG was assembled under"
@@ -544,21 +582,22 @@ build_family() {  # <name> <release prefix> <codec, or "">: steps 2 to 7 of one 
     if [ "$verified" -eq 0 ]; then
       DELTA=1
     elif [ "$verified" -eq 2 ] && jq -e '[.gates[] | select(.passed != true) | .gate] == ["G7"]' "$FW/delta/gates.json" >/dev/null 2>&1; then
+      # The base still keeps the chain's epoch, so a device that holds it needs no new base.
       no_delta "the delta is past G7's share of its base"
-      rm -rf "$FW/delta" "$FW/delta.g8"; PREV=""; PREVIOUS=()
-      make_plan   # against the warehouse alone, which holds every text by now
-      [ "$TO_EMBED" -eq 0 ] || die "the plan made again for a base alone has $TO_EMBED text(s) the warehouse lacks"
+      rm -rf "$FW/delta" "$FW/delta.g8"
     else
       echo "::error::a gate of the delta failed (assemble --verify exited $verified); nothing is published"; exit 2
     fi
   fi
   if [ -n "$PREV" ]; then
     BASE_EPOCH=(--keep-epoch "${PREVIOUS[@]}")   # the chain's epoch, which its devices hold
-  elif [ -n "$codec" ]; then
-    BASE_EPOCH=(--codec "$codec")
   else
     BASE_EPOCH=()
+    [ -z "$codec" ] || BASE_EPOCH=(--codec "$codec")
+    if [ "$codec" = rot192-i8i4 ]; then epoch_rotation "$name"; BASE_EPOCH+=(--rotation "$ROTATION"); fi
   fi
+  # A delta takes its chain's threshold; a base is given it (previous_chain held it to the chain's).
+  [ -z "$threshold" ] || BASE_EPOCH+=(--alias-threshold "$threshold")
   "$CLI" assemble --kind base --plan "$PLAN" --warehouse "$WAREHOUSE" ${BASE_EPOCH[@]+"${BASE_EPOCH[@]}"} --out "$FW/release" \
     --created-at "$CREATED" --built-by "$BUILT_BY"
   set +e
@@ -591,7 +630,7 @@ build_family() {  # <name> <release prefix> <codec, or "">: steps 2 to 7 of one 
 
   if [ "$MODE" = dry-run ]; then
     # Kept for inspection: the plan, the release, the files and the logs; the rest (the validator's set) goes.
-    find "$FW" -mindepth 1 -maxdepth 1 ! -name plan ! -name release ! -name files ! -name '*.log' -exec rm -rf {} +
+    find "$FW" -mindepth 1 -maxdepth 1 ! -name plan ! -name release ! -name files ! -name '*.log' ! -name rotation.bin -exec rm -rf {} +
     echo "dry run: built and verified $STEM ($name); nothing published, the ledger is not persisted; $(du -sh "$FW" | cut -f1) kept in $FW"
     return 0
   fi
@@ -663,11 +702,18 @@ build_family() {  # <name> <release prefix> <codec, or "">: steps 2 to 7 of one 
   fi
   jq -n --arg tag "$TAG" --arg release "$RELEASE_TAG" --arg manifest "$STEM.manifest.json" --arg sha "$MANIFEST_SHA" \
     --arg family "$name" --arg codec "${codec:-$DEFAULT_CODEC}" --arg package "$PASSAGE_PACKAGE_CHECKSUM" \
-    --arg identity "$PLAN_IDENTITY" --argjson to "$VERSION" --argjson chain "$chain" \
+    --arg identity "$PLAN_IDENTITY" --argjson to "$VERSION" --argjson chain "$chain" --arg threshold "$threshold" \
+    --arg epoch "$(jq -r '.codec.params_sha256 // empty' "$FW/release/ledger-v$VERSION.manifest.json")" \
     '{published: $release, library_release_tag: $tag, manifest: $manifest, manifest_sha256: $sha, family: $family,
-      to: $to, base_tag: $release, codec: $codec, passage_package: $package, plan_identity_sha256: $identity} + $chain' > "$next/published.json"
+      to: $to, base_tag: $release, codec: $codec, alias_threshold: $threshold, epoch_sha256: $epoch,
+      passage_package: $package, plan_identity_sha256: $identity} + $chain' > "$next/published.json"
   rm -rf "$LEDGER.prev"; [ ! -d "$LEDGER" ] || mv "$LEDGER" "$LEDGER.prev"
   mv "$next" "$LEDGER"; rm -rf "$LEDGER.prev"
+  if [ -n "$ROTATION_FITTED" ] && [ "$ROTATION" != "$LEDGERS/rotations/$name.bin" ]; then
+    mkdir -p "$LEDGERS/rotations"; cp "$ROTATION" "$LEDGERS/rotations/$name.bin.next"
+    mv "$LEDGERS/rotations/$name.bin.next" "$LEDGERS/rotations/$name.bin"
+    echo "rotation: kept in $LEDGERS/rotations/$name.bin, epoch $(sha256sum < "$ROTATION" | cut -d' ' -f1)"
+  fi
   echo "published $RELEASE_TAG${DELTA:+ and $prefix-delta-$TAG}; ledger v$VERSION persisted in $LEDGER"
   endgroup
 
@@ -683,8 +729,17 @@ build_family() {  # <name> <release prefix> <codec, or "">: steps 2 to 7 of one 
         --title "Library vectors ledger $TAG" --notes-file "$FW/ledger-notes.md" \
         || die "could not create $LEDGER_BACKUPS-$TAG; $RELEASE_TAG stays published and the ledger is persisted here"
     fi
-    "$GH" release upload "$LEDGER_BACKUPS-$TAG" "$backup.zst" --repo "$REPO" --clobber \
-      || die "could not back the ledger up in $LEDGER_BACKUPS-$TAG; $RELEASE_TAG stays published and the ledger is persisted here"
+    uploads=("$backup.zst")
+    if [ -n "$ROTATION_FITTED" ]; then
+      # The fitted rotation, to commit as rotation/<family>.bin and pin in ROTATIONS
+      rotation_sha=$(sha256sum < "$ROTATION" | cut -d' ' -f1)
+      cp "$ROTATION" "$FW/files/$prefix.rotation-$name-${rotation_sha:0:16}.bin"
+      uploads+=("$FW/files/$prefix.rotation-$name-${rotation_sha:0:16}.bin")
+    fi
+    for f in "${uploads[@]}"; do
+      "$GH" release upload "$LEDGER_BACKUPS-$TAG" "$f" --repo "$REPO" --clobber \
+        || die "could not back the ledger up in $LEDGER_BACKUPS-$TAG; $RELEASE_TAG stays published and the ledger is persisted here"
+    done
     endgroup
   fi
   rm -rf "$FW"
@@ -693,7 +748,7 @@ build_family() {  # <name> <release prefix> <codec, or "">: steps 2 to 7 of one 
 PUBLISHED=()
 for i in "${!NAMES[@]}"; do
   set +e
-  ( set -e; build_family "${NAMES[$i]}" "${PREFIXES[$i]}" "${CODECS[$i]}" )
+  ( set -e; build_family "${NAMES[$i]}" "${PREFIXES[$i]}" "${CODECS[$i]}" "${THRESHOLDS[$i]}" )
   rc=$?
   set -e
   if [ "$rc" -ne 0 ]; then
