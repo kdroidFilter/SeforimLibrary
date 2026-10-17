@@ -1,9 +1,6 @@
 rootProject.name = "SeforimLibrary"
 
 pluginManagement {
-    // Nucleus JVM Access from its sources beside (-Pnja.local=<its checkout>), before a release has what the search
-    // needs: its plugins here, its runtimes below
-    providers.gradleProperty("nja.local").orNull?.let { includeBuild("$it/plugin-build") }
     repositories {
         google {
             content { 
@@ -92,6 +89,3 @@ project(":generator-common").projectDir = file("generator/common")
 project(":reflinks").projectDir = file("generator/reflinks")
 
 includeBuild("SeforimMagicIndexer")
-
-// Nucleus JVM Access's runtimes from its sources (see pluginManagement)
-providers.gradleProperty("nja.local").orNull?.let { includeBuild("$it/runtime") }
