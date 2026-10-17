@@ -69,6 +69,7 @@ dependencyResolutionManagement {
 include(":core")
 include(":dao")
 include(":search")
+include(":search-facade")
 include(":cli")
 include(":catalog")
 include(":searchindex")

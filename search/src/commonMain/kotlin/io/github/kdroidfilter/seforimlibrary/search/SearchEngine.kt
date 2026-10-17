@@ -1,6 +1,5 @@
 package io.github.kdroidfilter.seforimlibrary.search
 
-import java.io.Closeable
 
 /**
  * Main interface for full-text search operations on Hebrew religious texts.
@@ -31,7 +30,7 @@ import java.io.Closeable
  * @see SearchSession for paginated result access
  * @see LineHit for individual search result structure
  */
-interface SearchEngine : Closeable {
+interface SearchEngine : AutoCloseable {
 
     /**
      * Opens a search session for the given query with optional filters.
