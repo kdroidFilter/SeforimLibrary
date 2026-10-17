@@ -22,10 +22,10 @@ import io.github.kdroidfilter.seforimlibrary.core.models.PubPlace
 import io.github.kdroidfilter.seforimlibrary.core.models.Source
 import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
 import io.github.kdroidfilter.seforimlibrary.core.models.Topic
+import io.github.kdroidfilter.seforimlibrary.dao.concurrentCache
 import io.github.kdroidfilter.seforimlibrary.dao.extensions.toModel
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import io.github.kdroidfilter.seforimlibrary.env.getEnvironmentVariable
-import io.github.charlietap.cachemap.cacheMapOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
@@ -47,12 +47,12 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
     // paying a SQLite prepare + connection round-trip for every breadcrumb/tree walk.
     // Profiling (see JFR 2026-04-23) showed 70 `sqlite3_prepare` calls in 20 s all
     // coming from `getCategory`.
-    private val categoryCache = cacheMapOf<Long, Category>()
+    private val categoryCache = concurrentCache<Long, Category>()
 
     // book.orderIndex is denormalized onto each link row at insert time (targetBookOrderIndex)
     // so the commentaries path can sort without JOINing book. Books are immutable once inserted
     // and exist before any link references them, so a read-through cache is safe during import.
-    private val bookOrderIndexCache = cacheMapOf<Long, Long>()
+    private val bookOrderIndexCache = concurrentCache<Long, Long>()
 
     private fun resolveBookOrderIndex(bookId: Long): Long =
         bookOrderIndexCache[bookId]
