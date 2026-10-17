@@ -514,8 +514,9 @@ internal class LuceneIndexBackend(
 
     companion object {
         /**
-         * The directory of [path]: memory-mapped where Lucene can (HotSpot), read through NIO where its Panama-based
-         * mapping isn't available (GraalVM native image, the iOS Java runtime).
+         * The directory of [path]: memory-mapped on the desktop's JVM, read through NIO where Lucene's Panama-based
+         * mapping isn't available (GraalVM native image, the iOS Java runtime) or not wanted: on Android, the mapped
+         * index (the vectors above all) would count in the app's memory, which Android looks at when it kills apps.
          */
         fun openDirectory(path: Path): Directory = if (mmapAvailable) FSDirectory.open(path) else NIOFSDirectory(path)
 
@@ -523,6 +524,8 @@ internal class LuceneIndexBackend(
 
         private val mmapAvailable: Boolean by lazy {
             System.getProperty("org.graalvm.nativeimage.imagecode") == null &&
+                // Android: HotSpot runs in the app's process, with its environment
+                System.getenv("ANDROID_ROOT") == null &&
                 System.getProperty("os.name") != "Darwin" &&
                 System.getProperty("java.vm.name")?.contains("Zero") != true
         }
