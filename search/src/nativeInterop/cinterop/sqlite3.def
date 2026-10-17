@@ -1,0 +1,4 @@
+# The system SQLite of iOS, for the lexical dictionary
+headers = sqlite3.h
+package = io.github.kdroidfilter.seforimlibrary.search.sqlite3
+linkerOpts = -lsqlite3

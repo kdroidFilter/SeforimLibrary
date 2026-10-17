@@ -7,6 +7,7 @@ import app.cash.sqldelight.db.SqlCursor
 import app.cash.sqldelight.db.SqlDriver
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
+import io.github.kdroidfilter.seforimlibrary.cache.concurrentCache
 import io.github.kdroidfilter.seforimlibrary.core.models.AltTocEntry
 import io.github.kdroidfilter.seforimlibrary.core.models.AltTocStructure
 import io.github.kdroidfilter.seforimlibrary.core.models.Author
@@ -26,6 +27,7 @@ import io.github.kdroidfilter.seforimlibrary.dao.extensions.toModel
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import io.github.kdroidfilter.seforimlibrary.env.getEnvironmentVariable
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
@@ -44,19 +46,18 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
     // Category rows are immutable at runtime, so a plain read-through cache avoids
     // paying a SQLite prepare + connection round-trip for every breadcrumb/tree walk.
     // Profiling (see JFR 2026-04-23) showed 70 `sqlite3_prepare` calls in 20 s all
-    // coming from `getCategory`. Both KMP targets (JVM + Android) are JVM-based so
-    // `ConcurrentHashMap` is safe to use directly from commonMain.
-    private val categoryCache = java.util.concurrent.ConcurrentHashMap<Long, Category>()
+    // coming from `getCategory`.
+    private val categoryCache = concurrentCache<Long, Category>()
 
     // book.orderIndex is denormalized onto each link row at insert time (targetBookOrderIndex)
     // so the commentaries path can sort without JOINing book. Books are immutable once inserted
     // and exist before any link references them, so a read-through cache is safe during import.
-    private val bookOrderIndexCache = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+    private val bookOrderIndexCache = concurrentCache<Long, Long>()
 
     private fun resolveBookOrderIndex(bookId: Long): Long =
-        bookOrderIndexCache.getOrPut(bookId) {
-            database.bookQueriesQueries.selectOrderIndexById(bookId).executeAsOneOrNull() ?: 0L
-        }
+        bookOrderIndexCache[bookId]
+            ?: (database.bookQueriesQueries.selectOrderIndexById(bookId).executeAsOneOrNull() ?: 0L)
+                .also { bookOrderIndexCache[bookId] = it }
 
     init {
         val repositoryLoggingEnv = getEnvironmentVariable("SEFORIMAPP_REPOSITORY_LOGGING")?.lowercase()
@@ -69,11 +70,11 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         // Create the database schema (fresh builds only; no runtime migrations needed)
         SeforimDb.Schema.create(driver)
         // SQLite optimizations (balanced mode for desktop: 256MB cache + 512MB mmap)
-        driver.execute(null, "PRAGMA journal_mode=WAL", 0)
-        driver.execute(null, "PRAGMA synchronous=NORMAL", 0)
-        driver.execute(null, "PRAGMA cache_size=-256000", 0) // 256MB cache (negative = KiB)
-        driver.execute(null, "PRAGMA mmap_size=536870912", 0) // 512MB memory-mapped I/O
-        driver.execute(null, "PRAGMA temp_store=MEMORY", 0)
+        pragma("journal_mode=WAL")
+        pragma("synchronous=NORMAL")
+        pragma("cache_size=-256000") // 256MB cache (negative = KiB)
+        pragma("mmap_size=536870912") // 512MB memory-mapped I/O
+        pragma("temp_store=MEMORY")
 
         // Check if the database is empty
         try {
@@ -95,6 +96,17 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
     }
 
 
+
+    /**
+     * Sets a PRAGMA on every driver: some answer with a row (journal_mode, mmap_size), which the Android and native
+     * drivers only accept as a query, and the JDBC one only as a statement.
+     */
+    private fun pragma(assignment: String) {
+        val sql = "PRAGMA $assignment"
+        runCatching { driver.execute(null, sql, 0) }
+            .recoverCatching { driver.executeQuery(null, sql, { cursor -> QueryResult.Value(cursor.next().value) }, 0) }
+            .onFailure { logger.w(it) { "Couldn't set $sql" } }
+    }
 
     // --- Line ⇄ TOC mapping ---
 
@@ -275,7 +287,9 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         val loaded = withContext(Dispatchers.IO) {
             database.categoryQueriesQueries.selectById(id).executeAsOneOrNull()?.toModel()
         } ?: return null
-        return categoryCache.putIfAbsent(id, loaded) ?: loaded
+        // Rows are immutable: a concurrent load writes the same value
+        categoryCache[id] = loaded
+        return loaded
     }
 
     /**

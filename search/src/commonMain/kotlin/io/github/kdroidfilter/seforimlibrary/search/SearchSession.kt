@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.search
 
-import java.io.Closeable
+import kotlinx.serialization.Serializable
+
 
 /**
  * A stateful search session providing paginated access to search results.
@@ -26,7 +27,7 @@ import java.io.Closeable
  * @see SearchEngine.openSession to create a session
  * @see SearchPage for the structure of returned pages
  */
-interface SearchSession : Closeable {
+interface SearchSession : AutoCloseable {
     /**
      * Retrieves the next page of search results.
      *
@@ -100,6 +101,7 @@ data class LineHit(
  * @property categoryCounts Map of categoryId to count (includes ancestor categories)
  * @property bookCounts Map of bookId to count
  */
+@Serializable
 data class SearchFacets(
     val totalHits: Long,
     val categoryCounts: Map<Long, Int>,
