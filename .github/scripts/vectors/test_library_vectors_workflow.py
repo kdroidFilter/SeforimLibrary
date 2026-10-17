@@ -120,6 +120,43 @@ class Workflow(unittest.TestCase):
         self.assertIn('[ "$PUBLISH" != true ] || MODE=base', gate)
         self.assertEqual(self.gate["steps"][0]["env"]["PUBLISH"], "${{ vars.LIBRARY_VECTORS_PUBLISH }}")
 
+    @unittest.skipIf(sys.platform == "win32" or not shutil.which("bash"), "needs a Linux bash")
+    def test_an_index_rebuild_of_a_release_whose_vectors_are_published_embeds_nothing(self):
+        first, second = FAMILIES[0][1], FAMILIES[1][1]
+
+        def gate(releases):
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                (root / "releases").write_text("".join(f"{n}={s}\n" for n, s in releases.items()))
+                gh = root / "gh"
+                gh.write_text(textwrap.dedent(f"""\
+                    #!/usr/bin/env bash
+                    if [ "$1" = api ]; then cat {PINS}; exit; fi
+                    state=$(sed -n "s/^$3=//p" {root / "releases"})
+                    [ -n "$state" ] || exit 1
+                    case " $* " in *" --json "*) [ "$state" = draft ] && echo true || echo false ;; esac
+                    """))
+                gh.chmod(0o755)
+                out = root / "out"
+                env = {**os.environ, "PATH": f"{root}:{os.environ['PATH']}", "GITHUB_OUTPUT": str(out),
+                       "GITHUB_REPOSITORY": "o/r", "GITHUB_SHA": "0" * 40, "EVENT": "workflow_run",
+                       "RUN_CONCLUSION": "success", "RUN_TITLE": f"library-index {TAG}", "PUBLISH": "true"}
+                p = subprocess.run(["bash", "-c", run_text(self.gate)], env=env, capture_output=True, text=True)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                return out.read_text(), p.stdout
+
+        output, log = gate({f"{first}-{TAG}": "published"})
+        self.assertIn("proceed=false", output)
+        self.assertIn(f"Not published: {second}-{TAG}", log)
+        output, log = gate({f"{first}-{TAG}": "published", f"{second}-{TAG}": "published"})
+        self.assertIn("proceed=false", output)
+        self.assertNotIn("Not published", log)
+        # a release not built yet, or a draft a failed publish left, still reaches the driver
+        for releases in ({}, {f"{first}-{TAG}": "draft"}):
+            output, _ = gate(releases)
+            self.assertIn("proceed=true", output)
+            self.assertIn("mode=base", output)
+
     def test_a_manual_run_builds_every_family_or_one_alone(self):
         family = self.doc[True]["workflow_dispatch"]["inputs"]["family"]
         self.assertEqual(family["options"], ["all"] + [name for name, _ in FAMILIES])

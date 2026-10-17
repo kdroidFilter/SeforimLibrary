@@ -76,6 +76,7 @@ jobs:
           INPUT_TAG: ${{ inputs.release_tag }}
           INPUT_MODE: ${{ inputs.mode }}
           PUBLISH: ${{ vars.LIBRARY_VECTORS_PUBLISH }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = workflow_dispatch ]; then
@@ -96,6 +97,22 @@ jobs:
             fi
             MODE=dry-run
             [ "$PUBLISH" != true ] || MODE=base
+            # An index rebuilt for a release (a new engine schema) fires this again; its vectors stay.
+            if [ "$MODE" = base ]; then
+              FAMILIES=$(gh api "repos/$GITHUB_REPOSITORY/contents/.github/scripts/vectors/pins.env?ref=$GITHUB_SHA" \
+                -H "Accept: application/vnd.github.raw" | sed -n 's/^FAMILY_CONFIGS="\([^"]*\)".*/\1/p')
+              [ -n "$FAMILIES" ] || { echo "::error::pins.env at $GITHUB_SHA names no FAMILY_CONFIGS"; exit 1; }
+              FIRST=${FAMILIES%% *}
+              # A draft a failed publish left goes on to the driver, which says how to retry it.
+              if [ "$(gh release view "${FIRST#*:}-$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" = false ]; then
+                MISSING=""
+                for family in $FAMILIES; do
+                  gh release view "${family#*:}-$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || MISSING="$MISSING ${family#*:}-$TAG"
+                done
+                echo "::notice::${FIRST#*:}-$TAG is published already, so this index rebuild embeds nothing.${MISSING:+ Not published:$MISSING — dispatch this workflow with its family to build it.}"
+                echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
+              fi
+            fi
           fi
           echo "Release $TAG, mode $MODE."
           {
