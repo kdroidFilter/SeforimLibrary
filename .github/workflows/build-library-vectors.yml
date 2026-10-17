@@ -76,6 +76,7 @@ jobs:
           INPUT_TAG: ${{ inputs.release_tag }}
           INPUT_MODE: ${{ inputs.mode }}
           PUBLISH: ${{ vars.LIBRARY_VECTORS_PUBLISH }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = workflow_dispatch ]; then
@@ -96,6 +97,28 @@ jobs:
             fi
             MODE=dry-run
             [ "$PUBLISH" != true ] || MODE=base
+            # An index rebuilt for a release (a new engine schema) fires this again; its vectors stay.
+            if [ "$MODE" = base ]; then
+              FAMILIES=$(gh api "repos/$GITHUB_REPOSITORY/contents/.github/scripts/vectors/pins.env?ref=$GITHUB_SHA" \
+                -H "Accept: application/vnd.github.raw" | sed -n 's/^FAMILY_CONFIGS="\([^"]*\)".*/\1/p')
+              [ -n "$FAMILIES" ] || { echo "::error::pins.env at $GITHUB_SHA names no FAMILY_CONFIGS"; exit 1; }
+              FIRST=${FAMILIES%% *}
+              # A draft a failed publish left goes on to the driver, which says how to retry it.
+              if [ "$(gh release view "${FIRST#*:}-$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" = false ]; then
+                INCOMPLETE=""
+                for family in $FAMILIES; do
+                  family_tag="${family#*:}-$TAG"
+                  family_draft=$(gh release view "$family_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null) || family_draft=missing
+                  if [ "$family_draft" = true ]; then
+                    INCOMPLETE="$INCOMPLETE $family_tag (draft)"
+                  elif [ "$family_draft" != false ]; then
+                    INCOMPLETE="$INCOMPLETE $family_tag (missing)"
+                  fi
+                done
+                echo "::notice::${FIRST#*:}-$TAG is published already, so this index rebuild embeds nothing.${INCOMPLETE:+ Incomplete:$INCOMPLETE — delete any draft, then dispatch this workflow with the affected family to build it.}"
+                echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
+              fi
+            fi
           fi
           echo "Release $TAG, mode $MODE."
           {
