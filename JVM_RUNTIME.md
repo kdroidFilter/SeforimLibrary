@@ -17,8 +17,8 @@ NJA from the façade's sources)                        LuceneIndexBackend (inter
 
 | | Desktop (JVM) | Android 10+ | iOS |
 |---|---|---|---|
-| The JVM | the app's own | HotSpot (server VM, JIT), in the app's process next to ART | Zero (interpreter: iOS forbids generated code), linked into the app |
-| A call | a plain call into NJA's dispatcher, on the calling thread | handed to a HotSpot thread paired with the calling one | JNI, on the calling thread |
+| The JVM | the app's own | HotSpot (server VM, JIT), in the app's process next to ART | none: the façade compiled ahead of time into a GraalVM native image, linked into the app (iOS forbids generated code) |
+| A call | a plain call into NJA's dispatcher, on the calling thread | handed to a HotSpot thread paired with the calling one | a call into the image's entry point, on the calling thread |
 
 - `search-facade` holds the façade: its public API (`LuceneIndex`, `IndexCursor` and the value types: data classes,
   enums, the sealed `IndexQuery`) is what NJA exports; `LuceneIndexBackend` is internal.
@@ -29,24 +29,33 @@ NJA from the façade's sources)                        LuceneIndexBackend (inter
 
 ## The runtimes
 
-The mobile JVMs are jdk-mobile's: a stable OpenJDK (27, `openjdk/jdk27u`'s GA releases) with openjdk/mobile's port,
+`nucleusJvm.iosRuntime` is `GRAALVM`: Zero, jdk-mobile's interpreter, searched about 8× slower than the native image
+(a first page 1.2 s against 140 ms in the simulator, on real data). Android keeps HotSpot: an Android native image
+builds on Linux only, and HotSpot is the fastest once warm.
+
+- **iOS**: NJA downloads [graalvm-mobile](https://github.com/NucleusFramework/graalvm-mobile)'s latest kit (GraalVM
+  CE's static libraries, for iOS) and the GraalVM CE release it names, for the build host, and compiles the façade
+  into `search/build/nja/nativeImage/<target>/nja.o` (`njaNativeImage<Target>`). The binaries link it with the kit's
+  libraries (`-export_dynamic`: NJA's client finds the image's entry points at run time): nothing to bundle. Lucene's
+  reflection and resources are in the façade's jar (`META-INF/native-image/.../reachability-metadata.json`), traced on
+  the JVM tests with the real index: `./gradlew :search:jvmTest -PindexDir=<seforim.db.lucene>
+  -PnativeImageAgent=<GraalVM home>` (then drop what the tests alone reach). The image reads the index through NIO.
+  For `search`'s own tests NJA does it all; an app links as Zayit's `searchkit` shows (`assembleIosJavaRuntimeDevice`:
+  `static/`, the object and the kit's libraries).
+
+Android's JVM is jdk-mobile's: a stable OpenJDK (27, `openjdk/jdk27u`'s GA releases) with openjdk/mobile's port,
 built by the CI of [NucleusFramework/openjdk-mobile](https://github.com/NucleusFramework/openjdk-mobile) and published
 as releases named like the JBR's, `jdk-mobile-<version>b<build>.<revision>` (`jdk-mobile-27b35.3`: `jdk-27-ga`, the
-JDK's build 35). NJA downloads the latest one (the runtimes `search` needs: arm64-v8a and x86_64 Android, iOS),
+JDK's build 35). NJA downloads the latest one (the runtimes `search` needs: arm64-v8a and x86_64 Android),
 checks them against their `.sha256`, keeps them in Gradle's cache and extracts them into `search/build/nja/jdkMobile`;
 `nucleusJvm.jdkMobileRelease` pins one.
 
 - **Android**: NJA links HotSpot and the JDK's natives into `libnja.so` (one per ABI: arm64-v8a, x86_64) and puts the
   runtime (`java.home` per ABI, the façade's class path, the VM's options) in `search`'s assets, extracted once per
   version on the device: an app depending on `search` gets both through the library, with nothing to configure.
-- **iOS**: the binaries link jdk-mobile's static libraries (`-force_load`: the runtime finds its natives by name,
-  `-export_dynamic`) and carry NJA's bundle next to the executable: `lib/` (the VM's `java.home`, which it sets to
-  `<executable dir>/lib`) and `nja/` (the class path and the VM's options). For `search`'s own tests NJA does both; an
-  app does them as Zayit's `searchkit` shows (`assembleIosJavaRuntimeDevice`: `static/` to link, `bundle/` to copy into
-  `App.app`). About 50 MB uncompressed.
 - **The desktop**: the façade is on the app's class path; nothing else.
-- The VM's options are `nucleusJvm.jvmOptions` (a 128 MB heap: about 140 MB of memory on Android, 160 MB on iOS, on
-  real data).
+- The VM's options are `nucleusJvm.jvmOptions` (a 128 MB heap: about 140 MB of memory on Android; the native image
+  keeps the heap's maximum, about 60 MB of memory on iOS for Lucene alone).
 
 ## Tests
 

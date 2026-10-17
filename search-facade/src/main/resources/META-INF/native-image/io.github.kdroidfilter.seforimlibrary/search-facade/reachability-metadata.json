@@ -1,0 +1,327 @@
+{
+  "reflection": [
+    {
+      "type": "byte[][]"
+    },
+    {
+      "type": "com.sun.management.HotSpotDiagnosticMXBean",
+      "methods": [
+        {
+          "name": "getVMOption",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "com.sun.management.VMOption",
+      "methods": [
+        {
+          "name": "getValue",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "java.lang.Enum",
+      "serializable": true
+    },
+    {
+      "type": "java.lang.Integer"
+    },
+    {
+      "type": "java.lang.Long"
+    },
+    {
+      "type": "java.lang.Number"
+    },
+    {
+      "type": "java.lang.Object"
+    },
+    {
+      "type": "java.lang.Object[]",
+      "serializable": true
+    },
+    {
+      "type": "java.lang.String"
+    },
+    {
+      "type": "java.lang.management.ManagementFactory",
+      "methods": [
+        {
+          "name": "getPlatformMXBean",
+          "parameterTypes": [
+            "java.lang.Class"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "java.util.HashSet",
+      "serializable": true
+    },
+    {
+      "type": "java.util.LinkedHashSet",
+      "serializable": true
+    },
+    {
+      "type": "java.util.concurrent.ArrayBlockingQueue",
+      "serializable": true
+    },
+    {
+      "type": "java.util.concurrent.locks.AbstractOwnableSynchronizer",
+      "serializable": true
+    },
+    {
+      "type": "java.util.concurrent.locks.AbstractQueuedSynchronizer",
+      "serializable": true
+    },
+    {
+      "type": "java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject",
+      "serializable": true
+    },
+    {
+      "type": "java.util.concurrent.locks.ReentrantLock",
+      "serializable": true
+    },
+    {
+      "type": "java.util.concurrent.locks.ReentrantLock$NonfairSync",
+      "serializable": true
+    },
+    {
+      "type": "java.util.concurrent.locks.ReentrantLock$Sync",
+      "serializable": true
+    },
+    {
+      "type": "org.apache.lucene.analysis.LowerCaseFilter"
+    },
+    {
+      "type": "org.apache.lucene.analysis.StopFilter"
+    },
+    {
+      "type": "org.apache.lucene.analysis.tokenattributes.PackedTokenAttributeImpl",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.apache.lucene.codecs.KnnVectorsFormat"
+    },
+    {
+      "type": "org.apache.lucene.codecs.hnsw.FlatVectorsFormat"
+    },
+    {
+      "type": "org.apache.lucene.codecs.lucene99.Lucene99FlatVectorsFormat"
+    },
+    {
+      "type": "org.apache.lucene.codecs.lucene99.Lucene99HnswVectorsFormat"
+    },
+    {
+      "type": "org.apache.lucene.index.DocsWithFieldSet"
+    },
+    {
+      "type": "org.apache.lucene.index.Term"
+    },
+    {
+      "type": "org.apache.lucene.index.TermStates$PendingTermLookup[]"
+    },
+    {
+      "type": "org.apache.lucene.index.TermStates[]"
+    },
+    {
+      "type": "org.apache.lucene.index.Term[]"
+    },
+    {
+      "type": "org.apache.lucene.internal.hppc.FloatArrayList"
+    },
+    {
+      "type": "org.apache.lucene.internal.hppc.IntArrayList"
+    },
+    {
+      "type": "org.apache.lucene.internal.hppc.IntHashSet"
+    },
+    {
+      "type": "org.apache.lucene.internal.hppc.IntIntHashMap"
+    },
+    {
+      "type": "org.apache.lucene.internal.hppc.IntObjectHashMap"
+    },
+    {
+      "type": "org.apache.lucene.internal.hppc.LongArrayList"
+    },
+    {
+      "type": "org.apache.lucene.internal.hppc.LongHashSet"
+    },
+    {
+      "type": "org.apache.lucene.internal.hppc.LongObjectHashMap"
+    },
+    {
+      "type": "org.apache.lucene.search.AutomatonQuery"
+    },
+    {
+      "type": "org.apache.lucene.search.BoostAttributeImpl",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.apache.lucene.search.DisiWrapper[]"
+    },
+    {
+      "type": "org.apache.lucene.search.DocIdSet"
+    },
+    {
+      "type": "org.apache.lucene.search.LRUQueryCache$CacheAndCount"
+    },
+    {
+      "type": "org.apache.lucene.search.MaxNonCompetitiveBoostAttributeImpl",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.apache.lucene.search.MultiTermQuery"
+    },
+    {
+      "type": "org.apache.lucene.search.PointInSetQuery"
+    },
+    {
+      "type": "org.apache.lucene.search.Query"
+    },
+    {
+      "type": "org.apache.lucene.search.TermStatistics[]"
+    },
+    {
+      "type": "org.apache.lucene.util.BitDocIdSet"
+    },
+    {
+      "type": "org.apache.lucene.util.BitSet"
+    },
+    {
+      "type": "org.apache.lucene.util.ByteBlockPool"
+    },
+    {
+      "type": "org.apache.lucene.util.BytesRef"
+    },
+    {
+      "type": "org.apache.lucene.util.BytesRefBlockPool"
+    },
+    {
+      "type": "org.apache.lucene.util.BytesRefHash"
+    },
+    {
+      "type": "org.apache.lucene.util.FixedBitSet"
+    },
+    {
+      "type": "org.apache.lucene.util.FrequencyTrackingRingBuffer"
+    },
+    {
+      "type": "org.apache.lucene.util.FrequencyTrackingRingBuffer$IntBag"
+    },
+    {
+      "type": "org.apache.lucene.util.IntArrayDocIdSet"
+    },
+    {
+      "type": "org.apache.lucene.util.LongValues"
+    },
+    {
+      "type": "org.apache.lucene.util.PagedBytes"
+    },
+    {
+      "type": "org.apache.lucene.util.PagedBytes$Reader"
+    },
+    {
+      "type": "org.apache.lucene.util.RoaringDocIdSet"
+    },
+    {
+      "type": "org.apache.lucene.util.RoaringDocIdSet$RangeDocIdSet"
+    },
+    {
+      "type": "org.apache.lucene.util.automaton.CompiledAutomaton"
+    },
+    {
+      "type": "org.apache.lucene.util.automaton.RunAutomaton"
+    },
+    {
+      "type": "org.apache.lucene.util.automaton.Transition"
+    },
+    {
+      "type": "org.apache.lucene.util.packed.DeltaPackedLongValues"
+    },
+    {
+      "type": "org.apache.lucene.util.packed.DeltaPackedLongValues$Builder"
+    },
+    {
+      "type": "org.apache.lucene.util.packed.MonotonicLongValues"
+    },
+    {
+      "type": "org.apache.lucene.util.packed.MonotonicLongValues$Builder"
+    },
+    {
+      "type": "org.apache.lucene.util.packed.PackedInts$Reader[]"
+    },
+    {
+      "type": "org.apache.lucene.util.packed.PackedLongValues"
+    },
+    {
+      "type": "org.apache.lucene.util.packed.PackedLongValues$Builder"
+    },
+    {
+      "type": "org.gradle.api.internal.tasks.testing.filter.TestFilterSpec",
+      "serializable": true
+    },
+    {
+      "type": "org.gradle.api.internal.tasks.testing.junit.JUnitSpec",
+      "serializable": true
+    },
+    {
+      "type": "org.gradle.api.internal.tasks.testing.junit.JUnitTestDefinitionProcessorFactory",
+      "serializable": true
+    },
+    {
+      "type": "org.gradle.api.internal.tasks.testing.worker.TestWorker",
+      "serializable": true
+    },
+    {
+      "type": "org.gradle.api.internal.tasks.testing.worker.TestWorker$State",
+      "serializable": true
+    },
+    {
+      "type": "org.junit.runner.Result$SerializedForm",
+      "serializable": true
+    }
+  ],
+  "resources": [
+    {
+      "glob": "META-INF/services/dev.nucleusframework.nja.server.NjaModule"
+    },
+    {
+      "glob": "META-INF/services/java.nio.channels.spi.SelectorProvider"
+    },
+    {
+      "glob": "META-INF/services/java.time.zone.ZoneRulesProvider"
+    },
+    {
+      "glob": "META-INF/services/org.apache.lucene.codecs.Codec"
+    },
+    {
+      "glob": "META-INF/services/org.apache.lucene.codecs.DocValuesFormat"
+    },
+    {
+      "glob": "META-INF/services/org.apache.lucene.codecs.KnnVectorsFormat"
+    },
+    {
+      "glob": "META-INF/services/org.apache.lucene.codecs.PostingsFormat"
+    }
+  ]
+}
