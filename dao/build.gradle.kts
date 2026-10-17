@@ -31,7 +31,6 @@ kotlin {
             implementation(libs.kotlinx.datetime)
             implementation(libs.kermit)
             implementation(libs.kotlinx.io.core)
-            implementation(libs.cachemap)
         }
 
         commonTest.dependencies {
@@ -54,6 +53,8 @@ kotlin {
 
         iosMain.dependencies {
             implementation(libs.sqlDelight.driver.native)
+            // The concurrent caches (see ConcurrentCache.ios.kt)
+            implementation(libs.cachemap)
         }
 
     }
