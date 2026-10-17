@@ -1,0 +1,7 @@
+{
+  "rules": [
+    {"excludeClasses": "**"},
+    {"includeClasses": "org.apache.lucene.**"},
+    {"includeClasses": "io.github.kdroidfilter.seforimlibrary.search.lucene.**"}
+  ]
+}

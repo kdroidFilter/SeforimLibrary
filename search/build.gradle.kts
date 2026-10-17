@@ -1,3 +1,4 @@
+import dev.nucleusframework.nja.plugin.NjaRuntimeType
 import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest
 
 plugins {
@@ -73,13 +74,15 @@ kotlin {
     }
 }
 
-// Lucene, through Nucleus JVM Access: the façade (search-facade) runs on a JVM, the desktop's own or the one the mobile
-// apps embed (iOS: Zero linked into the app; Android: HotSpot in the app's process), and common code uses its proxies
+// Lucene, through Nucleus JVM Access: the façade (search-facade) runs on the desktop's own JVM, compiled into a GraalVM
+// native image on iOS (Zero, the JVM's interpreter, searches 8× slower), on HotSpot in the app's process on Android (an
+// Android native image builds on Linux only), and common code uses its proxies
 nucleusJvm {
     facade(project(":search-facade"))
-    // The runtimes are jdk-mobile's latest release, which NJA downloads (see JVM_RUNTIME.md)
+    // NJA downloads the runtimes: graalvm-mobile's latest release for iOS, jdk-mobile's for Android (see JVM_RUNTIME.md)
+    iosRuntime.set(NjaRuntimeType.GRAALVM)
     androidAbis.set(setOf("arm64-v8a", "x86_64"))
-    // Lucene maps its files with Panama (madvise): native access, without the warning
+    // Lucene maps its files with Panama (madvise): native access, without the warning (a native image keeps -Xmx only)
     jvmOptions.addAll("-Xmx128m", "--enable-native-access=ALL-UNNAMED")
     // Lucene's query cache off: the same search ranks the same every time (the parity tests across platforms)
     providers.gradleProperty("luceneQueryCache").orNull?.let { jvmOptions.add("-Dseforim.lucene.queryCache=$it") }
@@ -103,5 +106,12 @@ tasks.named<Test>("jvmTest") {
     providers.gradleProperty("parityCores").orNull?.let { jvmArgs("-XX:ActiveProcessorCount=$it") }
     providers.gradleProperty("luceneQueryCache").orNull?.let { systemProperty("seforim.lucene.queryCache", it) }
     providers.gradleProperty("probeOut").orNull?.let { systemProperty("probeOut", it) }
+    // The façade's native-image metadata, traced on these tests (with the real index): -PnativeImageAgent=<GraalVM home>
+    providers.gradleProperty("nativeImageAgent").orNull?.let { graalvm ->
+        val out = rootProject.layout.projectDirectory.dir("search-facade/src/main/resources/META-INF/native-image/io.github.kdroidfilter.seforimlibrary/search-facade")
+        val filter = rootProject.layout.projectDirectory.file("search-facade/native-image/caller-filter.json")
+        executable("$graalvm/bin/java")
+        jvmArgs("-agentlib:native-image-agent=config-merge-dir=${out.asFile.path},caller-filter-file=${filter.asFile.path}")
+    }
     testLogging.showStandardStreams = true
 }
