@@ -5,7 +5,8 @@ run-name: library-vectors ${{ inputs.release_tag || github.event.workflow_run.di
 # The semantic vectors of a library release, built on the machine that holds the warehouse
 # and the GPU, once the release's search index is stored (build-library-index.yml), and
 # published beside the release, one release per family (FAMILY_CONFIGS in pins.env):
-# vectors-<tag>, which released applications install, then vectors-windows-<tag>. Everything happens in
+# vectors-<tag>, which released applications install, then vectors-windows-<tag>, and in mode auto
+# vectors-windows-delta-<tag> beside it when the chain it extends allows. Everything happens in
 # .github/scripts/vectors/build_library_vectors.sh, which runs by hand on that machine the
 # same way, after bootstrap_runner.sh; this file only decides when, where, and in which mode.
 #
@@ -15,7 +16,7 @@ run-name: library-vectors ${{ inputs.release_tag || github.event.workflow_run.di
 # gates.json and validation.json, are published with the release.
 #
 # Publishing is opt-in: a run the index workflow triggers is a dry run unless the repository
-# variable LIBRARY_VECTORS_PUBLISH is "true"; a manual run says so with `mode`. What it
+# variable LIBRARY_VECTORS_PUBLISH is "true", and then mode auto; a manual run says so with `mode`. What it
 # publishes is a prerelease unless the repository variable LIBRARY_VECTORS_PRERELEASE is
 # "false": a prerelease stays out of update-release-manifest.yml and the database history.
 
@@ -30,12 +31,13 @@ on:
         type: string
         required: true
       mode:
-        description: 'base: build, verify and publish each family''s release; dry-run: build and verify only'
+        description: 'auto: base, and a delta where the chain allows; base: build, verify and publish each family''s base; dry-run: build and verify only, reporting G6 recall in the job summary (one family alone measures a new codec)'
         type: choice
         required: true
         default: dry-run
         options:
           - dry-run
+          - auto
           - base
       family:
         description: 'The families to build: all, or one alone (a retry, or a first build that fills the warehouse)'
@@ -96,26 +98,32 @@ jobs:
               echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
             fi
             MODE=dry-run
-            [ "$PUBLISH" != true ] || MODE=base
+            [ "$PUBLISH" != true ] || MODE=auto
             # An index rebuilt for a release (a new engine schema) fires this again; its vectors stay.
-            if [ "$MODE" = base ]; then
+            if [ "$MODE" != dry-run ]; then
               FAMILIES=$(gh api "repos/$GITHUB_REPOSITORY/contents/.github/scripts/vectors/pins.env?ref=$GITHUB_SHA" \
                 -H "Accept: application/vnd.github.raw" | sed -n 's/^FAMILY_CONFIGS="\([^"]*\)".*/\1/p')
               [ -n "$FAMILIES" ] || { echo "::error::pins.env at $GITHUB_SHA names no FAMILY_CONFIGS"; exit 1; }
-              FIRST=${FAMILIES%% *}
+              FIRST=${FAMILIES%% *}; FIRST=${FIRST#*:}; FIRST=${FIRST%%:*}   # <dir>:<prefix>[:<codec>]
               # A draft a failed publish left goes on to the driver, which says how to retry it.
-              if [ "$(gh release view "${FIRST#*:}-$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" = false ]; then
+              if [ "$(gh release view "$FIRST-$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" = false ]; then
                 INCOMPLETE=""
                 for family in $FAMILIES; do
-                  family_tag="${family#*:}-$TAG"
+                  family_prefix=${family#*:}
+                  family_tag="${family_prefix%%:*}-$TAG"
                   family_draft=$(gh release view "$family_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null) || family_draft=missing
                   if [ "$family_draft" = true ]; then
                     INCOMPLETE="$INCOMPLETE $family_tag (draft)"
                   elif [ "$family_draft" != false ]; then
                     INCOMPLETE="$INCOMPLETE $family_tag (missing)"
                   fi
+                  # A delta is best-effort: missing is normal, a draft is one a failed publish left
+                  delta_tag="${family_prefix%%:*}-delta-$TAG"
+                  if [ "$(gh release view "$delta_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" = true ]; then
+                    INCOMPLETE="$INCOMPLETE $delta_tag (draft)"
+                  fi
                 done
-                echo "::notice::${FIRST#*:}-$TAG is published already, so this index rebuild embeds nothing.${INCOMPLETE:+ Incomplete:$INCOMPLETE — delete any draft, then dispatch this workflow with the affected family to build it.}"
+                echo "::notice::$FIRST-$TAG is published already, so this index rebuild embeds nothing.${INCOMPLETE:+ Incomplete:$INCOMPLETE — delete any draft, then dispatch this workflow with the affected family to build it.}"
                 echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
               fi
             fi

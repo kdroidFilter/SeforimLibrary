@@ -56,6 +56,12 @@ build_bin() {  # <name> <repo> <rev> <package dir in the repo> [cargo args...]
   rm -rf "$STATE/build"; mkdir -p "$STATE/build"
   git clone -q --filter=blob:none "https://github.com/$repo.git" "$STATE/build/src"
   git -C "$STATE/build/src" checkout -q "$rev"
+  # The planner and the validator must run the CLI's sidecar: their writers and readers are its.
+  if [ "$repo" = "$PLUGIN_REPO" ] \
+    && ! grep -Fq "source = \"git+https://github.com/$SIDECAR_REPO?rev=$SIDECAR_REV#" "$STATE/build/src/$sub/Cargo.lock"; then
+    echo "$repo at $rev does not pin the sidecar $SIDECAR_REV in $sub/Cargo.lock: pin a PLUGIN_REV that does" >&2
+    exit 1
+  fi
   (cd "$STATE/build/src/$sub" && CARGO_TARGET_DIR="$STATE/build/target" cargo build --release --locked "$@")
   install -m 0755 "$STATE/build/target/release/$name" "$STATE/bin/$name"
   echo "$rev" > "$STATE/bin/$name.rev"

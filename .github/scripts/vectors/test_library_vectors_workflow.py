@@ -22,6 +22,15 @@ the work, the same way by hand. Load-bearing properties, pinned here:
   * nothing is published unless the plugin's validate_semantic_vectors passes the release on its
     index (G3 coverage, G4 resolution, G6 retrieval), and its report is published with the gates;
   * it persists the ledger only after a publish, one ledger per family;
+  * in mode auto a family of DELTA_PREFIXES also publishes a delta from the release it published
+    last, as the prerelease <prefix>-delta-<tag>, split against that release's ledger, gated, and
+    validated installed after that release's base, with the base kept in the chain's codec epoch;
+    any doubt about the chain (no ledger, another release's, another package, codec, alias
+    threshold or identity) publishes a base in a new epoch, and a delta past G7 a base in the
+    chain's epoch; such a family keeps its base beside its ledger and backs the ledger up in the
+    prerelease vectors-ledger-<tag>, which a runner that lost its own restores;
+  * a new rot192-i8i4 epoch takes the rotation pins.env pins, else the one the runner fitted
+    before, else fits one, kept and backed up after a publish; every validation reports G6's recall;
   * it builds every family of FAMILY_CONFIGS from one index and one warehouse, in its order, each
     published as its own <prefix>-<tag>: the first, which released applications install, is
     published before a later family runs, and a later family's failure leaves it published.
@@ -68,6 +77,7 @@ TAG_COMMIT = "c66256253b25c0aa0b13d04e399647496f3b0bee"   # the commit TAG names
 # (name, release prefix) of each family, in build order
 FAMILIES = [(c.split(":")[0].rsplit("/", 1)[-1], c.split(":")[1]) for c in PIN["FAMILY_CONFIGS"].strip('"').split()]
 LEGACY, WINDOWS = FAMILIES[0][0], FAMILIES[1][0]
+ROTATION_KEY = f"{FAMILIES[1][0]}.fp32-4a4a2ae8"   # the windows family's rotation, fitted on the stub warehouse
 CHUNKING_IDENTITY = {"meivin-round2-onnx": 2685558872390372738, "meivin-round2-windows-onnx": 320260894818558297}
 
 
@@ -98,7 +108,7 @@ class Workflow(unittest.TestCase):
         inputs = on["workflow_dispatch"]["inputs"]
         self.assertEqual(set(inputs), {"release_tag", "mode", "family"})
         self.assertTrue(inputs["release_tag"]["required"])
-        self.assertEqual(inputs["mode"]["options"], ["dry-run", "base"])
+        self.assertEqual(inputs["mode"]["options"], ["dry-run", "auto", "base"])
         self.assertEqual(inputs["mode"]["default"], "dry-run")
 
     def test_the_gate_admits_a_successful_index_build_of_a_database_release_only(self):
@@ -117,7 +127,7 @@ class Workflow(unittest.TestCase):
     def test_publishing_is_opt_in(self):
         gate = run_text(self.gate)
         self.assertIn("MODE=dry-run", gate)
-        self.assertIn('[ "$PUBLISH" != true ] || MODE=base', gate)
+        self.assertIn('[ "$PUBLISH" != true ] || MODE=auto', gate)
         self.assertEqual(self.gate["steps"][0]["env"]["PUBLISH"], "${{ vars.LIBRARY_VECTORS_PUBLISH }}")
 
     @unittest.skipIf(sys.platform == "win32" or not shutil.which("bash"), "needs a Linux bash")
@@ -153,6 +163,8 @@ class Workflow(unittest.TestCase):
         self.assertIn("proceed=false", output)
         self.assertIn(f"Incomplete: {second}-{TAG} (draft)", log)
         self.assertIn("delete any draft", log)
+        output, log = gate({f"{first}-{TAG}": "published", f"{second}-{TAG}": "published", f"{second}-delta-{TAG}": "draft"})
+        self.assertIn(f"Incomplete: {second}-delta-{TAG} (draft)", log)
         output, log = gate({f"{first}-{TAG}": "published", f"{second}-{TAG}": "published"})
         self.assertIn("proceed=false", output)
         self.assertNotIn("Incomplete:", log)
@@ -160,7 +172,7 @@ class Workflow(unittest.TestCase):
         for releases in ({}, {f"{first}-{TAG}": "draft"}):
             output, _ = gate(releases)
             self.assertIn("proceed=true", output)
-            self.assertIn("mode=base", output)
+            self.assertIn("mode=auto", output)
 
     def test_a_manual_run_builds_every_family_or_one_alone(self):
         family = self.doc[True]["workflow_dispatch"]["inputs"]["family"]
@@ -269,7 +281,8 @@ release_json() {
 """
 
 STUB_GH = r"""#!/usr/bin/env bash
-""" + RELEASE_JSON + r"""echo "gh $*" >> "$CALLS"
+""" + RELEASE_JSON + r"""[ "$1" != --version ] || { echo "gh version 2.0.0 (stub)"; exit 0; }   # not logged: preflight's record only
+echo "gh $*" >> "$CALLS"
 if [ "$1" = api ]; then
   case "$2" in
     */commits/v*) echo "${TAG_COMMIT:-c66256253b25c0aa0b13d04e399647496f3b0bee}"; exit 0 ;;
@@ -279,7 +292,9 @@ if [ "$1" = api ]; then
 fi
 cmd="$1 $2"; shift 2
 case "$cmd" in
+  "release delete") ;;
   "auth status") [ -z "${GH_UNAUTHENTICATED:-}" ] ;;
+  "release list") for t in ${PUBLISHED_TAGS:-}; do echo "$t"; done ;;   # the published (not draft) tags
   "release view")
     tag=$1
     case "$tag" in vectors-*)
@@ -292,14 +307,19 @@ case "$cmd" in
   "release download")
     tag=$1; shift; dir=.; pats=()
     while [ $# -gt 0 ]; do case "$1" in --dir) dir=$2; shift 2;; --pattern) pats+=("$2"); shift 2;; *) shift;; esac; done
-    for p in "${pats[@]}"; do cp "$ASSETS/$tag/$p" "$dir/$p" || exit 1; done ;;
+    for p in "${pats[@]}"; do
+      found=""; for f in "$ASSETS/$tag"/$p; do [ -f "$f" ] && cp "$f" "$dir/" && found=1; done
+      [ -n "$found" ] || { echo "no assets match the file pattern" >&2; exit 1; }
+    done ;;
   "release create")
     tag=$1; while [ $# -gt 0 ]; do case "$1" in --notes-file) cp "$2" "$UPLOADED.notes.$tag"; shift 2;; *) shift;; esac; done ;;
   "release upload")
     # SHORT_UPLOAD names an asset that arrives one byte short
     name=$(basename "$2"); size=$(stat -c %s "$2")
-    [ "$name" != "${SHORT_UPLOAD:-}" ] || size=$((size - 1))
-    printf '%s\t%s\t%s\n' "$1" "$name" "$size" >> "$UPLOADED" ;;
+    # SHORT_UPLOAD_TO: only to that release
+    if [ "$name" = "${SHORT_UPLOAD:-}" ] && [ "${SHORT_UPLOAD_TO:-$1}" = "$1" ]; then size=$((size - 1)); fi
+    printf '%s\t%s\t%s\n' "$1" "$name" "$size" >> "$UPLOADED"
+    mkdir -p "$UPLOADED.d/$1" && cp "$2" "$UPLOADED.d/$1/" ;;
   "release edit") ;;
   *) echo "stub gh: $cmd" >&2; exit 90 ;;
 esac
@@ -333,9 +353,14 @@ STUB_EXPORT = r"""#!/usr/bin/env bash
 echo "export $*" >> "$CALLS"
 for o in "$@"; do out_arg=$o; done   # --out is last: the work directory holds the families before it
 echo "export-work $(cd "${out_arg%/*}/.." && ls -A | tr '\n' ' ')" >> "$CALLS"
-out=""; warehouse=""; db=""; model=""
+out=""; warehouse=""; db=""; model=""; previous=""
 while [ $# -gt 0 ]; do case "$1" in --out) out=$2; shift 2;; --warehouse) warehouse=$2; shift 2;; --seforim-db) db=$2; shift 2;;
-  --model) model=$2; shift 2;; *) shift;; esac; done
+  --model) model=$2; shift 2;; --previous-ledger) previous=$2; shift 2;; *) shift;; esac; done
+# as export_semantic_plan does: the previous ledger is opened, the only one in its directory
+prev_version=null
+if [ -n "$previous" ]; then
+  prev_version=$(jq -e .library_version "$previous"/ledger-v*.manifest.json) || { echo "Could not open the previous ledger: $previous" >&2; exit 1; }
+fi
 [ -z "$model" ] || [ -f "$model" ] || { echo "Could not read the model identity $model" >&2; exit 1; }
 # as export_semantic_plan does on a schema 5 index, which keeps official books' line text in the DB
 [ -n "$db" ] || { echo "Planning failed: the document at DocAddress { segment_ord: 3, doc_id: 38119 } keeps its text in the library database, which cannot be read (pass --seforim-db)" >&2; exit 1; }
@@ -350,14 +375,20 @@ mkdir -p "$out"
 : > "$out/embed.jsonl"
 [ -z "$model" ] || cp "$model" "$out/model.json"   # what the stub assemble derives the identity digest from
 jq -n --argjson n "${TO_EMBED:-0}" '{format:"otzaria-embed-plan",version:2,records:$n,plan_sha256:("a"*64),passage_package:{checksum:"4a4a2ae88a86f15ffe6069bfcefc3abd13c207cec5d7aaef52c0c59d752ade46",quantization:"fp32"}}' > "$out/embed-manifest.json"
-jq -n --arg tag "${PLAN_TAG:-v30-20260930165019}" '{format:"otzaria-vector-plan",version:1,library_release_tag:$tag,parity:{checked:9,mismatches:0},counts:{records:9}}' > "$out/plan-manifest.json"
+family=""; [ -z "$model" ] || family=$(sha256sum < "$model" | cut -c1-16)
+jq -n --arg tag "${PLAN_TAG:-v30-20260930165019}" --arg family "$family" --arg text "${PLAN_IDENTITY:-stub}" --argjson prev "$prev_version" \
+  '{format:"otzaria-vector-plan",version:1,identity:{family:$family,text:$text},library_release_tag:$tag,
+    previous:(if $prev == null then null else {library_version:$prev} end),parity:{checked:9,mismatches:0},counts:{records:9}}' > "$out/plan-manifest.json"
 """
 
 STUB_CLI = r"""#!/usr/bin/env bash
 echo "cli $*" >> "$CALLS"
 sub=$1; shift
 out=""; files=(); verify=""; warehouse=""; create=""; model=""; shards=(); repair=""; plan=""
+kind=""; previous=""; prevver=""; keep=""; codec=""; rotation=""; threshold=""
 while [ $# -gt 0 ]; do case "$1" in
+  --codec) codec=$2; shift 2;; --rotation) rotation=$2; shift 2;; --alias-threshold) threshold=$2; shift 2;;
+  --kind) kind=$2; shift 2;; --previous) previous=$2; shift 2;; --previous-version) prevver=$2; shift 2;; --keep-epoch) keep=1; shift;;
   --out) out=$2; shift 2;; --plan) plan=$2; shift 2;; --files) files+=("$2"); shift 2;; --verify) verify=1; shift;;
   --warehouse) warehouse=$2; shift 2;; --create) create=1; shift;; --model) model=$2; shift 2;;
   --shards) shards+=("$2"); shift 2;; --processes) processes=$2; shift 2;; --repair) repair=1; shift;; *) shift;; esac; done
@@ -380,6 +411,11 @@ case "$sub" in
     echo "Verified:        9 record(s) in 2 batch(es), 9216 bytes re-hashed"
     [ -z "$rebuilt" ] || echo "Index rebuilt:   index.bin is not the index of keys.bin"
     echo "Took:            0.0 s" ;;
+  fit-rotation)
+    need_warehouse
+    echo "rotation fitted on $warehouse" > "$out"
+    echo "=== Fitted rot192-i8i4 ==="
+    echo "Epoch SHA-256:   ${FIT_PRINTS:-$(sha256sum < "$out" | cut -d' ' -f1)}" ;;
   embed-shard)
     # as the sidecar does: one shard in --out, or with --processes P one per process in shard-NNN
     echo "cli-env OTZARIA_ONNX_RUNTIME=${OTZARIA_ONNX_RUNTIME:-}" >> "$CALLS"
@@ -398,11 +434,57 @@ case "$sub" in
     verified 1 ;;
   assemble)
     verified ""
-    if [ -n "$verify" ]; then echo '{"gates":"stub"}' > "$out/gates.json"; exit "${VERIFY_EXIT:-0}"; fi
+    # as the sidecar does: a delta, or a base that keeps the epoch, needs the previous ledger, and
+    # its G8 assembles again with it; a delta's plan was split against that ledger
+    if [ -n "$previous" ]; then
+      jq -e --argjson v "${prevver:-0}" '.library_version == $v' "$previous/ledger-v${prevver}.manifest.json" >/dev/null \
+        || { echo "Could not open the previous ledger" >&2; exit 1; }
+    fi
+    if [ -n "$verify" ] && [ -z "$kind" ]; then
+      if [ -z "$previous" ] && jq -e '.kind == "delta" or .keptEpoch' "$out/release.json" >/dev/null; then
+        echo '{"gates":[{"gate":"G8","passed":false}]}' > "$out/gates.json"; exit 2
+      fi
+      # G7_FAIL: a delta past its share of its base, and no other gate failed
+      if [ -n "${G7_FAIL:-}" ] && jq -e '.kind == "delta"' "$out/release.json" >/dev/null; then
+        echo '{"gates":[{"gate":"G1","passed":true},{"gate":"G7","passed":false,"detail":"publish a base"}]}' > "$out/gates.json"; exit 2
+      fi
+      echo '{"gates":"stub"}' > "$out/gates.json"
+      if jq -e '.kind == "delta"' "$out/release.json" >/dev/null; then exit "${DELTA_VERIFY_EXIT:-${VERIFY_EXIT:-0}}"; fi
+      exit "${VERIFY_EXIT:-0}"
+    fi
+    [ "$kind" != delta ] || [ -z "${DELTA_ASSEMBLY_FAILS:-}" ] || { echo "Assembly failed: the ledger of v29 is for identity 0" >&2; exit 1; }
+    if [ "$kind" = delta ] || [ -n "$keep" ]; then
+      [ -n "$previous" ] || { echo "Assembly failed: a delta is assembled against the previous ledger" >&2; exit 1; }
+    fi
+    if [ "$kind" = delta ]; then
+      [ "$(jq -r '.previous.library_version' "$plan/plan-manifest.json")" = "$prevver" ] || { echo "Assembly failed: the plan was split against another ledger" >&2; exit 1; }
+    fi
+    # the epoch: the previous ledger's for a delta or --keep-epoch, else --codec's (a rotation for rot192-i8i4)
+    if [ "$kind" = delta ] || [ -n "$keep" ]; then
+      epoch=$(jq -c .codec "$previous/ledger-v${prevver}.manifest.json")
+      chain=$(jq -r '.alias_threshold // ""' "$previous/ledger-v${prevver}.manifest.json")
+      if [ "$kind" = delta ] && [ -n "$threshold" ] && [ "$threshold" != "$chain" ]; then echo "Assembly failed: a new threshold starts with a base" >&2; exit 1; fi
+      [ "$kind" != delta ] || threshold=$chain
+    elif [ "${codec:-i8-sym-vec}" = rot192-i8i4 ]; then
+      [ -f "$rotation" ] || { echo "--codec rot192-i8i4 needs --rotation" >&2; exit 1; }
+      epoch=$(jq -cn --arg sha "$(sha256sum < "$rotation" | cut -d' ' -f1)" '{name: "rot192-i8i4", params_sha256: $sha}')
+    else
+      [ -z "$rotation" ] || { echo "--rotation is for --codec rot192-i8i4" >&2; exit 1; }
+      epoch=$(jq -cn --arg name "${codec:-i8-sym-vec}" '{name: $name, params_sha256: ("stub-" + $name)}')
+    fi
+    if [ -n "$threshold" ] && [ "$(echo "$epoch" | jq -r .name)" != rot192-i8i4 ]; then
+      echo "Assembly failed: a short line shares a neighbour's vector only in segment format 3 (rot192-i8i4)" >&2; exit 1
+    fi
     mkdir -p "$out"; head -c 3000 /dev/urandom > "$out/segment.oxv"
     # the identity is the family's: its digest, the hash of the model the plan was made with
-    jq -n --arg d "$(sha256sum < "$plan/model.json" | cut -c1-16)" '{identityDigest: $d, toLibraryVersion: 30}' > "$out/release.json"
-    for f in ledger-v30.keys pairs-v30.bin ledger-v30.manifest.json; do echo "$f" > "$out/$f"; done
+    jq -n --arg d "$(sha256sum < "$plan/model.json" | cut -c1-16)" --arg kind "${kind:-base}" --argjson from "${prevver:-0}" \
+      --argjson keep "${keep:-false}" '{identityDigest: $d, kind: $kind, fromLibraryVersion: (if $kind == "delta" then $from else 0 end),
+        toLibraryVersion: 30} + (if $keep == 1 then {keptEpoch: true} else {} end)' > "$out/release.json"
+    for f in ledger-v30.keys pairs-v30.bin; do echo "$f" > "$out/$f"; done
+    jq -n --argjson since "$([ "$kind" = delta ] && echo 777 || echo 0)" --argjson codec "$epoch" --arg threshold "$threshold" \
+      '{library_version: 30, passage_package: {checksum: "4a4a2ae88a86f15ffe6069bfcefc3abd13c207cec5d7aaef52c0c59d752ade46"}, deltas_since_base: $since,
+        codec: $codec, alias_threshold: (if $threshold == "" then null else ($threshold | tonumber) end)}' \
+      > "$out/ledger-v30.manifest.json"
     if [ "$(jq -r .chunking_identity "$plan/model.json")" = 320260894818558297 ]; then
       echo 'windowed occurrence metadata' > "$out/occurrences-v30.bin"
     fi ;;
@@ -487,11 +569,14 @@ verdict() {
 }
 g3=$(verdict G3); g4=$(verdict G4); g6v=$(verdict G6); passed=true
 for v in $g3 $g4 $g6v; do case "$v" in passed|skipped) ;; *) passed=false ;; esac; done
+# VALIDATE_FAILS_FROM: a set of that many releases or more fails (a delta, or a delta's chain)
+if [ -n "${VALIDATE_FAILS_FROM:-}" ] && [ "$releases" -ge "$VALIDATE_FAILS_FROM" ]; then passed=false; fi
 [ -z "$report" ] || jq -n --argjson passed "$passed" --arg g3 "$g3" --arg g4 "$g4" --arg g6 "$g6v" \
   '{tool: "validate_semantic_vectors", reportVersion: 1, passed: $passed,
     gates: [{gate: "G3", status: $g3, metrics: {standaloneTextChars: 10000, windowedStandaloneChars: 8700,
       unwindowedStandaloneChars: 1300, partiallyWindowedStandaloneLines: 2, unwindowedStandaloneLines: 0, borrowedContextLines: 3}},
-      {gate: "G4", status: $g4}, {gate: "G6", status: $g6}]}' > "$report"
+      {gate: "G4", status: $g4}, ({gate: "G6", status: $g6} + (if $g6 == "notRun" or $g6 == "skipped" then {} else
+        {metrics: {queries: 2000, recallAt10: 0.991, recallAt50: 0.987, minRecallAt10: 0.98, minRecallAt50: 0.98}} end))]}' > "$report"
 [ "$passed" = true ]
 """
 
@@ -585,7 +670,7 @@ class Driver(unittest.TestCase):
                 prov[key] = value
         self.provenance.write_text(json.dumps(prov))
 
-    def run_driver(self, mode="dry-run", tag=TAG, args=(), **env):
+    def run_driver(self, mode="dry-run", tag=TAG, args=(), driver=DRIVER, **env):
         e = dict(os.environ, CALLS=str(self.calls), ASSETS=str(self.root / "assets"), UPLOADED=str(self.root / "uploaded.tsv"),
                  RELEASE_FILE_ARGS=str(self.root / "release-file-args.json"),
                  OTZARIA_SEMANTIC_CLI=str(self.root / "bin" / "cli"), EXPORT_SEMANTIC_PLAN=str(self.root / "bin" / "export"),
@@ -594,7 +679,7 @@ class Driver(unittest.TestCase):
                  VECTORS_MIN_FREE_GB="0", OTZARIA_HF_TOKEN="hf_s3cr3t", GITHUB_ACTIONS="",
                  PATH=str(self.root / "net") + os.pathsep + os.environ["PATH"])
         e.update({k: str(v) for k, v in env.items()})
-        p = subprocess.run(["bash", str(DRIVER), "--tag", tag, "--mode", mode, "--state", str(self.state), "--repo", "o/r",
+        p = subprocess.run(["bash", str(driver), "--tag", tag, "--mode", mode, "--state", str(self.state), "--repo", "o/r",
                             *args], capture_output=True, text=True, env=e)
         calls = self.calls.read_text().splitlines() if self.calls.exists() else []
         self.assertNotIn("hf_s3cr3t", p.stdout + p.stderr)
@@ -911,14 +996,28 @@ class Driver(unittest.TestCase):
                 ledger = self.state / "ledger" / self.id8(name)
                 expected = ["ledger-v30.keys", "ledger-v30.manifest.json", "pairs-v30.bin", "published.json"]
                 if name == WINDOWS:
-                    expected.append("occurrences-v30.bin")
+                    expected += ["occurrences-v30.bin", "release"]   # and the base the next delta installs after
                     self.assertEqual((ledger / "occurrences-v30.bin").read_text(), "windowed occurrence metadata\n")
+                    self.assertEqual(sorted(f.name for f in (ledger / "release").iterdir()), ["release.json", "segment.oxv"])
                 self.assertEqual(sorted(f.name for f in ledger.iterdir()), sorted(expected))
                 published = json.loads((ledger / "published.json").read_text())
                 self.assertEqual(published["published"], release)
                 self.assertEqual(published["manifest"], self.stem(name) + ".manifest.json")
-        self.assertEqual(edits[-1], len(calls) - 1)
-        self.assertEqual(sorted(p.name for p in (self.state / "ledger").iterdir()), sorted(self.id8(n) for n, _ in FAMILIES))
+                codec, threshold = ("rot192-i8i4", "0.99") if name == WINDOWS else ("i8-sym-vec", "")
+                self.assertEqual((published["kind"], published["from"], published["to"], published["base_tag"],
+                                  published["deltas_since_base"], published["family"], published["codec"], published["alias_threshold"]),
+                                 ("base", None, 30, release, 0, name, codec, threshold))
+        # only the delta family's ledger is backed up, after its publish, with the rotation it fitted, and nothing follows
+        backups = [i for i, c in enumerate(calls) if " vectors-ledger-" in c]
+        files = self.state / "work" / TAG / WINDOWS / "files"
+        rotation = hashlib.sha256((self.state / "ledger" / "rotations" / f"{ROTATION_KEY}.bin").read_bytes()).hexdigest()
+        self.assertEqual([calls[i] for i in backups[-2:]], [
+            f"gh release upload vectors-ledger-{TAG} {files / f'vectors-windows.ledger-{self.id8(WINDOWS)}-v30.tar.zst'} --repo o/r --clobber",
+            f"gh release upload vectors-ledger-{TAG} {files / f'vectors-windows.rotation-{ROTATION_KEY}-{rotation[:16]}.bin'} --repo o/r --clobber"])
+        self.assertLess(edits[-1], backups[0])
+        self.assertEqual(backups[-1], len(calls) - 1)
+        self.assertEqual(sorted(p.name for p in (self.state / "ledger").iterdir()),
+                         sorted([self.id8(n) for n, _ in FAMILIES] + ["rotations"]))
         self.assertFalse((self.state / "work" / TAG).exists())
 
     def test_a_publish_is_a_prerelease_unless_the_variable_says_false(self):
@@ -1278,7 +1377,7 @@ class Driver(unittest.TestCase):
         self.assertLess(published, self.index_of(calls, f"--model {self.model(WINDOWS)} "))
         self.assertLess(published, self.index_of(calls, f"gh release create vectors-windows-{TAG} "))
         self.assertNotEqual(self.id8(LEGACY), self.id8(WINDOWS))   # their assets are told apart by the identity
-        notes = [c for c in calls if c.startswith("gh release create")]
+        notes = [c for c in calls if c.startswith("gh release create") and "vectors-ledger-" not in c]
         self.assertEqual([c.split()[3] for c in notes], [prefix + "-" + TAG for _, prefix in FAMILIES])
 
     def test_the_first_familys_notes_are_as_before_and_a_later_ones_name_it(self):
@@ -1311,7 +1410,8 @@ class Driver(unittest.TestCase):
                 if mode == "dry-run":
                     for name, _ in FAMILIES:
                         kept = sorted(f.name for f in (self.state / "work" / TAG / name).iterdir())
-                        self.assertEqual(kept, ["files", "plan", "plan.log", "release", "release-files.log"])   # no shards
+                        fitted = ["fit-rotation.log", "rotation.bin"] if name == WINDOWS else []
+                        self.assertEqual(kept, sorted(["files", "plan", "plan.log", "release", "release-files.log"] + fitted))   # no shards
                     self.assertIn(" kept in ", p.stdout)
 
     def test_each_family_needs_the_free_space_when_it_starts(self):
@@ -1347,7 +1447,8 @@ class Driver(unittest.TestCase):
     def test_one_family_is_built_alone_when_named(self):
         p, calls = self.run_driver(mode="base", TO_EMBED=0, EXISTING="vectors-" + TAG, args=("--family", WINDOWS))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertEqual([c.split()[3] for c in calls if c.startswith("gh release create")], [f"vectors-windows-{TAG}"])
+        self.assertEqual([c.split()[3] for c in calls if c.startswith("gh release create")],
+                         [f"vectors-windows-{TAG}", f"vectors-ledger-{TAG}"])
         self.assertFalse([c for c in calls if f"--model {self.model(LEGACY)}" in c])
         self.assertFalse([c for c in calls if c.startswith(f"gh release view vectors-{TAG} ")])
         self.calls.unlink()
@@ -1375,6 +1476,428 @@ class Driver(unittest.TestCase):
         self.assertIn(f"families/{WINDOWS}/model.json is missing", p.stdout)
         self.assertFalse([c for c in calls if "release download" in c])
 
+    PREV = "v29-20260927072953"
+
+    def identity_sha(self, name, text="stub"):
+        """What the driver records of the stub plan's identity: sha256 of `jq -cS .identity`."""
+        family = hashlib.sha256(self.model(name).read_bytes()).hexdigest()[:16]
+        line = json.dumps({"family": family, "text": text}, sort_keys=True, separators=(",", ":")) + "\n"
+        return hashlib.sha256(line.encode()).hexdigest()
+
+    def write_chain(self, keep_release=True, chain=0, **changes):
+        """The windows family's ledger as a publish of PREV persisted it, with a chain of a base and
+        `chain` deltas a device applied before it; changes override published.json (None drops a
+        field), or with `ledger_manifest` the ledger's manifest."""
+        ledger = self.state / "ledger" / self.id8(WINDOWS)
+        ledger.mkdir(parents=True)
+        for i in range(chain + 1 if chain else 0):
+            d = ledger / "chain" / ("base" if i == 0 else f"delta-{i}")
+            d.mkdir(parents=True)
+            (d / "segment.oxv").write_bytes(b"a chained segment")
+            v = 29 - chain + i
+            (d / "release.json").write_text(json.dumps({"kind": "base" if i == 0 else "delta", "toLibraryVersion": v,
+                                                        "fromLibraryVersion": 0 if i == 0 else v - 1}))
+        for f in ("ledger-v29.keys", "pairs-v29.bin", "occurrences-v29.bin"):
+            (ledger / f).write_text(f)
+        manifest = {"library_version": 29, "passage_package": {"checksum": PIN["PASSAGE_PACKAGE_CHECKSUM"]}, "deltas_since_base": 0,
+                    "codec": {"name": "rot192-i8i4", "params_sha256": "e" * 64}, "alias_threshold": 0.99}
+        manifest.update(changes.pop("ledger_manifest", {}))
+        (ledger / "ledger-v29.manifest.json").write_text(json.dumps(manifest))
+        self.prev_segment = b"the v29 base segment"
+        stem = f"otzaria-vectors-{self.id8(WINDOWS)}-v29-base"
+        release = {"kind": "base", "identityDigest": self.id8(WINDOWS) + "0" * 8, "fromLibraryVersion": 0, "toLibraryVersion": 29,
+                   "segment": {"sha256": hashlib.sha256(self.prev_segment).hexdigest(), "size": len(self.prev_segment)}}
+        if keep_release:
+            (ledger / "release").mkdir()
+            (ledger / "release" / "segment.oxv").write_bytes(self.prev_segment)
+            (ledger / "release" / "release.json").write_text(json.dumps(release))
+        # the published base, as a device downloads it (the stub zstd passes data through)
+        published_manifest = json.dumps({**release, "files": [{"file": stem + ".oxv.zst", "sha256": hashlib.sha256(self.prev_segment).hexdigest()}]}).encode()
+        assets = self.root / "assets" / f"vectors-windows-{self.PREV}"
+        assets.mkdir(parents=True, exist_ok=True)
+        (assets / (stem + ".manifest.json")).write_bytes(published_manifest)
+        (assets / (stem + ".oxv.zst")).write_bytes(self.prev_segment)
+        published = {"published": f"vectors-windows-{self.PREV}", "library_release_tag": self.PREV,
+                     "manifest": stem + ".manifest.json", "manifest_sha256": hashlib.sha256(published_manifest).hexdigest(),
+                     "family": WINDOWS, "to": 29, "base_tag": f"vectors-windows-{self.PREV}", "codec": "rot192-i8i4",
+                     "alias_threshold": "0.99", "epoch_sha256": "e" * 64,
+                     "passage_package": PIN["PASSAGE_PACKAGE_CHECKSUM"], "plan_identity_sha256": self.identity_sha(WINDOWS),
+                     "kind": "base", "from": None, "deltas_since_base": 0}
+        for key, value in changes.items():
+            if value is None:
+                published.pop(key)
+            else:
+                published[key] = value
+        (ledger / "published.json").write_text(json.dumps(published))
+        return ledger
+
+    def run_auto(self, **env):
+        env.setdefault("PUBLISHED_TAGS", f"vectors-{self.PREV} vectors-windows-{self.PREV} vectors-windows-delta-{self.PREV} vectors-ledger-{self.PREV}")
+        return self.run_driver(mode="auto", TO_EMBED=0, **env)
+
+    def assert_a_base_alone(self, p, calls, why):
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        notices = [l for l in p.stdout.splitlines()
+                   if l.startswith(f"::warning::vectors-windows-{TAG} is published as a base alone, with no delta: ")]
+        self.assertEqual(len(notices), 1, p.stdout)
+        self.assertIn(why, notices[0])
+        self.assertFalse([c for c in calls if "assemble --kind delta" in c or "--keep-epoch" in c])
+        self.assertFalse([c for c in calls if f"vectors-windows-delta-{TAG}" in c and not c.startswith("gh release view")])
+        self.assertTrue([c for c in calls if c.startswith(f"gh release edit vectors-windows-{TAG} ")])
+        published = json.loads((self.state / "ledger" / self.id8(WINDOWS) / "published.json").read_text())
+        self.assertEqual((published["kind"], published["published"], published["to"]), ("base", f"vectors-windows-{TAG}", 30))
+
+    def test_auto_publishes_the_windows_familys_base_and_a_delta_from_its_last_release(self):
+        ledger = self.write_chain()
+        p, calls = self.run_auto()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        fw, id8 = self.state / "work" / TAG / WINDOWS, self.id8(WINDOWS)
+        # the delta's release is checked before the build, as the base's is
+        self.assertLess(self.index_of(calls, f"gh release view vectors-windows-delta-{TAG} "), self.index_of(calls, "gh release download"))
+        # the first family is a base alone, exactly as in mode base
+        legacy = [c for c in calls if f"/{LEGACY}/" in c and (c.startswith("export") or c.startswith("cli assemble"))]
+        self.assertFalse([c for c in legacy if "--previous" in c or "--keep-epoch" in c or "--kind delta" in c])
+        self.assertTrue([c for c in calls if f"/{LEGACY}/" in c and c.startswith("cli assemble --kind base")])
+        # the windows family: planned against its ledger, a delta and a base in the chain's epoch, both gated with it
+        prev = f"--previous {ledger} --previous-version 29"
+        self.assertIn(f"--previous-ledger {ledger} ", calls[self.index_of(calls, f"--model {self.model(WINDOWS)} ")])
+        delta = self.index_of(calls, "cli assemble --kind delta")
+        self.assertIn(f"{prev} --out {fw / 'delta'} ", calls[delta])
+        base = self.index_of(calls, f"cli assemble --kind base --plan {fw / 'plan'}")
+        self.assertIn(f"--keep-epoch {prev} --alias-threshold 0.99 --out {fw / 'release'} ", calls[base])
+        self.assertNotIn("--alias-threshold", calls[delta])   # a delta takes its chain's
+        self.assertFalse([c for c in calls if "fit-rotation" in c])   # the chain's epoch is the ledger's
+        self.assertTrue(delta < base)
+        for out in ("delta", "release"):
+            self.assertIn(f"cli assemble --verify --plan {fw / 'plan'} --warehouse {self.warehouse} {prev} --out {fw / out}", calls)
+        # validated alone, and the delta installed after the base it extends
+        validations = [c for c in calls if c.startswith("validate --index") and f"/{WINDOWS}/" in c]
+        self.assertEqual(len(validations), 2)
+        self.assertIn(f"--release {fw / 'release'} --plan", validations[0])
+        self.assertIn(f"--release {ledger / 'release'} --release {fw / 'delta'} --plan", validations[1])
+        self.assertIn(f"--report {fw / 'delta' / 'validation.json'}", validations[1])
+        # published after the base, as a prerelease of its own, through a draft
+        stem = f"otzaria-vectors-{id8}-v29-v30"
+        dtag = f"vectors-windows-delta-{TAG}"
+        create = self.index_of(calls, f"gh release create {dtag} ")
+        self.assertLess(self.index_of(calls, f"gh release edit vectors-windows-{TAG} "), create)
+        for arg in ("--draft", "--target " + TAG_COMMIT, "--prerelease=true", "--latest=false"):
+            self.assertIn(arg, calls[create].split(" --title")[0])
+        self.assertIn(f"--title Library vectors delta {TAG} --notes-file", calls[create])
+        # the ledger is persisted and backed up before the delta is published
+        self.assertLess(self.index_of(calls, f"gh release upload vectors-ledger-{TAG} "), create)
+        uploads = [Path(c.split()[4]).name for c in calls if c.startswith(f"gh release upload {dtag} ")]
+        self.assertEqual(uploads, [stem + ".oxv.zst", "gates.json", "validation.json", stem + ".manifest.json"])
+        self.assertIn(f"gh release edit {dtag} --repo o/r --draft=false --latest=false", calls)
+        manifest = self.root / "uploaded.tsv.d" / dtag / (stem + ".manifest.json")
+        notes = (self.root / f"uploaded.tsv.notes.{dtag}").read_text()
+        self.assertIn(f"Manifest: `{stem}.manifest.json`, SHA-256 `{hashlib.sha256(manifest.read_bytes()).hexdigest()}`", notes)
+        self.assertIn(f"a delta from v29, on the vectors of vectors-windows-{self.PREV}", notes)
+        # the base keeps its notes and names; the first family publishes no delta
+        self.assertEqual([Path(c.split()[4]).name for c in calls if c.startswith(f"gh release upload vectors-windows-{TAG} ")][-1],
+                         self.stem(WINDOWS) + ".manifest.json")
+        self.assertFalse([c for c in calls if f"vectors-delta-{TAG}" in c])
+        # the next chain: the base's ledger and assembly, and what was published
+        published = json.loads((ledger / "published.json").read_text())
+        self.assertEqual({k: published[k] for k in ("kind", "from", "to", "base_tag", "published", "delta_tag", "delta_manifest",
+                                                    "deltas_since_base", "family", "codec", "plan_identity_sha256")},
+                         {"kind": "delta", "from": 29, "to": 30, "base_tag": f"vectors-windows-{TAG}", "published": f"vectors-windows-{TAG}",
+                          "delta_tag": dtag, "delta_manifest": stem + ".manifest.json", "deltas_since_base": 777,
+                          "family": WINDOWS, "codec": "rot192-i8i4", "plan_identity_sha256": self.identity_sha(WINDOWS)})
+        self.assertEqual((published["alias_threshold"], published["epoch_sha256"]), ("0.99", "e" * 64))   # the epoch stays
+        self.assertEqual(published["delta_manifest_sha256"], hashlib.sha256(manifest.read_bytes()).hexdigest())
+        self.assertEqual(json.loads((ledger / "ledger-v30.manifest.json").read_text())["deltas_since_base"], 0)   # the base's
+        self.assertFalse((ledger / "ledger-v29.manifest.json").exists())
+        self.assertEqual(json.loads((ledger / "release" / "release.json").read_text())["toLibraryVersion"], 30)
+        # the chain a device that installs this delta holds: the v29 base, then this delta
+        self.assertEqual(sorted(f.name for f in (ledger / "chain").iterdir()), ["base", "delta-1"])
+        self.assertEqual(json.loads((ledger / "chain" / "base" / "release.json").read_text())["toLibraryVersion"], 29)
+        self.assertEqual(json.loads((ledger / "chain" / "delta-1" / "release.json").read_text())["kind"], "delta")
+        self.assertFalse((ledger / "chain.pending").exists())
+        # backed up as no application's asset: <id8>/ and its files, without the assembly
+        backup = self.root / "uploaded.tsv.d" / f"vectors-ledger-{TAG}" / f"vectors-windows.ledger-{id8}-v30.tar.zst"
+        with tarfile.open(backup) as tar:
+            names = sorted(m.name.rstrip("/") for m in tar.getmembers())
+        self.assertEqual(names, sorted([id8] + [f"{id8}/{f}" for f in ("ledger-v30.keys", "ledger-v30.manifest.json", "pairs-v30.bin",
+                                                                          "occurrences-v30.bin", "published.json")]))
+        self.assertNotRegex(backup.name, r"^otzaria-vectors-.*\.manifest\.json$")
+        self.assertIn("--prerelease=true", calls[self.index_of(calls, f"gh release create vectors-ledger-{TAG} ")])
+
+    def test_auto_publishes_a_base_alone_when_the_chain_cannot_be_extended(self):
+        newer = f"vectors-windows-v29-20260929000000"
+        cases = (
+            ({}, {"PUBLISHED_TAGS": f"vectors-{self.PREV}"}, "no vectors-windows release is published yet"),
+            ({"published": newer}, {}, f"the ledger here is {newer}'s, and the release published last is vectors-windows-{self.PREV}"),
+            ({}, {"PUBLISHED_TAGS": f"vectors-windows-{self.PREV} {newer[:-6]}235959"},
+             f"the release published last is {newer[:-6]}235959"),
+            ({"ledger_manifest": {"library_version": 28}}, {}, "holds no ledger of v29"),
+            ({"ledger_manifest": {"passage_package": {"checksum": "0" * 64}}}, {}, "embedded with another package"),
+            ({"codec": "i8-sym-vec"}, {}, "the ledger is in codec 'i8-sym-vec', and this family's is rot192-i8i4"),
+            ({"alias_threshold": "0.98"}, {}, "the ledger shares short lines' vectors at '0.98', and this family at '0.99'"),
+            ({"codec": None}, {}, "the ledger is in codec ''"),
+            ({"plan_identity_sha256": None}, {}, "the ledger records no identity"),
+            ({}, {"PLAN_IDENTITY": "another recipe"}, "the plan's identity is not the one the ledger"),
+        )
+        for changes, env, why in cases:
+            with self.subTest(why=why):
+                shutil.rmtree(self.state / "ledger", ignore_errors=True)
+                shutil.rmtree(self.root / "assets" / f"vectors-windows-{self.PREV}", ignore_errors=True)
+                self.calls.unlink(missing_ok=True)
+                (self.root / "uploaded.tsv").unlink(missing_ok=True)
+                self.write_chain(**changes)
+                p, calls = self.run_auto(**env)
+                if "identity" in why and "records" not in why:
+                    plans = [c for c in calls if f"--model {self.model(WINDOWS)} " in c and c.startswith("export")]
+                    self.assertEqual(["--previous-ledger" in c for c in plans], [True, False])
+                self.assert_a_base_alone(p, calls, why)
+                # a new epoch: its rotation, and the family's alias threshold
+                base = calls[self.index_of(calls, f"cli assemble --kind base --plan {self.state / 'work' / TAG / WINDOWS / 'plan'}")]
+                self.assertIn(" --codec rot192-i8i4 --rotation ", base)
+                self.assertIn(" --alias-threshold 0.99 ", base)
+
+    def test_a_delta_past_g7_publishes_a_base_in_the_chains_epoch_and_no_delta(self):
+        ledger = self.write_chain()
+        p, calls = self.run_auto(G7_FAIL="1")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(f"::warning::vectors-windows-{TAG} is published as a base alone, with no delta: the delta is past G7's share", p.stdout)
+        plans = [c for c in calls if c.startswith("export") and f"--model {self.model(WINDOWS)} " in c]
+        self.assertEqual(len(plans), 1)   # not planned again
+        fw = self.state / "work" / TAG / WINDOWS
+        base = calls[self.index_of(calls, f"cli assemble --kind base --plan {fw / 'plan'}")]
+        self.assertIn(f"--keep-epoch --previous {ledger} --previous-version 29 --alias-threshold 0.99 --out", base)
+        self.assertFalse([c for c in calls if "fit-rotation" in c or f"vectors-windows-delta-{TAG}" in c and not c.startswith("gh release view")])
+        self.assertEqual(len([c for c in calls if c.startswith("validate --index") and f"/{WINDOWS}/" in c]), 1)
+        published = json.loads((ledger / "published.json").read_text())
+        self.assertEqual((published["kind"], published["epoch_sha256"], published["published"]), ("base", "e" * 64, f"vectors-windows-{TAG}"))
+
+    def test_a_new_rot192_epoch_fits_its_rotation_once_keeps_it_and_backs_it_up(self):
+        other = self.state / "ledger" / "rotations" / f"{WINDOWS}.fp32-00000000.bin"   # another warehouse's: not this one's
+        other.parent.mkdir(parents=True); other.write_text("fitted on another warehouse")
+        p, calls = self.run_driver(mode="base", TO_EMBED=0)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        fw, kept = self.state / "work" / TAG / WINDOWS, self.state / "ledger" / "rotations" / f"{ROTATION_KEY}.bin"
+        fit = self.index_of(calls, "cli fit-rotation")
+        self.assertEqual(calls[fit], f"cli fit-rotation --warehouse {self.warehouse} --out {fw / 'rotation.bin'}")
+        base = calls[self.index_of(calls, f"cli assemble --kind base --plan {fw / 'plan'}")]
+        self.assertIn(f"--codec rot192-i8i4 --rotation {fw / 'rotation.bin'} --alias-threshold 0.99 --out", base)
+        self.assertLess(fit, self.index_of(calls, f"cli assemble --kind base --plan {fw / 'plan'}"))
+        legacy = calls[self.index_of(calls, f"cli assemble --kind base --plan {self.state / 'work' / TAG / LEGACY / 'plan'}")]
+        self.assertFalse([a for a in ("--codec", "--rotation", "--alias-threshold", "--keep-epoch") if a in legacy])
+        self.assertEqual(len([c for c in calls if "fit-rotation" in c]), 1)
+        epoch = hashlib.sha256(kept.read_bytes()).hexdigest()
+        self.assertEqual(json.loads((self.state / "ledger" / self.id8(WINDOWS) / "published.json").read_text())["epoch_sha256"], epoch)
+        self.assertEqual(json.loads((self.state / "ledger" / self.id8(LEGACY) / "published.json").read_text())["epoch_sha256"], "stub-i8-sym-vec")
+        # a later new epoch takes the one kept here, and fits none
+        shutil.rmtree(self.state / "ledger" / self.id8(WINDOWS))
+        self.calls.unlink(); (self.root / "uploaded.tsv").unlink()
+        p, calls = self.run_driver(mode="base", TO_EMBED=0, args=("--family", WINDOWS))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse([c for c in calls if "fit-rotation" in c])
+        self.assertIn(f"--rotation {kept} ", calls[self.index_of(calls, "cli assemble --kind base")])
+
+    def test_a_rotation_fit_that_is_not_the_epoch_it_prints_stops_before_assembly(self):
+        p, calls = self.run_driver(mode="base", TO_EMBED=0, FIT_PRINTS="0" * 64, args=("--family", WINDOWS))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("fit-rotation wrote no rotation that hashes to the epoch it printed", p.stdout)
+        self.assertFalse([c for c in calls if "assemble --kind" in c or "release create" in c])
+
+    def driver_with_rotation(self, pinned):
+        """A copy of the driver whose pins.env pins rotation/<windows>.bin at `pinned`."""
+        copy = self.root / "scripts"
+        shutil.copytree(HERE, copy / "vectors")
+        shutil.copy(SCRIPTS / "db_asset_names.sh", copy / "db_asset_names.sh")
+        (copy / "vectors" / "rotation").mkdir(exist_ok=True)
+        (copy / "vectors" / "rotation" / f"{WINDOWS}.bin").write_bytes(b"the committed rotation")
+        pins = copy / "vectors" / "pins.env"
+        pins.write_text(pins.read_text().replace('ROTATIONS=""', f'ROTATIONS="{WINDOWS}={pinned}"'))
+        return copy / "vectors" / DRIVER.name
+
+    def test_a_pinned_rotation_is_held_to_its_digest_and_never_fitted(self):
+        good = hashlib.sha256(b"the committed rotation").hexdigest()
+        driver = self.driver_with_rotation(good)
+        p, calls = self.run_driver(TO_EMBED=0, driver=driver, args=("--family", WINDOWS))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse([c for c in calls if "fit-rotation" in c])
+        self.assertIn(f"--rotation {driver.parent / 'rotation' / (WINDOWS + '.bin')} ", calls[self.index_of(calls, "cli assemble --kind base")])
+        shutil.rmtree(self.root / "scripts"); self.calls.unlink()
+        p, calls = self.run_driver(TO_EMBED=0, driver=self.driver_with_rotation("0" * 64), args=("--family", WINDOWS))
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("is not the rotation ROTATIONS pins", p.stdout)
+        self.assertFalse([c for c in calls if "assemble --kind" in c])
+
+    def test_a_dry_run_of_the_new_codec_reports_its_recall_even_below_the_floor(self):
+        summary = self.root / "summary.md"
+        for env, code in (({}, 0), ({"VALIDATE_FAILS": "G6"}, 1)):
+            with self.subTest(env=env):
+                summary.unlink(missing_ok=True)
+                p, calls = self.run_driver(TO_EMBED=0, args=("--family", WINDOWS), GITHUB_STEP_SUMMARY=summary, **env)
+                self.assertEqual(p.returncode, 0 if code == 0 else 2, p.stdout + p.stderr)
+                line = "G6 recall@10 0.991 (floor 0.98), recall@50 0.987 (floor 0.98), 2000 queries"
+                self.assertIn(f"{WINDOWS}, release: {line}", p.stdout)
+                self.assertEqual(summary.read_text(), f"- `{WINDOWS}` (dry-run), release: {line}\n")
+                self.assertIn(" --codec rot192-i8i4 --rotation ", calls[self.index_of(calls, "cli assemble --kind base")])
+                self.assertFalse([c for c in calls if c.startswith("gh release create") or c.startswith("gh release upload")])
+
+    def test_a_ledger_a_runner_lost_is_restored_from_its_backup_and_its_base_downloaded(self):
+        ledger = self.write_chain(keep_release=False)
+        id8 = ledger.name
+        backup = self.root / "assets" / f"vectors-ledger-{self.PREV}"
+        backup.mkdir(parents=True)
+        with tarfile.open(backup / f"vectors-windows.ledger-{id8}-v29.tar.zst", "w") as tar:   # the stub zstd passes it through
+            tar.add(ledger, arcname=id8)
+        rotation = b"the rotation fitted on this warehouse"
+        (backup / f"vectors-windows.rotation-{ROTATION_KEY}-{hashlib.sha256(rotation).hexdigest()[:16]}.bin").write_bytes(rotation)
+        shutil.rmtree(self.state / "ledger")
+        p, calls = self.run_auto()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(f"ledger: restored {ledger} from vectors-ledger-{self.PREV}", p.stdout)
+        self.assertEqual((self.state / "ledger" / "rotations" / f"{ROTATION_KEY}.bin").read_bytes(), rotation)
+        fw = self.state / "work" / TAG / WINDOWS
+        self.assertTrue([c for c in calls if c.startswith(f"gh release download vectors-windows-{self.PREV} ")])
+        chain = [c for c in calls if c.startswith("validate --index") and "/delta " in c]
+        self.assertEqual(len(chain), 1)
+        self.assertIn(f"--release {fw / 'previous'} --release {fw / 'delta'} ", chain[0])
+        self.assertTrue([c for c in calls if c.startswith(f"gh release edit vectors-windows-delta-{TAG} ")])
+
+    def test_a_backup_that_holds_more_than_a_ledger_or_a_base_that_does_not_hash_gives_a_base_alone(self):
+        for case in ("escape", "link", "base"):
+            with self.subTest(case=case):
+                for d in (self.state / "ledger", self.root / "assets" / f"vectors-ledger-{self.PREV}",
+                          self.root / "assets" / f"vectors-windows-{self.PREV}"):
+                    shutil.rmtree(d, ignore_errors=True)
+                self.calls.unlink(missing_ok=True)
+                (self.root / "uploaded.tsv").unlink(missing_ok=True)
+                ledger = self.write_chain(keep_release=False)
+                if case in ("escape", "link"):
+                    backup = self.root / "assets" / f"vectors-ledger-{self.PREV}"
+                    backup.mkdir(parents=True)
+                    with tarfile.open(backup / f"vectors-windows.ledger-{ledger.name}-v29.tar.zst", "w") as tar:
+                        tar.add(ledger, arcname=ledger.name)
+                        if case == "escape":
+                            info = tarfile.TarInfo(f"{ledger.name}/../escaped"); info.size = 1
+                            tar.addfile(info, io.BytesIO(b"x"))
+                        else:
+                            info = tarfile.TarInfo(f"{ledger.name}/escaped"); info.type = tarfile.SYMTYPE
+                            info.linkname = str(self.state / "escaped")
+                            tar.addfile(info)
+                    shutil.rmtree(self.state / "ledger")
+                    why = "no ledger of vectors-windows here, and none backed up in vectors-ledger-" + self.PREV
+                else:
+                    (self.root / "assets" / f"vectors-windows-{self.PREV}" / f"otzaria-vectors-{ledger.name}-v29-base.oxv.zst").write_bytes(b"other")
+                    why = f"the base of vectors-windows-{self.PREV} could not be had"
+                p, calls = self.run_auto()
+                self.assert_a_base_alone(p, calls, why)
+                self.assertFalse((self.state / "escaped").exists() or (self.state / "ledger" / "escaped").exists())
+
+    def test_a_delta_that_fails_a_gate_or_a_validation_leaves_a_base_in_the_chains_epoch(self):
+        for env, why in (({"DELTA_VERIFY_EXIT": "2"}, "a gate of the delta failed (assemble --verify exited 2)"),
+                         ({"VALIDATE_FAILS_FROM": "2"}, "validate_semantic_vectors exited 1 on the delta installed after the base"),
+                         ({"VALIDATE_FAILS_FROM": "3"}, "validate_semantic_vectors exited 1 on the delta at the end of the chain from 27")):
+            with self.subTest(why=why):
+                shutil.rmtree(self.state / "ledger", ignore_errors=True)
+                self.calls.unlink(missing_ok=True)
+                (self.root / "uploaded.tsv").unlink(missing_ok=True)
+                ledger = self.write_chain(chain=2)
+                p, calls = self.run_auto(**env)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn(f"::warning::vectors-windows-{TAG} is published as a base alone, with no delta: {why}", p.stdout)
+                self.assertIn("--keep-epoch", calls[self.index_of(calls, f"cli assemble --kind base --plan {self.state / 'work' / TAG / WINDOWS}")])
+                self.assertFalse([c for c in calls if f"vectors-windows-delta-{TAG}" in c and not c.startswith("gh release view")])
+                published = json.loads((ledger / "published.json").read_text())
+                self.assertEqual((published["kind"], published["epoch_sha256"]), ("base", "e" * 64))
+                self.assertFalse((ledger / "chain").exists() or (ledger / "chain.pending").exists())
+
+    def test_a_delta_that_cannot_be_assembled_against_its_ledger_stops_the_family(self):
+        ledger = self.write_chain()
+        p, calls = self.run_auto(DELTA_ASSEMBLY_FAILS="1")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(f"the delta could not be assembled against the ledger {ledger}", p.stdout)
+        self.assertFalse([c for c in calls if f"vectors-windows-{TAG}" in c and "release create" in c])
+
+    def test_the_delta_is_checked_at_the_end_of_the_chain_devices_applied_and_the_chain_grows(self):
+        ledger = self.write_chain(chain=2)   # a device at the v27 base, with the v28 and v29 deltas
+        p, calls = self.run_auto()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        fw = self.state / "work" / TAG / WINDOWS
+        chained = [c for c in calls if c.startswith("validate --index") and "validation-chain.json" in c]
+        self.assertEqual(len(chained), 1)
+        chain = ledger / "chain"
+        self.assertIn(f"--release {chain / 'base'} --release {chain / 'delta-1'} --release {chain / 'delta-2'} --release {fw / 'delta'} --plan",
+                      chained[0])
+        dtag = f"vectors-windows-delta-{TAG}"
+        uploads = [Path(c.split()[4]).name for c in calls if c.startswith(f"gh release upload {dtag} ")]
+        self.assertEqual(uploads[-2:], ["validation-chain.json", f"otzaria-vectors-{self.id8(WINDOWS)}-v29-v30.manifest.json"])
+        self.assertIn("installed at the end of a chain of 4 releases from the base of v27", (self.root / f"uploaded.tsv.notes.{dtag}").read_text())
+        self.assertEqual(sorted(f.name for f in chain.iterdir()), ["base", "delta-1", "delta-2", "delta-3"])
+        self.assertEqual(json.loads((chain / "base" / "release.json").read_text())["toLibraryVersion"], 27)
+
+    def test_a_chain_as_long_as_a_device_applies_starts_again_from_the_last_base(self):
+        ledger = self.write_chain(chain=7)
+        p, calls = self.run_auto()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        chained = [c for c in calls if c.startswith("validate --index") and "validation-chain.json" in c]
+        self.assertEqual(chained[0].count("--release "), 9)   # its base, 7 deltas, and this one: 8 deltas
+        self.assertEqual(sorted(f.name for f in (ledger / "chain").iterdir()), ["base", "delta-1"])
+        self.assertEqual(json.loads((ledger / "chain" / "base" / "release.json").read_text())["toLibraryVersion"], 29)
+
+    def test_a_delta_that_fails_to_publish_leaves_the_base_and_its_ledger(self):
+        ledger = self.write_chain(chain=2)
+        dtag = f"vectors-windows-delta-{TAG}"
+        p, calls = self.run_auto(SHORT_UPLOAD="gates.json", SHORT_UPLOAD_TO=dtag)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(f"::warning::the draft {dtag} does not hold the files built", p.stdout)
+        self.assertIn(f"::warning::{dtag} was not published; vectors-windows-{TAG} is", p.stdout)
+        self.assertNotIn("::error::", p.stdout)
+        self.assertIn(f"gh release delete {dtag} --repo o/r --yes", calls)
+        self.assertFalse([c for c in calls if c.startswith(f"gh release edit {dtag} ")])
+        published = json.loads((ledger / "published.json").read_text())
+        self.assertEqual((published["kind"], published["published"], published["to"]), ("base", f"vectors-windows-{TAG}", 30))
+        self.assertFalse((ledger / "chain").exists() or (ledger / "chain.pending").exists())
+        self.assertTrue([c for c in calls if c.startswith(f"gh release upload vectors-ledger-{TAG} ")])
+
+    def test_thresholds_are_compared_as_numbers(self):
+        self.write_chain(alias_threshold="0.990")
+        p, calls = self.run_auto()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue([c for c in calls if c.startswith(f"gh release edit vectors-windows-delta-{TAG} ")])
+
+    def test_an_earlier_epoch_of_the_family_is_pruned_once_a_new_one_is_published(self):
+        old = self.state / "ledger" / "0badc0de"
+        old.mkdir(parents=True)
+        (old / "published.json").write_text(json.dumps({"published": f"vectors-windows-{self.PREV}"}))
+        anchor = self.state / "ledger" / "abcdef01"
+        anchor.mkdir()
+        (anchor / "published.json").write_text(json.dumps({"published": f"vectors-{self.PREV}"}))
+        p, calls = self.run_driver(mode="base", TO_EMBED=0, args=("--family", WINDOWS))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse(old.exists())
+        self.assertTrue(anchor.exists())   # another family's
+
+    def test_a_family_config_with_fields_past_its_threshold_is_refused(self):
+        driver = self.driver_with_rotation("0" * 64)
+        pins = driver.parent / "pins.env"
+        pins.write_text(pins.read_text().replace(":rot192-i8i4:0.99", ":rot192-i8i4:0.99:x"))
+        p, calls = self.run_driver(driver=driver)
+        self.assertEqual(p.returncode, 64, p.stdout + p.stderr)
+        self.assertIn("has fields past <alias threshold>", p.stdout)
+        self.assertEqual(calls, [])
+
+    def test_auto_refuses_an_existing_delta_release_before_the_build_and_base_never_looks_for_one(self):
+        p, calls = self.run_auto(EXISTING=f"vectors-windows-delta-{TAG}")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(f"vectors-windows-delta-{TAG} exists already", p.stdout)
+        self.assertFalse([c for c in calls if "release download" in c])
+        self.calls.unlink()
+        p, calls = self.run_driver(mode="base", TO_EMBED=0)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertFalse([c for c in calls if "-delta-" in c or "release list" in c or "--previous" in c])
+
+    def test_a_mode_that_is_not_known_is_refused_before_anything_runs(self):
+        p, calls = self.run_driver(mode="delta")
+        self.assertEqual(p.returncode, 64)
+        self.assertIn("--mode is auto, base or dry-run", p.stdout)
+        self.assertEqual(calls, [])
+
     def write_single_ledger(self, manifest):
         """The ledger as a build of one family persisted it: its files in ledger/ itself."""
         ledger = self.state / "ledger"
@@ -1384,15 +1907,22 @@ class Driver(unittest.TestCase):
         (ledger / "published.json").write_text(json.dumps({"published": "vectors-v29-20260927072953", "manifest": manifest}))
 
     def test_the_single_ledger_moves_under_its_familys_identity_once(self):
-        self.write_single_ledger("otzaria-vectors-abcdef01-v29-base.manifest.json")
-        p, calls = self.run_driver(mode="base", TO_EMBED=0)
+        for manifest in ("otzaria-vectors-abcdef01-v28-v29.manifest.json", "otzaria-vectors-abcdef01-v29-base.manifest.json"):
+            with self.subTest(manifest=manifest):
+                shutil.rmtree(self.state / "ledger", ignore_errors=True)
+                self.calls.unlink(missing_ok=True)
+                (self.root / "uploaded.tsv").unlink(missing_ok=True)
+                self.assert_the_single_ledger_moves(manifest)
+
+    def assert_the_single_ledger_moves(self, manifest):
+        self.write_single_ledger(manifest)
+        p, calls = self.run_driver(TO_EMBED=0)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("ledger: moved to " + str(self.state / "ledger" / "abcdef01"), p.stdout)
         old = self.state / "ledger" / "abcdef01"
         self.assertEqual(sorted(f.name for f in old.iterdir()),
                          ["ledger-v29.keys", "ledger-v29.manifest.json", "pairs-v29.bin", "published.json"])
-        self.assertEqual(sorted(p.name for p in (self.state / "ledger").iterdir()),
-                         sorted(["abcdef01"] + [self.id8(n) for n, _ in FAMILIES]))
+        self.assertEqual(sorted(p.name for p in (self.state / "ledger").iterdir()), ["abcdef01"])
         self.assertFalse((self.state / "ledger.migrating").exists())
         p, calls = self.run_driver(TO_EMBED=0)   # once: the next build finds the per-family layout
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -1434,7 +1964,9 @@ if [ "$1" = clone ]; then           # git clone -q --filter=blob:none <url> <des
       echo "{\"family_id\":\"$family\"}" > "$dest/config/models/$family/model.json"
       echo '{"chunking_version":1}' > "$dest/config/models/$family/chunking.json"
     done ;;
-    *otzaria_search_engine*) mkdir -p "$dest/rust" ;;     # the plugin's crate
+    *otzaria_search_engine*)   # the plugin's crate, its lock pinning LOCKED_SIDECAR
+      mkdir -p "$dest/rust"
+      echo "source = \"git+https://github.com/Otzaria/otzaria-semantic-search?rev=$LOCKED_SIDECAR#$LOCKED_SIDECAR\"" > "$dest/rust/Cargo.lock" ;;
   esac
 fi
 """
@@ -1477,10 +2009,17 @@ class Bootstrap(unittest.TestCase):
 
     def run_bootstrap(self, args=(), **env):
         self.calls.unlink(missing_ok=True)
-        e = {"PATH": self.path, "CALLS": str(self.calls), "HOME": str(self.root), "SYSTEM_CA": str(self.ca)}
+        e = {"PATH": self.path, "CALLS": str(self.calls), "HOME": str(self.root), "SYSTEM_CA": str(self.ca),
+             "LOCKED_SIDECAR": PIN["SIDECAR_REV"]}
         e.update({k: str(v) for k, v in env.items()})
         p = subprocess.run(["bash", str(BOOTSTRAP), "--state", str(self.state), *args], capture_output=True, text=True, env=e)
         return p, (self.calls.read_text().splitlines() if self.calls.exists() else [])
+
+    def test_a_plugin_that_pins_another_sidecar_is_refused_before_it_is_built(self):
+        p, calls = self.run_bootstrap(LOCKED_SIDECAR="3aeb94ef83d80d89f3d54dad3cc34ba5ccee4200")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(f"does not pin the sidecar {PIN['SIDECAR_REV']} in rust/Cargo.lock", p.stderr)
+        self.assertFalse([c for c in calls if c.startswith("cargo ") and "export_semantic_plan" in c])
 
     def test_the_validator_is_built_able_to_run_g6_and_recorded_like_every_binary(self):
         p, calls = self.run_bootstrap()
