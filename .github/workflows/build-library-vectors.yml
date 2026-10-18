@@ -117,6 +117,11 @@ jobs:
                   elif [ "$family_draft" != false ]; then
                     INCOMPLETE="$INCOMPLETE $family_tag (missing)"
                   fi
+                  # A delta is best-effort: missing is normal, a draft is one a failed publish left
+                  delta_tag="${family_prefix%%:*}-delta-$TAG"
+                  if [ "$(gh release view "$delta_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" = true ]; then
+                    INCOMPLETE="$INCOMPLETE $delta_tag (draft)"
+                  fi
                 done
                 echo "::notice::$FIRST-$TAG is published already, so this index rebuild embeds nothing.${INCOMPLETE:+ Incomplete:$INCOMPLETE — delete any draft, then dispatch this workflow with the affected family to build it.}"
                 echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
