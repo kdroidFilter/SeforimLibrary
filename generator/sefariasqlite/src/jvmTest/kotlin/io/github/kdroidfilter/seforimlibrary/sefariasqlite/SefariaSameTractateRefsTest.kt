@@ -16,7 +16,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** Issue Otzaria/otzaria#2407: same-tractate refs read as in the Vilna print, line ids unchanged. */
+/** Issue Otzaria/otzaria#2407: same-tractate refs read as in the Vilna print, line ids unchanged. Mirrors otzaria-library's test_get_from_export. */
 class SefariaSameTractateRefsTest {
 
     @Test
@@ -36,6 +36,53 @@ class SefariaSameTractateRefsTest {
     fun `a pointed title matches plain text and gershayim match either form`() {
         assertEquals("(לעיל דף ה:)", SefariaSameTractateRefs.strip("(לעיל מכות דף ה:)", "מַכּוֹת"))
         assertEquals("(לקמן דף ג.)", SefariaSameTractateRefs.strip("(לקמן ע\"ז דף ג.)", "ע״ז"))
+    }
+
+    @Test
+    fun `drops the own tractate inside the bracket after lekaman`() {
+        assertEquals(
+            "דפריך לקמן (דף ה:) ולעיל (סז, ב) ובמתני' לקמן [לט ע\"ב]",
+            SefariaSameTractateRefs.strip("דפריך לקמן (שבת דף ה:) ולעיל (שבת סז, ב) ובמתני' לקמן [שבת לט ע\"ב]", "שבת"),
+        )
+        assertEquals(
+            "(כלקמן נט, ב) (וכדלקמן מט, א) (להלן כו,א)",
+            SefariaSameTractateRefs.strip("(כלקמן שבת נט, ב) (וכדלקמן שבת מט, א) (להלן שבת כו,א)", "שבת"),
+        )
+        assertEquals("(לעיל דף מה. ולקמן דף ס:)", SefariaSameTractateRefs.strip("(לעיל שבת דף מה. ולקמן שבת דף ס:)", "שבת"))
+    }
+
+    @Test
+    fun `drops the own tractate before a daf address`() {
+        assertEquals(
+            "בפרק כירה (דף מד) ובפ' המצניע (ד' צג:) ובסוף פירקין (קנ\"ז ע\"ב)",
+            SefariaSameTractateRefs.strip("בפרק כירה (שבת דף מד) ובפ' המצניע (שבת ד' צג:) ובסוף פירקין (שבת קנ\"ז ע\"ב)", "שבת"),
+        )
+        assertEquals("(קנז.) (טו, א) (פב ב') (פב)", SefariaSameTractateRefs.strip("(שבת קנז.) (שבת טו, א) (שבת פב ב') (שבת פב)", "שבת"))
+    }
+
+    @Test
+    fun `keeps a tractate name that is not a daf reference`() {
+        for (line in listOf(
+            "(שבת שנטמא) [שבת] (שבת בלעם) (שבת שם) (גזרו שבת) (שבתות דף ב.) (שבת פ\"ג ה\"א)",
+            "(לקמן פרק א' שבת דף ג.) (לקמן שבת)",
+            "(לקמן מכות\u05c3 דף ה:)",
+        )) assertEquals(line, SefariaSameTractateRefs.strip(line, if ("מכות" in line) "מכות" else "שבת"))
+    }
+
+    @Test
+    fun `keeps yerushalmi and tosefta of the same name`() {
+        for (line in listOf("ובירושלמי (שבת ג,א) גרסינן", "לו.<br>ובירושלמי (שבת ג,א)", "בתוספתא (שבת ג, א)", "ירושלמי [שבת דף ג.]")) {
+            assertEquals(line, SefariaSameTractateRefs.strip(line, "שבת"))
+        }
+    }
+
+    @Test
+    fun `daf numbers descend and stop at the last daf of the Bavli`() {
+        assertTrue(SefariaSameTractateRefs.isDafNumber("קע\"ו"))
+        assertTrue(SefariaSameTractateRefs.isDafNumber("טז"))
+        assertTrue(!SefariaSameTractateRefs.isDafNumber("קעז"))
+        assertTrue(!SefariaSameTractateRefs.isDafNumber("שם"))
+        assertTrue(!SefariaSameTractateRefs.isDafNumber("בלע"))
     }
 
     private fun strings(values: List<String>) = JsonArray(values.map(::JsonPrimitive))
