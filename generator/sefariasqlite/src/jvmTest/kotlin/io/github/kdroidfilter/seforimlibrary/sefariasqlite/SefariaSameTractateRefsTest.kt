@@ -66,20 +66,30 @@ class SefariaSameTractateRefsTest {
             "(שבת שנטמא) [שבת] (שבת בלעם) (שבת שם) (גזרו שבת) (שבתות דף ב.) (שבת פ\"ג ה\"א)",
             "(לקמן פרק א' שבת דף ג.) (לקמן שבת)",
             "(לקמן מכות\u05c3 דף ה:)",
+            "(שבת זו) (שבת זה) [שבת זו.] (שבת יה.) (שבת ך)",
         )) assertEquals(line, SefariaSameTractateRefs.strip(line, if ("מכות" in line) "מכות" else "שבת"))
     }
 
     @Test
     fun `keeps yerushalmi and tosefta of the same name`() {
-        for (line in listOf("ובירושלמי (שבת ג,א) גרסינן", "לו.<br>ובירושלמי (שבת ג,א)", "בתוספתא (שבת ג, א)", "ירושלמי [שבת דף ג.]")) {
-            assertEquals(line, SefariaSameTractateRefs.strip(line, "שבת"))
-        }
+        for (line in listOf(
+            "ובירושלמי (שבת ג,א) גרסינן", "לו.<br>ובירושלמי (שבת ג,א)", "בתוספתא (שבת ג, א)", "ירושלמי [שבת דף ג.]",
+            "בירושלמי <b>(שבת ג, א)</b>", "<b>ירושלמי</b> (שבת ג, א)", "בתוספתא<br> <i>(שבת דף ג.)</i>",
+        )) assertEquals(line, SefariaSameTractateRefs.strip(line, "שבת"))
     }
 
     @Test
-    fun `daf numbers descend and stop at the last daf of the Bavli`() {
+    fun `many references in one line`() {
+        val line = "(שבת דף ב.) לקמן (שבת ג.) (לעיל שבת דף ד:) ".repeat(2000)
+        assertEquals("(דף ב.) לקמן (ג.) (לעיל דף ד:) ".repeat(2000), SefariaSameTractateRefs.strip(line, "שבת"))
+    }
+
+    @Test
+    fun `daf numbers are spelled the standard way and stop at the last daf of the Bavli`() {
         assertTrue(SefariaSameTractateRefs.isDafNumber("קע\"ו"))
         assertTrue(SefariaSameTractateRefs.isDafNumber("טז"))
+        assertTrue(SefariaSameTractateRefs.isDafNumber("קט\"ו"))
+        for (word in listOf("זו", "זה", "יה", "יו", "ך", "לך")) assertTrue(!SefariaSameTractateRefs.isDafNumber(word), word)
         assertTrue(!SefariaSameTractateRefs.isDafNumber("קעז"))
         assertTrue(!SefariaSameTractateRefs.isDafNumber("שם"))
         assertTrue(!SefariaSameTractateRefs.isDafNumber("בלע"))
