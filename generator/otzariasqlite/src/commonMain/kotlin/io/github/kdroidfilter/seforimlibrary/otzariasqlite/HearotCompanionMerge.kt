@@ -1,5 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.otzariasqlite
 
+import io.github.kdroidfilter.seforimlibrary.common.notes.InlineNotes
+
 /**
  * Merges 'הערות על X' companion-note files into the base book's lines as inline
  * footnotes — `<sup class="footnote-marker">N</sup><i class="footnote">body</i>`,
@@ -16,31 +18,26 @@ internal object HearotCompanionMerge {
     const val COMPANION_PREFIX = "הערות על "
     private const val HAVROUTA_PREFIX = "הערות על חברותא"
 
-    /** Havrouta hearot stay standalone: Havrouta links to them by FOOTNOTES. */
-    fun isMergeableCompanionTitle(title: String): Boolean =
-        title.startsWith(COMPANION_PREFIX) && !title.startsWith(HAVROUTA_PREFIX)
+    /** The Havrouta grammar applies only to the notes of a Havrouta base book. */
+    private fun isHavroutaBase(baseTitle: String): Boolean = (COMPANION_PREFIX + baseTitle).startsWith(HAVROUTA_PREFIX)
+
+    fun isMergeableCompanionTitle(title: String): Boolean = title.startsWith(COMPANION_PREFIX)
 
     class MergeStats {
         var inPlace: Int = 0
         var appended: Int = 0
     }
 
-    // Leading-marker grammars observed in the library, tried in order:
-    // <small><sup>N</sup> body</small> | <sup [attrs]>N</sup> body | "N body"
+    // Leading-marker grammars, tried in order: <small><sup>N</sup> body</small> | <sup [attrs]>N</sup> body |
+    // "N body" | Havrouta notes only: "<b>(N)</b> body" (N may end in * or a letter) on a bare <small>(N)</small>
     private val NOTE_SMALL_SUP = Regex("""^﻿?<small><sup>([^<]+)</sup>\s*""")
     private val NOTE_SUP = Regex("""^﻿?<sup(?:\s[^>]*)?>([^<]+)</sup>\s*""")
     private val NOTE_BARE_NUMBER = Regex("""^﻿?(\d+)\s+""")
-
-    private val FOOTNOTE_BODY =
-        Regex("""<i\s+class="footnote">.*?</i>""", RegexOption.DOT_MATCHES_ALL)
-    private val FOOTNOTE_MARKER =
-        Regex("""<sup\s+class="footnote-marker">.*?</sup>""", RegexOption.DOT_MATCHES_ALL)
+    private val NOTE_BOLD_PAREN = Regex("""^﻿?<b>(\(\d+[*א-ת]?\))</b>\s*""")
+    private val HAVROUTA_TOKEN = Regex("""\(\d+[*א-ת]?\)""")
 
     /** Strips merged markers+bodies; keeps TOC text of heading lines clean. */
-    fun stripFootnotes(line: String): String {
-        if (!line.contains("footnote")) return line
-        return line.replace(FOOTNOTE_BODY, "").replace(FOOTNOTE_MARKER, "")
-    }
+    fun stripFootnotes(line: String): String = InlineNotes.stripMarkersAndBodies(line)
 
     /**
      * Returns [baseLines] with [notesByLine] (0-based base line → note lines in
@@ -54,6 +51,7 @@ internal object HearotCompanionMerge {
     ): List<String> {
         if (notesByLine.isEmpty()) return baseLines
         val out = baseLines.toMutableList()
+        val havrouta = isHavroutaBase(bookTitle)
         for ((lineIdx, notes) in notesByLine.toSortedMap()) {
             check(lineIdx in out.indices) {
                 "hearot merge for '$bookTitle': base line $lineIdx out of range (${out.size} lines)"
@@ -71,8 +69,8 @@ internal object HearotCompanionMerge {
                     "hearot merge for '$bookTitle': note carries <i> markup, which breaks the " +
                         "app's footnote regex (first </i> ends the body): ${note.take(80)}"
                 }
-                val parsed = parseLeadingMarker(note)
-                val anchor = parsed?.let { findAnchor(original, it.first, consumed) }
+                val parsed = parseLeadingMarker(note, havrouta)
+                val anchor = parsed?.let { findAnchor(original, it.first, consumed, havrouta) }
                 if (parsed != null && anchor != null) {
                     consumed += anchor
                     placements += anchor to
@@ -93,7 +91,7 @@ internal object HearotCompanionMerge {
     }
 
     /** (marker token, body) when the note opens with a recognized marker, else null. */
-    private fun parseLeadingMarker(note: String): Pair<String, String>? {
+    private fun parseLeadingMarker(note: String, havrouta: Boolean): Pair<String, String>? {
         NOTE_SMALL_SUP.find(note)?.let { m ->
             val rest = note.substring(m.value.length).trimEnd()
             // The whole note is wrapped in <small>…</small>; unwrap both ends.
@@ -104,19 +102,22 @@ internal object HearotCompanionMerge {
         }
         NOTE_SUP.find(note)?.let { return it.groupValues[1] to note.substring(it.value.length) }
         NOTE_BARE_NUMBER.find(note)?.let { return it.groupValues[1] to note.substring(it.value.length) }
+        if (havrouta) NOTE_BOLD_PAREN.find(note)?.let { return it.groupValues[1] to note.substring(it.value.length) }
         return null
     }
 
     /**
      * Leftmost unconsumed marker in the base line matching [token]:
-     * `<sup>N</sup>`, attribute-carrying `<sup …>N</sup>`, or `<small …>N</small>`.
+     * `<sup>N</sup>`, attribute-carrying `<sup …>N</sup>`, `<small …>N</small>`, or a
+     * Havrouta `<small>(N)</small>`.
      */
-    private fun findAnchor(line: String, token: String, consumed: List<IntRange>): IntRange? {
+    private fun findAnchor(line: String, token: String, consumed: List<IntRange>, havrouta: Boolean): IntRange? {
         val esc = Regex.escape(token)
-        val patterns = listOf(
+        val patterns = listOfNotNull(
             Regex("<sup>$esc</sup>"),
             Regex("<sup\\s[^>]*>$esc</sup>"),
             Regex("<small\\s[^>]*>\\s*$esc\\s*</small>"),
+            Regex("<small>$esc</small>").takeIf { havrouta && HAVROUTA_TOKEN.matches(token) },
         )
         // Leftmost across ALL grammars — a line may mix marker styles.
         return patterns

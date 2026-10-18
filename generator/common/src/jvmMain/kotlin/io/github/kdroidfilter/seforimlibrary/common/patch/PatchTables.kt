@@ -19,7 +19,7 @@ internal data class PatchTable(
 )
 
 /** Current `seforim.db` schema produced by this revision. */
-internal const val CURRENT_DB_SCHEMA_VERSION: Int = 6
+internal const val CURRENT_DB_SCHEMA_VERSION: Int = 7
 
 /** First schema that keeps line text in `line_content` (see SplitLineContentCli). */
 internal const val LINE_CONTENT_SPLIT_SCHEMA_VERSION: Int = 6
@@ -104,13 +104,31 @@ internal val PATCH_TABLES_IN_FK_ORDER: List<PatchTable> = listOf(
     PatchTable("default_commentator", listOf("bookId", "commentatorBookId"), updatable = true),
     PatchTable("default_targum",      listOf("bookId", "targumBookId"),      updatable = true),
 
+    // Schema 7. Per-book notices and per-line indexes built after every content writer.
+    PatchTable("book_banner",        listOf("bookId"),   updatable = true),
+    PatchTable("book_protection",    listOf("bookId"),   updatable = true),
+    PatchTable("line_divine_name",   listOf("lineId", "charStart"), updatable = true),
+    PatchTable("line_note",          listOf("lineId", "noteIndex"), updatable = true),
+    PatchTable("line_note_divine_name", listOf("lineId", "noteIndex", "charStart"), updatable = true),
+
     // Versioning. Keyed by a string `key` column.
     PatchTable("schema_meta",        listOf("key"),      updatable = true),
 )
 
+/** Tables schema 7 added; a 6 -> 7 delta creates them through its migrations. */
+internal val SCHEMA_7_TABLES: Set<String> =
+    setOf("book_banner", "book_protection", "line_divine_name", "line_note", "line_note_divine_name")
+
+/** Columns schema 7 added to tables older schemas already had; a 6 -> 7 delta adds them by ADD COLUMN. */
+internal val SCHEMA_7_COLUMNS: Map<String, Set<String>> = mapOf("book" to setOf("contentHash"))
+
+/** Schema-6 contract, frozen. */
+internal val PATCH_TABLES_SCHEMA_6: List<PatchTable> =
+    PATCH_TABLES_IN_FK_ORDER.filterNot { it.name in SCHEMA_7_TABLES }
+
 /** Schema-5 contract, frozen: line text still lived in `line.content`. */
 internal val PATCH_TABLES_SCHEMA_5: List<PatchTable> =
-    PATCH_TABLES_IN_FK_ORDER.filterNot { it.name == "line_content" || it.name == "zstd_dict" }
+    PATCH_TABLES_SCHEMA_6.filterNot { it.name == "line_content" || it.name == "zstd_dict" }
 
 /** Schema-4 contract shipped in v26, before line_dh gained dhDisplay. */
 internal val PATCH_TABLES_SCHEMA_4: List<PatchTable> =
@@ -137,6 +155,58 @@ internal fun patchTablesForSchemaVersion(schemaVersion: Int): List<PatchTable> =
     3 -> PATCH_TABLES_SCHEMA_3
     4 -> PATCH_TABLES_SCHEMA_4
     5 -> PATCH_TABLES_SCHEMA_5
-    6 -> PATCH_TABLES_IN_FK_ORDER
+    6 -> PATCH_TABLES_SCHEMA_6
+    7 -> PATCH_TABLES_IN_FK_ORDER
     else -> error("Unsupported patch-table schema version $schemaVersion")
 }
+
+/**
+ * DDL of the schema-7 tables, identical to Database.sq. Stages that fill one of them
+ * run it first, so they also work on a DB created before schema 7.
+ */
+val SCHEMA_7_TABLE_DDL: Map<String, String> = linkedMapOf(
+    "book_banner" to """
+        CREATE TABLE IF NOT EXISTS book_banner (
+            bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
+            text TEXT NOT NULL
+        )
+    """.trimIndent(),
+    "book_protection" to """
+        CREATE TABLE IF NOT EXISTS book_protection (
+            bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
+            level INTEGER NOT NULL CHECK (level >= 1)
+        )
+    """.trimIndent(),
+    "line_divine_name" to """
+        CREATE TABLE IF NOT EXISTS line_divine_name (
+            lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
+            charStart INTEGER NOT NULL,
+            charEnd INTEGER NOT NULL,
+            kind INTEGER NOT NULL,
+            source INTEGER NOT NULL,
+            PRIMARY KEY (lineId, charStart)
+        ) WITHOUT ROWID
+    """.trimIndent(),
+    "line_note" to """
+        CREATE TABLE IF NOT EXISTS line_note (
+            lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
+            noteIndex INTEGER NOT NULL,
+            charPos INTEGER NOT NULL,
+            marker TEXT,
+            body TEXT NOT NULL,
+            PRIMARY KEY (lineId, noteIndex)
+        ) WITHOUT ROWID
+    """.trimIndent(),
+    "line_note_divine_name" to """
+        CREATE TABLE IF NOT EXISTS line_note_divine_name (
+            lineId INTEGER NOT NULL,
+            noteIndex INTEGER NOT NULL,
+            charStart INTEGER NOT NULL,
+            charEnd INTEGER NOT NULL,
+            kind INTEGER NOT NULL,
+            source INTEGER NOT NULL,
+            PRIMARY KEY (lineId, noteIndex, charStart),
+            FOREIGN KEY (lineId, noteIndex) REFERENCES line_note(lineId, noteIndex) ON DELETE CASCADE
+        ) WITHOUT ROWID
+    """.trimIndent(),
+)

@@ -6,6 +6,7 @@ import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BuildStateSnapshot
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.BuildStateWriter
 import io.github.kdroidfilter.seforimlibrary.common.buildstate.IdTable
+import io.github.kdroidfilter.seforimlibrary.common.notes.LineNoteRehydration
 import io.github.kdroidfilter.seforimlibrary.core.models.Book
 import io.github.kdroidfilter.seforimlibrary.core.models.Category
 import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
@@ -300,6 +301,8 @@ class GenerateLinkerLinksTest {
         splitLineContent: Boolean = false,
         storedSource: String = sourceContent,
         targets: List<RefEntry> = listOf(RefEntry("Genesis 1:1", "TgtBook 1:1", "Tanakh/Genesis", 1)),
+        notes: List<Pair<Int, String>> = emptyList(),
+        anchoredNotes: Set<Int> = emptySet(),
     ): LinkerRun {
         val dir = Files.createTempDirectory("linkerMainFixture")
         val artifacts = Files.createDirectory(dir.resolve("artifacts"))
@@ -330,6 +333,15 @@ class GenerateLinkerLinksTest {
                 id
             }
             repo.close()
+            DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
+                c.prepareStatement("INSERT INTO line_note (lineId, noteIndex, charPos, marker, body) VALUES (20, ?, ?, ?, ?)").use { ps ->
+                    notes.forEachIndexed { i, (charPos, body) ->
+                        ps.setInt(1, i); ps.setInt(2, charPos)
+                        ps.setString(3, if (i in anchoredNotes) "" else null)
+                        ps.setString(4, body); ps.executeUpdate()
+                    }
+                }
+            }
             if (splitLineContent) {
                 // The schema-6 shape SplitLineContentCli leaves behind.
                 DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
@@ -395,6 +407,107 @@ class GenerateLinkerLinksTest {
             }
             Logger.setMinSeverity(severity)
             dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun theLinkerReadsTheLineWithItsNotesAndAnAnchorOnANoteIsNotWritten() {
+        val stored = "see Genesis 1:1 and again"
+        val notes = listOf(15 to "Genesis 1:1")
+        val read = "see Genesis 1:1<i class=\"footnote\">Genesis 1:1</i> and again"
+        assertEquals(read, rehydrateLinkerLine(stored, notes).first)
+        val inNote = read.indexOf(">Genesis") + 1
+        val body = record(4, 15, base = 0, hashedContent = read) + "\n" +
+            record(inNote, inNote + 11, base = 0, hashedContent = read) + "\n"
+        for (split in listOf(false, true)) {
+            val run = runLinkerMain(body, strict = "true", splitLineContent = split, storedSource = stored, notes = notes)
+            assertEquals(null, run.failure)
+            assertEquals(1L, run.links, "the citation in the note still links its line")
+            assertEquals(listOf(4 to 15), run.anchorRanges, "only the citation outside the note gets an anchor")
+        }
+        // A record hashed on the stored text alone is stale once the line has notes.
+        val stale = runLinkerMain(record(4, 15, base = 0, hashedContent = stored) + "\n", strict = null, storedSource = stored, notes = notes)
+        assertEquals(0L, stale.links)
+    }
+
+    @Test
+    fun anAnchorAfterANoteMapsBackToTheStoredLine() {
+        val stored = "x Genesis 1:1"
+        val notes = listOf(1 to "הערה")
+        val read = rehydrateLinkerLine(stored, notes).first
+        val start = read.indexOf("Genesis")
+        val run = runLinkerMain(record(start, start + 11, base = 0, hashedContent = read) + "\n", strict = "true", storedSource = stored, notes = notes)
+        assertEquals(listOf(2 to 13), run.anchorRanges)
+    }
+
+    @Test
+    fun theInlineRehydrationMatchesTheSharedOne() {
+        data class Case(val stored: String, val notes: List<Pair<Int, String>>, val anchored: Set<Int> = emptySet())
+        val cases = listOf(
+            Case("א<sup class=\"footnote-marker\">1</sup> ב &amp; ג</b>", listOf(2 to "x", 2 to "<i>y</i>", 8 to "z")),
+            Case("<h2>כותרת</h2>", listOf(0 to "a", 5 to "b")),
+            Case("<h2>א<sup>1</sup></h2> ב<b>ג</b>", listOf(2 to "x", 4 to "y")),
+            Case("", listOf(0 to "only")),
+            Case("<sup class=\"footnote-marker\">1<i class=\"footnote\"></i></sup>", listOf(1 to "a", 1 to "b"), setOf(0)),
+            Case("<sup class=\"footnote-marker\"><b>1</b></sup>", listOf(1 to "a", 1 to "b")),
+            Case("<sup class=\"footnote-marker\"></sup>", listOf(0 to "a", 0 to "b"), setOf(0)),
+            Case("<sup>1</sup> סוף", listOf(0 to "before")),
+            Case("<b>א<sup class=\"footnote-marker\"></sup></b>", listOf(1 to "a"), setOf(0)),
+            Case("<b>א</b><sup class=\"footnote-marker\"></sup>", listOf(1 to "a"), setOf(0)),
+            Case("<p><b>אב</b></p>המשך", listOf(2 to "a")),
+            Case("<p><b>אב</b></p>", listOf(2 to "a")),
+            Case("<custom-block>אב</custom-block>", listOf(2 to "a")),
+            Case("<B>אב</B ></p>", listOf(2 to "a")),
+            Case("<b>אב</ b></p>", listOf(2 to "a")),
+            Case("<b>סוף</b><br>", listOf(3 to "a")),
+            Case("😀&amp; סוף", listOf(2 to "a", 3 to "b")),
+            Case("<p><b><sup class=\"footnote-marker\"></sup>המשך</b></p>", listOf(0 to "a", 0 to "b"), setOf(0)),
+            Case("<p><b><sup class=\"footnote-marker\"></sup>המשך</b></p>", listOf(0 to "before")),
+            Case("<p> <sup class=\"footnote-marker\"></sup>המשך</p>", listOf(0 to "a"), setOf(0)),
+            Case("<p>&nbsp;<sup class=\"footnote-marker\"></sup>המשך</p>", listOf(0 to "a"), setOf(0)),
+            Case("<p><broken<sup class=\"footnote-marker\"></sup>המשך</p>", listOf(0 to "a"), setOf(0)),
+        )
+        for ((stored, notes, anchored) in cases) {
+            val shared = LineNoteRehydration.rehydrate(stored, notes.mapIndexed { i, note ->
+                LineNoteRehydration.NoteAt(note.first, note.second, i in anchored)
+            })
+            val (text, bodies) = rehydrateLinkerLine(stored, notes, anchored)
+            assertEquals(shared.text, text)
+            assertEquals(shared.bodies, bodies)
+            for (start in 0..text.length) for (end in start..text.length) {
+                assertEquals(shared.storedRange(start, end), linkerStoredRange(bodies, start, end))
+            }
+        }
+    }
+
+    @Test
+    fun anEmptyMarkerIsReadFromSqlAndAdjacentBodiesKeepTheirOrder() {
+        val marker = "<sup class=\"footnote-marker\"></sup>"
+        val notes = listOf(0 to "ראשונה", 0 to "שנייה")
+        val bodies = "<i class=\"footnote\">ראשונה</i><i class=\"footnote\">שנייה</i>"
+        for ((prefix, suffix) in listOf("" to "", "<p><b>" to "</b></p>")) {
+            val stored = "$prefix$marker Genesis 1:1$suffix"
+            val read = "$prefix$marker$bodies Genesis 1:1$suffix"
+            val start = read.indexOf("Genesis")
+            for (split in listOf(false, true)) {
+                val run = runLinkerMain(
+                    record(start, start + 11, base = 0, hashedContent = read) + "\n", strict = "true",
+                    splitLineContent = split, storedSource = stored, notes = notes, anchoredNotes = setOf(0),
+                )
+                assertEquals(null, run.failure)
+                assertEquals(1L, run.links)
+                // Anchors use visible offsets in stored text: the empty sup contributes none.
+                assertEquals(listOf(1 to 12), run.anchorRanges)
+            }
+            if (prefix.isNotEmpty()) {
+                val misplaced = bodies + stored
+                val staleStart = misplaced.indexOf("Genesis")
+                val stale = runLinkerMain(
+                    record(staleStart, staleStart + 11, base = 0, hashedContent = misplaced) + "\n",
+                    strict = null, storedSource = stored, notes = notes, anchoredNotes = setOf(0),
+                )
+                assertEquals(0L, stale.links, "a hash from bodies placed outside the paragraph is stale")
+            }
         }
     }
 

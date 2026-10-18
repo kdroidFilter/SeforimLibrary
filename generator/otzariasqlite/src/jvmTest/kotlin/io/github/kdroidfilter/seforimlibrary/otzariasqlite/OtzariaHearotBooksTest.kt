@@ -18,7 +18,7 @@ import kotlin.test.assertNull
  * 'הערות על <title>' companion files whose links fully cover the notes are
  * merged into the base book as inline footnotes (the Sefaria idiom the app's
  * 'הערות' pane renders) and are NOT imported as standalone books. Partially
- * linked companions and Havrouta hearot stay on the standalone-book mechanism.
+ * linked companions stay on the standalone-book mechanism.
  */
 class OtzariaHearotBooksTest {
 
@@ -280,12 +280,12 @@ class OtzariaHearotBooksTest {
     }
 
     @Test
-    fun havroutaHearotAreNeverMerged() = runBlocking {
+    fun fullyLinkedHavroutaHearotMergeLikeAnyCompanion() = runBlocking {
         val repo = newRepo()
         val sourceDir = writeLibrary(
-            baseLines = "<h1>חברותא על ברכות</h1>\nגוף<sup>1</sup>",
-            hearotLines = "<sup>1</sup> הערת חברותא",
-            linksJson = "[${linksEntry(i1 = 2, i2 = 1, hearotName = "הערות על חברותא על ברכות")}]",
+            baseLines = "<h1>חברותא על ברכות</h1>\nגוף <small>(1)</small> ועוד <small>(1*)</small> סוף",
+            hearotLines = "<h1>חברותא  הערות</h1>\n<b>(1)</b> הערת חברותא\n<b>(1*)</b> הוספה",
+            linksJson = "[${havroutaEntry(2, 2)}, ${havroutaEntry(2, 3)}]",
             baseName = "חברותא על ברכות",
             hearotName = "הערות על חברותא על ברכות",
         )
@@ -294,12 +294,55 @@ class OtzariaHearotBooksTest {
         generator.generateLinesOnly()
         generator.generateLinksOnly()
 
-        assertNotNull(
-            repo.getAllBooks().find { it.title == "הערות על חברותא על ברכות" },
-            "Havrouta hearot must stay standalone — Havrouta links to them by FOOTNOTES",
+        val base = repo.getAllBooks().find { it.title == "חברותא על ברכות" }!!
+        assertNull(repo.getAllBooks().find { it.title == "הערות על חברותא על ברכות" })
+        assertEquals(
+            "גוף <sup class=\"footnote-marker\">(1)</sup><i class=\"footnote\">הערת חברותא</i> ועוד " +
+                "<sup class=\"footnote-marker\">(1*)</sup><i class=\"footnote\">הוספה</i> סוף",
+            repo.getLines(base.id, 1, 1).single().content,
         )
+        assertEquals(0, repo.countLinks())
+    }
+
+    @Test
+    fun havroutaHearotWithAnUnlinkedAttributionLineStayStandalone() = runBlocking {
+        val repo = newRepo()
+        // Every real Havrouta notes file repeats the base's author line, linked to nothing.
+        val sourceDir = writeLibrary(
+            baseLines = "<h1>חברותא על ברכות</h1>\nהרב פלוני\nגוף <small>(1)</small>",
+            hearotLines = "<h1>חברותא  הערות</h1>\nהרב פלוני\n<b>(1)</b> הערת חברותא",
+            linksJson = "[${havroutaEntry(3, 3)}]",
+            baseName = "חברותא על ברכות",
+            hearotName = "הערות על חברותא על ברכות",
+        )
+
+        val generator = DatabaseGenerator(sourceDirectory = sourceDir, repository = repo)
+        generator.generateLinesOnly()
+        generator.generateLinksOnly()
+
+        assertNotNull(repo.getAllBooks().find { it.title == "הערות על חברותא על ברכות" })
+        val base = repo.getAllBooks().find { it.title == "חברותא על ברכות" }!!
+        assertEquals("גוף <small>(1)</small>", repo.getLines(base.id, 2, 2).single().content)
         assertEquals(1, repo.countLinks())
     }
+
+    @Test
+    fun havroutaGrammarDoesNotApplyToOtherCompanions() {
+        val lines = listOf("גוף <small>(1)</small> סוף")
+        val notes = mapOf(0 to listOf("<b>(1)</b> הערה"))
+        assertEquals(
+            listOf("גוף <small>(1)</small> סוף<i class=\"footnote\"><b>(1)</b> הערה</i>"),
+            HearotCompanionMerge.mergeLines("מזור ותרופה", lines, notes),
+        )
+        assertEquals(
+            listOf("גוף <sup class=\"footnote-marker\">(1)</sup><i class=\"footnote\">הערה</i> סוף"),
+            HearotCompanionMerge.mergeLines("חברותא על ברכות", lines, notes),
+        )
+    }
+
+    private fun havroutaEntry(i1: Int, i2: Int) =
+        """{"line_index_1": $i1, "heRef_2": "הערות על חברותא על ברכות", "path_2": "הערות על חברותא על ברכות.txt",
+           |"line_index_2": $i2, "Conection Type": "footnotes"}""".trimMargin()
 
     @Test
     fun noteCarryingItalicMarkupFailsLoudly() {

@@ -5,6 +5,7 @@ import co.touchlab.kermit.Severity
 import io.github.kdroidfilter.seforimlibrary.common.db.LineContentCompression
 import io.github.kdroidfilter.seforimlibrary.common.db.LineContentShape
 import io.github.kdroidfilter.seforimlibrary.common.linker.LinkerInputView
+import io.github.kdroidfilter.seforimlibrary.common.notes.LineNoteRehydration
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -42,6 +43,9 @@ import kotlin.system.exitProcess
  * line by line and never held in memory; the non-Sefaria books it applies to are
  * listed in `lines_snapshot_stripped_books`. Phase-2 recognises the view from
  * each record's source_hash and maps its offsets back.
+ *
+ * From schema 7 the note bodies live in `line_note`; each line is dumped with them put
+ * back ([LineNoteRehydration]), the text Phase-2 rebuilds to check source_hash.
  *
  * Usage:
  *   ./gradlew :packaging:dumpLines -PseforimDb=/path/to/seforim.db
@@ -167,6 +171,7 @@ fun main(args: Array<String>) {
             }
             // The view of a book whose source has no fixed one, decided before its first line.
             val labelledLines = labelledLineCounts(src, split, bookCondition)
+            val notes = loadLineNotes(src)
             src.createStatement().use { s ->
                 s.fetchSize = 10_000
                 s.executeQuery(
@@ -176,7 +181,8 @@ fun main(args: Array<String>) {
                            l.lineIndex AS line_index,
                            ${LineContentShape.contentExpr(split)} AS content,
                            COALESCE(NULLIF(TRIM(l.heRef), ''), COALESCE(b.heRef, b.title)) AS context_ref,
-                           b.id AS book_id
+                           b.id AS book_id,
+                           l.id AS line_id
                     FROM line l
                     JOIN book b   ON l.bookId = b.id
                     JOIN source s ON b.sourceId = s.id
@@ -197,7 +203,9 @@ fun main(args: Array<String>) {
                                 ?: LinkerInputView.modeForLabelledLines(labelledLines[rs.getLong(6)] ?: 0)
                             strippedLines = 0
                         }
-                        val stored = rs.getString(4) ?: ""
+                        val stored = notes[rs.getLong(7)]
+                            ?.let { LineNoteRehydration.rehydrate(rs.getString(4) ?: "", it).text }
+                            ?: (rs.getString(4) ?: "")
                         val content = LinkerInputView.linkerContent(mode, stored)
                         if (content.length != stored.length) strippedLines++
                         insert.setString(1, sourceName)
@@ -258,6 +266,23 @@ private fun resolveSnapshotOutPath(srcDb: Path): Path {
         ?: System.getenv("LINES_SNAPSHOT")
         ?: srcDb.resolveSibling("lines_snapshot.db").toString()
     return Paths.get(out).toAbsolutePath()
+}
+
+/** `line_note` bodies by line id, in noteIndex order; empty for a DB without the table. */
+internal fun loadLineNotes(src: Connection): Map<Long, List<LineNoteRehydration.NoteAt>> {
+    val exists = src.prepareStatement("SELECT 1 FROM sqlite_master WHERE type='table' AND name='line_note'")
+        .use { ps -> ps.executeQuery().use { it.next() } }
+    if (!exists) return emptyMap()
+    val out = HashMap<Long, MutableList<LineNoteRehydration.NoteAt>>()
+    src.createStatement().use { s ->
+        s.executeQuery("SELECT lineId, charPos, body, marker FROM line_note ORDER BY lineId, noteIndex").use { rs ->
+            while (rs.next()) {
+                out.getOrPut(rs.getLong(1)) { ArrayList() } +=
+                    LineNoteRehydration.NoteAt(rs.getInt(2), rs.getString(3), rs.getString(4) != null)
+            }
+        }
+    }
+    return out
 }
 
 /**

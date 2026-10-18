@@ -1086,7 +1086,7 @@ private val json = Json {
 
 /**
  * Generates links between Havrouta and Hearot al Havrouta using Otzaria link files.
- * Optimized to load all data into RAM for fast processing.
+ * Only notes books that stayed standalone get links; a merged one has no book and is skipped.
  */
 private suspend fun generateHavroutaHearotLinks(
     repository: SeforimRepository,

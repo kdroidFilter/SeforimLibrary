@@ -815,8 +815,7 @@ class DatabaseGenerator(
     /**
      * Scans the links dir's `<base>_links.json` files for entries pointing at
      * 'הערות על X' companion files and plans their inline merge into the base
-     * book (Havrouta hearot excluded — they stay standalone books linked
-     * by FOOTNOTES from Havrouta). A pair is merged only when its mapping is complete: every
+     * book. A pair is merged only when its mapping is complete: every
      * non-blank, non-heading companion line is referenced by a link. Partial
      * pairs stay on the standalone-book mechanism, loudly reported, until their
      * links are completed upstream.

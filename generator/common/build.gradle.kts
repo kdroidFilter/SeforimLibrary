@@ -314,6 +314,19 @@ tasks.register<JavaExec>("buildLineDhIndex") {
     jvmArgs = listOf("-Xmx2g")
 }
 
+tasks.register<JavaExec>("buildLineNoteIndex") {
+    group = "application"
+    description = "Move inline footnote bodies out of line text into line_note, shifting link_anchor offsets."
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.common.notes.BuildLineNoteIndexCliKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+    val dbPath = (project.findProperty("dbPath") ?: project.findProperty("seforimDb")) as String?
+        ?: System.getenv("SEFORIM_DB")
+        ?: rootProject.layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+    systemProperty("dbPath", dbPath)
+    jvmArgs = listOf("-Xmx2g")
+}
+
 tasks.register<JavaExec>("diagnoseHashMismatch") {
     group = "verification"
     description = "Apply a patch.db onto a copy of prevDb and report which tables hash-differ from newDb."

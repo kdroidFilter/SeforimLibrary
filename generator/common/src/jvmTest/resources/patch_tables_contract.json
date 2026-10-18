@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "fkOrder": [
     { "table": "source", "pk": ["id"], "updatable": true },
     { "table": "author", "pk": ["id"], "updatable": true },
@@ -39,6 +39,11 @@
     { "table": "line_alt_toc", "pk": ["lineId", "structureId"], "updatable": true },
     { "table": "default_commentator", "pk": ["bookId", "commentatorBookId"], "updatable": true },
     { "table": "default_targum", "pk": ["bookId", "targumBookId"], "updatable": true },
+    { "table": "book_banner", "pk": ["bookId"], "updatable": true },
+    { "table": "book_protection", "pk": ["bookId"], "updatable": true },
+    { "table": "line_divine_name", "pk": ["lineId", "charStart"], "updatable": true },
+    { "table": "line_note", "pk": ["lineId", "noteIndex"], "updatable": true },
+    { "table": "line_note_divine_name", "pk": ["lineId", "noteIndex", "charStart"], "updatable": true },
     { "table": "schema_meta", "pk": ["key"], "updatable": true }
   ],
   "hashOrder": [
@@ -80,6 +85,11 @@
     "line_alt_toc",
     "default_commentator",
     "default_targum",
+    "book_banner",
+    "book_protection",
+    "line_divine_name",
+    "line_note",
+    "line_note_divine_name",
     "schema_meta"
   ]
 }

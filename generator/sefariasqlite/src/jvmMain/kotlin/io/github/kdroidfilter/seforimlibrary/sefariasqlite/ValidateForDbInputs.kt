@@ -134,6 +134,7 @@ fun main(args: Array<String>) {
     }
     val libraryTrees = baseTreePath?.let { readLibraryTree(Path.of(it)) to readLibraryTree(Path.of(candidateTreePath!!)) }
     if (libraryTrees == null) logger.w { "No library trees given: categories of removed library folders are not checked" }
+    val bookNotices = loadBookNoticeRows(logger)
 
     DriverManager.getConnection("jdbc:sqlite:$dbPath").use { conn ->
         conn.autoCommit = false
@@ -196,13 +197,26 @@ fun main(args: Array<String>) {
                 repository.close()
             }
         }
+        // Warnings only: this DB is the last published one, without new or private books.
+        // The build itself (seedBookNotices) fails on an unmatched protection row.
+        DriverManager.getConnection("jdbc:sqlite:$tempDb").use { conn ->
+            conn.autoCommit = false
+            applyBookNotices(conn, bookNotices, logger, strict = false)
+            conn.commit()
+        }
+        // Warnings only: a row the build cannot read makes it ignore the whole list (Tanach → HVYH only).
+        val divineNameOverrides = DriverManager.getConnection("jdbc:sqlite:$tempDb").use {
+            validateDivineNameOverrides(it, logger)
+        }
         logger.i {
             "ForDB validation passed all real consumers: ${categoryRenames.size} category renames, " +
                 "${categoryMoves.size} category moves, ${bookRenames.size} book renames, " +
                 "${bookMoves.size} book moves, ${generations.size} generation rows, " +
                 "${bulkMetadata.size} bulk metadata rows, ${descriptionOverrides.size} description overrides, " +
                 "${categoryDescriptionOverrides.size} category-description overrides, " +
-                "${authorCanonicalNames.size} author renames. Original DB/buildstate untouched."
+                "${authorCanonicalNames.size} author renames, ${bookNotices.banners.size} banner rows, " +
+                "${bookNotices.protections.size} protection rows, $divineNameOverrides divine-name override rows. " +
+                "Original DB/buildstate untouched."
         }
     } finally {
         tempDir.toFile().deleteRecursively()

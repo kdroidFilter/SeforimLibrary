@@ -44,6 +44,10 @@ V4_KEYS = V3_KEYS | {"db_schema"}
 # bytes fail-closed. Older published provenances stay valid as v1..v4 — they carry the
 # asset itself instead.
 V5_KEYS = V4_KEYS | {"snapshot_zst_sha256", "snapshot_release_tag"}
+# v6 is written only by a build that merged a private books release (repo, tag
+# and asset digest); a build without one keeps publishing v5 byte-for-byte.
+V6_KEYS = V5_KEYS | {"private_books"}
+PRIVATE_REPO = re.compile(r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}")
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 LEGACY_FULL_DB_ASSET = "seforim.db.zst"
 
@@ -67,9 +71,9 @@ def load(path: Path) -> dict:
     if not isinstance(value, dict):
         raise ValueError("build provenance must be an object")
     version = value.get("schema_version")
-    if type(version) is not int or version not in (1, 2, 3, 4, 5):
-        raise ValueError("schema_version must be integer 1, 2, 3, 4 or 5")
-    expected_keys = {1: V1_KEYS, 2: V2_KEYS, 3: V3_KEYS, 4: V4_KEYS, 5: V5_KEYS}[version]
+    if type(version) is not int or version not in (1, 2, 3, 4, 5, 6):
+        raise ValueError("schema_version must be integer 1, 2, 3, 4, 5 or 6")
+    expected_keys = {1: V1_KEYS, 2: V2_KEYS, 3: V3_KEYS, 4: V4_KEYS, 5: V5_KEYS, 6: V6_KEYS}[version]
     if set(value) != expected_keys:
         raise ValueError("unknown build provenance key set")
     canonical = json.dumps(
@@ -152,6 +156,16 @@ def validate(value: dict) -> None:
             raise ValueError("invalid snapshot_zst_sha256")
         if value["snapshot_release_tag"] != "lines-snapshot-sha256-" + snapshot_sha256:
             raise ValueError("snapshot release tag does not match the snapshot digest")
+    if version >= 6:
+        private = value["private_books"]
+        if not isinstance(private, dict) or set(private) != {"repo", "tag", "asset_sha256"}:
+            raise ValueError("private_books must carry exactly repo, tag and asset_sha256")
+        if not isinstance(private["repo"], str) or not PRIVATE_REPO.fullmatch(private["repo"]):
+            raise ValueError("invalid private_books.repo")
+        if not isinstance(private["tag"], str) or not TAG.fullmatch(private["tag"]):
+            raise ValueError("invalid private_books.tag")
+        if not isinstance(private["asset_sha256"], str) or not SHA64.fullmatch(private["asset_sha256"]):
+            raise ValueError("invalid private_books.asset_sha256")
     assets = value["assets"]
     if not isinstance(assets, list) or not assets:
         raise ValueError("assets must be a non-empty array")

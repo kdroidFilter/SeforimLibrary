@@ -2,6 +2,7 @@ package io.github.kdroidfilter.seforimlibrary.common.patch
 
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
+import io.github.kdroidfilter.seforimlibrary.common.db.BookContentHash
 import io.github.kdroidfilter.seforimlibrary.common.db.LineContentCompression
 import java.nio.file.Files
 import java.nio.file.Paths
@@ -57,6 +58,7 @@ internal fun stampSchemaVersion(conn: Connection, dbVersion: Int, dbSchemaVersio
     val requiredTables = when (dbSchemaVersion) {
         4, 5 -> setOf("line_ref", "line_dh")
         6 -> setOf("line_ref", "line_dh", "line_content", "version_line")
+        7 -> setOf("line_ref", "line_dh", "line_content", "version_line") + SCHEMA_7_TABLES
         else -> emptySet()
     }
     val existingTables = if (requiredTables.isEmpty()) {
@@ -101,8 +103,16 @@ internal fun stampSchemaVersion(conn: Connection, dbVersion: Int, dbSchemaVersio
         if (LineContentCompression.isCompressed(conn)) validateCompressed(conn)
     }
 
+    if (dbSchemaVersion >= 7) {
+        require(BookContentHash.hasColumn(conn)) {
+            "Cannot stamp DB as schema $dbSchemaVersion; book.contentHash must exist as INTEGER NOT NULL DEFAULT 0"
+        }
+    }
+
     conn.autoCommit = false
     try {
+        // The stamp follows every line and line_note writer, so the hashes are computed here.
+        if (dbSchemaVersion >= 7) BookContentHash.updateAll(conn)
         conn.prepareStatement(
             "INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)",
         ).use { ps ->

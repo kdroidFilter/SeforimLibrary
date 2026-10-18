@@ -1,5 +1,6 @@
 package io.github.kdroidfilter.seforimlibrary.sefariasqlite
 
+import io.github.kdroidfilter.seforimlibrary.common.notes.InlineNotes
 import io.github.kdroidfilter.seforimlibrary.core.text.normalizeCategoryPathSegment
 
 internal fun sanitizeFolder(name: String?): String {
@@ -77,34 +78,8 @@ private val BRACED_SEGMENT_MARKER_REGEX = Regex("""^\{([א-ת]{1,4})\}""")
 
 internal fun normalizeSegmentMarker(line: String): String = BRACED_SEGMENT_MARKER_REGEX.replace(line, "($1)")
 
-private val FOOTNOTE_MARKER_REGEX = Regex("""<sup class="footnote-marker">.*?</sup>""")
-private const val FOOTNOTE_OPEN = """<i class="footnote">"""
-private val ITALIC_TAG_REGEX = Regex("""<i\b[^>]*>|</i>""", RegexOption.IGNORE_CASE)
-
 /** Drops footnote markers and bodies; bodies may nest `<i>` tags, so closing tags are matched by depth. */
-internal fun stripSefariaFootnotes(line: String): String {
-    if (!line.contains(FOOTNOTE_OPEN)) return line
-    val withoutMarkers = FOOTNOTE_MARKER_REGEX.replace(line, "")
-    val out = StringBuilder(withoutMarkers.length)
-    var cursor = 0
-    while (true) {
-        val start = withoutMarkers.indexOf(FOOTNOTE_OPEN, cursor)
-        if (start < 0) break
-        out.append(withoutMarkers, cursor, start)
-        var depth = 0
-        var end = withoutMarkers.length
-        for (tag in ITALIC_TAG_REGEX.findAll(withoutMarkers, start)) {
-            depth += if (tag.value.startsWith("</")) -1 else 1
-            if (depth == 0) {
-                end = tag.range.last + 1
-                break
-            }
-        }
-        cursor = end
-    }
-    out.append(withoutMarkers, cursor, withoutMarkers.length)
-    return out.toString()
-}
+internal fun stripSefariaFootnotes(line: String): String = InlineNotes.stripMarkersAndBodies(line)
 
 internal fun cleanSefariaLine(
     raw: String,

@@ -43,6 +43,9 @@ import java.sql.DriverManager
  * the record is safe-dropped and recovered on the next re-link. LINKER is excluded from the
  * SOURCE virtual view by the repository's allow-list, so no reverse-view wiring is needed.
  *
+ * From schema 7 a source line is read with its `line_note` bodies put back at their charPos,
+ * the text dumpLines handed the linker; an anchor that falls on a note body is not written.
+ *
  * Usage:
  *   ./gradlew :sefariasqlite:generateLinkerLinks \
  *     -PseforimDb=/path/seforim.db -PlinkerArtifacts=/unpacked/artifacts -PlinkerSidecar=/sidecar.tsv
@@ -221,12 +224,26 @@ fun main(args: Array<String>) = runBlocking {
             WHERE l.bookId = ? AND l.lineIndex = ?
             """.trimIndent()
         }
-        data class SourceLine(val id: Long, val content: String, val contextRef: String)
+        var hasLineNotes = false
+        driver.executeQuery(null,
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='line_note')",
+            { c -> if (c.next().value) hasLineNotes = c.getLong(0) == 1L; QueryResult.Value(Unit) }, 0)
+        // [content] is what the linker read; [stored] and [noteBodies] map its offsets back.
+        data class SourceLine(
+            val id: Long,
+            val content: String,
+            val contextRef: String,
+            val stored: String = content,
+            val noteBodies: List<IntRange> = emptyList(),
+        )
         // One persistent read-only connection: outside a transaction the driver opens a new
         // connection per statement, re-loading the schema and sqlite_stat1/stat4 every lookup.
         val sourceLineDb = DriverManager.getConnection("jdbc:sqlite:$dbPath").also { sourceLineConnection = it }
         sourceLineDb.createStatement().use { it.execute("PRAGMA query_only = ON") }
         val sourceLineStatement = sourceLineDb.prepareStatement(sourceLineSql)
+        val noteStatement = if (hasLineNotes) {
+            sourceLineDb.prepareStatement("SELECT charPos, body, marker FROM line_note WHERE lineId = ? ORDER BY noteIndex")
+        } else null
         var cachedSourceBookId = Long.MIN_VALUE
         var cachedSourceLineIndex = Int.MIN_VALUE
         var cachedSourceLine: SourceLine? = null
@@ -242,6 +259,23 @@ fun main(args: Array<String>) = runBlocking {
                             content = rs.getString(2) ?: "",
                             contextRef = rs.getString(3) ?: "",
                         )
+                    }
+                }
+                val line = found
+                if (line != null && noteStatement != null) {
+                    noteStatement.setLong(1, line.id)
+                    val anchoredNotes = HashSet<Int>()
+                    val notes = noteStatement.executeQuery().use { rs ->
+                        buildList {
+                            while (rs.next()) {
+                                if (rs.getString(3) != null) anchoredNotes += size
+                                add(rs.getInt(1) to (rs.getString(2) ?: ""))
+                            }
+                        }
+                    }
+                    if (notes.isNotEmpty()) {
+                        val (text, bodies) = rehydrateLinkerLine(line.content, notes, anchoredNotes)
+                        found = line.copy(content = text, stored = line.content, noteBodies = bodies)
                     }
                 }
                 cachedSourceBookId = bookId
@@ -276,6 +310,7 @@ fun main(args: Array<String>) = runBlocking {
         var links = 0L; var anchors = 0L; var unresolvedTarget = 0; var ambiguousTarget = 0
         var targetIdentityMismatch = 0; var unmappedSource = 0; var staleSource = 0; var staleContext = 0
         var headingSource = 0
+        var anchorsInNotes = 0
         var missingSourceHash = 0
         var recordsParsed = 0L
 
@@ -363,11 +398,17 @@ fun main(args: Array<String>) = runBlocking {
                     ))
                     // A separate clickable anchor for EACH citation occurrence (same line may cite
                     // the same ref twice at different offsets → one link, two anchors).
-                    val cs = countVisibleChars(content, start)
                     val anchorLimit = maxOf(end, minOf(content.length, nextCitationStart?.let { it + shift } ?: content.length))
-                    val ce = countVisibleChars(content, closeDanglingBrackets(content, start, end, anchorLimit))
-                    if (ce > cs) {
-                        anchorBatch.add(LinkAnchor(linkId = linkId, side = 0, charStart = cs, charEnd = ce))
+                    val anchorEnd = closeDanglingBrackets(content, start, end, anchorLimit)
+                    val storedRange = linkerStoredRange(srcLine.noteBodies, start, anchorEnd)
+                    if (storedRange == null) {
+                        anchorsInNotes++
+                    } else {
+                        val cs = countVisibleChars(srcLine.stored, storedRange.first)
+                        val ce = countVisibleChars(srcLine.stored, storedRange.second)
+                        if (ce > cs) {
+                            anchorBatch.add(LinkAnchor(linkId = linkId, side = 0, charStart = cs, charEnd = ce))
+                        }
                     }
 
                     // Multi-line citation scope (whole amud/section or dashed range) →
@@ -419,7 +460,8 @@ fun main(args: Array<String>) = runBlocking {
         }
         logger.i {
             "LINKER: $links links, $anchors anchors, ${rangeEndByLink.size} target ranges " +
-                "(heading source: $headingSource, unresolved target: $unresolvedTarget, " +
+                "(heading source: $headingSource, anchors on note bodies: $anchorsInNotes, " +
+                "unresolved target: $unresolvedTarget, " +
                 "ambiguous target: $ambiguousTarget, target identity mismatch: $targetIdentityMismatch, " +
                 "unmapped source: $unmappedSource, stale source: $staleSource, stale context: $staleContext)"
         }
@@ -638,6 +680,104 @@ private fun bracketEntity(content: String, start: Int, limit: Int): Pair<Char, I
         }
     } ?: return null
     return decoded to end + 1
+}
+
+/**
+ * Copy of LineNoteRehydration.rehydrate (kept in step by a test): the recovery overlay compiles
+ * this file against an older generator-common. [notes]: (charPos, body) in noteIndex order.
+ */
+internal fun rehydrateLinkerLine(
+    stored: String,
+    notes: List<Pair<Int, String>>,
+    anchoredNotes: Set<Int> = emptySet(),
+): Pair<String, List<IntRange>> {
+    val out = StringBuilder()
+    val bodies = ArrayList<IntRange>(notes.size)
+    val sups = LINKER_SUP.findAll(stored).map { it.range }.toList()
+    val markers = if (anchoredNotes.isEmpty()) emptyList() else LINKER_MARKER.findAll(stored).map { it.range }.toList()
+    var anchoredSeen = 0
+    var cursor = 0
+    for ((noteIndex, note) in notes.withIndex()) {
+        val (charPos, body) = note
+        var at = 0
+        if (charPos > 0) {
+            var count = 0
+            var inTag = false
+            while (at < stored.length && count < charPos) {
+                val c = stored[at]
+                when {
+                    inTag -> if (c == '>') inTag = false
+                    c == '<' -> inTag = true
+                    c == '&' -> {
+                        val end = minOf(stored.length, at + 10)
+                        var j = at + 1
+                        while (j < end && stored[j] != ';') j++
+                        count++
+                        if (j < end) at = j
+                    }
+                    else -> count++
+                }
+                at++
+            }
+        }
+        val enclosingSup = sups.firstOrNull { at > it.first && at <= it.last }
+        if (enclosingSup != null) at = enclosingSup.last + 1
+        while (at < stored.length) {
+            val close = LINKER_INLINE_CLOSE.matchAt(stored, at) ?: break
+            at = close.range.last + 1
+        }
+        if (noteIndex in anchoredNotes) {
+            val marker = markers.getOrNull(anchoredSeen++)
+            if (marker != null && at <= marker.first && linkerOnlyTagsBetween(stored, at, marker.first)) {
+                at = marker.last + 1
+            }
+        }
+        while (at < stored.length) {
+            val close = LINKER_INLINE_CLOSE.matchAt(stored, at) ?: break
+            at = close.range.last + 1
+        }
+        at = maxOf(at, cursor)
+        out.append(stored, cursor, at)
+        val start = out.length
+        out.append("<i class=\"footnote\">").append(body).append("</i>")
+        bodies += start until out.length
+        cursor = at
+    }
+    out.append(stored, cursor, stored.length)
+    return out.toString() to bodies
+}
+
+private val LINKER_SUP = Regex("""<sup\b[^>]*>.*?</sup>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+private val LINKER_MARKER = Regex(
+    """<sup\b[^>]*\bclass\s*=\s*"footnote-marker"[^>]*>.*?</sup>""",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+)
+
+private val LINKER_INLINE_CLOSE = Regex(
+    """</(?:b|i|em|strong|u|s|strike|span|sup|sub|small|big|font|del|ins|a|abbr|acronym|cite|code|dfn|kbd|q|samp|tt|var|mark|bdi|bdo|ruby|rt|rp)\s*>""",
+    RegexOption.IGNORE_CASE,
+)
+
+private fun linkerOnlyTagsBetween(html: String, from: Int, end: Int): Boolean {
+    var at = from
+    while (at < end) {
+        if (html[at] != '<') return false
+        val close = html.indexOf('>', at + 1)
+        if (close < 0 || close >= end) return false
+        at = close + 1
+    }
+    return at == end
+}
+
+/** Raw [start, end) of the rehydrated line in the stored one, or null when it touches a note body. */
+internal fun linkerStoredRange(noteBodies: List<IntRange>, start: Int, end: Int): Pair<Int, Int>? {
+    var shift = 0
+    for (body in noteBodies) {
+        val bodyEnd = body.last + 1
+        if (start < bodyEnd && end > body.first) return null
+        if (bodyEnd <= start) shift += bodyEnd - body.first
+    }
+    return (start - shift) to (end - shift)
 }
 
 /** SHA-1(UTF-8(content)) truncated to 16 hex chars. MUST equal linker_artifact.content_hash. */

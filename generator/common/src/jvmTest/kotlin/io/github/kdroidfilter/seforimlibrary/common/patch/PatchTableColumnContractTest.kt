@@ -31,11 +31,16 @@ class PatchTableColumnContractTest {
     val tmp = TemporaryFolder()
 
     // The DB schema and patch-artifact format are independent version axes.
-    // The generator writes the schema-5 working shape; SplitLineContentCli turns it into 6.
+    // The generator writes the schema-5 working shape; SplitLineContentCli turns it into 6/7.
 
     @Test
     fun `physical columns of every patch table match the committed expectation`() {
         assertColumns(CURRENT_DB_SCHEMA_VERSION, PATCH_TABLES_IN_FK_ORDER, split = true, compressed = true)
+    }
+
+    @Test
+    fun `the schema 6 tables still match the frozen schema 6 expectation`() {
+        assertColumns(6, PATCH_TABLES_SCHEMA_6, split = true, compressed = true)
     }
 
     @Test
@@ -63,7 +68,11 @@ class PatchTableColumnContractTest {
             v.jsonArray.map { it.jsonPrimitive.content }
         }
 
-        val actual = freshDatabaseColumns(tables, split, compressed)
+        // A frozen fixture predates the columns a later schema added to its tables.
+        val laterColumns = if (dbSchemaVersion < 7) SCHEMA_7_COLUMNS else emptyMap()
+        val actual = freshDatabaseColumns(tables, split, compressed).mapValues { (table, cols) ->
+            cols - laterColumns[table].orEmpty()
+        }
 
         val hint = "bump db_schema_version or add a column migration"
         val followUp = "If you bump db_schema_version, add a NEW " +

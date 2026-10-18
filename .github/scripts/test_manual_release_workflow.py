@@ -2182,6 +2182,7 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
         for task in (
             '":sefariasqlite" to "generateSefariaSqlite"',
             '":sefariasqlite" to "seedAllMetadata"',
+            '":sefariasqlite" to "seedBookNotices"',
             '":otzariasqlite" to "appendOtzariaLines"',
             '":otzariasqlite" to "appendOtzariaLinks"',
             '":generator-common" to "buildLineRefIndex"',
@@ -3109,6 +3110,7 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
             "test_library_index_workflow",
             "test_prefetch_patch_anchors",
             "test_split_full_db",
+            "test_merge_private_books",
         ]
         positions = [step.index(suite) for suite in suites]
         self.assertEqual(positions, sorted(positions))

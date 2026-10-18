@@ -170,8 +170,13 @@ class LogicalContentHasher(
             add(indexOf("line_content") + 1, "zstd_dict")
         }
 
+        /** Schema 7 adds the per-book notices, the per-line indexes and the notes right before schema_meta. */
+        val TABLES_SCHEMA_7: List<String> = TABLES_SCHEMA_6.toMutableList().apply {
+            addAll(indexOf("schema_meta"), listOf("book_banner", "book_protection", "line_divine_name", "line_note", "line_note_divine_name"))
+        }
+
         /** Current-schema default for build-time diagnostics and current DB tests. */
-        val DEFAULT_TABLES: List<String> = TABLES_SCHEMA_6
+        val DEFAULT_TABLES: List<String> = TABLES_SCHEMA_7
 
         fun tablesForSchemaVersion(schemaVersion: Int): List<String> = when (schemaVersion) {
             1 -> TABLES_SCHEMA_1
@@ -180,6 +185,7 @@ class LogicalContentHasher(
             4 -> TABLES_SCHEMA_4
             5 -> TABLES_SCHEMA_5
             6 -> TABLES_SCHEMA_6
+            7 -> TABLES_SCHEMA_7
             else -> error("Unsupported logical-hash schema version $schemaVersion")
         }
 

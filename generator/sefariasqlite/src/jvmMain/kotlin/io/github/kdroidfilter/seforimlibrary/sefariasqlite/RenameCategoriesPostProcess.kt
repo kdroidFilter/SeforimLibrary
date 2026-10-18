@@ -130,6 +130,7 @@ fun main(args: Array<String>) {
     parseCategoryDescriptionOverrides(
         downloadRequiredForDbFile(FOR_DB_CSV_FILES.getValue("categoryDescriptions"), logger),
     )
+    loadBookNoticeRows(logger)
 
     // Book-move destination leaves get their ids from the build state (see
     // [BookMoveLeafIds]); without it they would fall back to implicit rowids and
