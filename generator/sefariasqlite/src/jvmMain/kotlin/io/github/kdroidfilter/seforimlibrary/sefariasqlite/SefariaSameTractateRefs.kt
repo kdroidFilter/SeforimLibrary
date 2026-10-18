@@ -35,7 +35,8 @@ internal object SefariaSameTractateRefs {
             """|(?<num>[א-ת](?:["'״׳]?[א-ת]){0,2}["'״׳]?)""" +
             """(?:\s*[.:]|\s*,\s*[אב](?![א-ת])|\s+ע["'״׳]?[אב](?![א-ת])|\s+[אב]['׳]?(?=[\s)\],.;:])|(?=[)\]]))""",
     )
-    private const val OTHER_WORK = """(?<![א-ת])(?:ו|ב|ה|וב|וה|ובה|ד|וד)?(?:ירושלמי|ירוש['׳]|תוספתא|תוספת['׳])(?:\s|<[^<>]*>)*"""
+    // Possessive: a backtracking group of alternatives recurses per repetition in java.util.regex.
+    private const val OTHER_WORK = """(?<![א-ת])(?:ו|ב|ה|וב|וה|ובה|ד|וד)?(?:ירושלמי|ירוש['׳]|תוספתא|תוספת['׳])(?:\s|<[^<>]*>)*+"""
 
     private class Patterns(val relative: Regex, val bracketed: Regex)
     private val patterns = ConcurrentHashMap<String, Patterns>()

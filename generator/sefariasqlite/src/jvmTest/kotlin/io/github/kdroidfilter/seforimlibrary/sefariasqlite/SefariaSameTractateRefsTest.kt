@@ -79,6 +79,25 @@ class SefariaSameTractateRefsTest {
     }
 
     @Test
+    fun `long runs of spaces or tags do not depend on the stack`() {
+        val cases = listOf(
+            "בירושלמי" + " ".repeat(1_000_000) + "(שבת ג,א)" to null,
+            "בירושלמי" + "<b> ".repeat(250_000) + "(שבת ג,א)" to null,
+            "בירושלמי" + "<b>".repeat(250_000) + "x (שבת דף ג.)" to "בירושלמי" + "<b>".repeat(250_000) + "x (דף ג.)",
+            "(שבת" + " ".repeat(1_000_000) + "דף ב.)" to "(דף ב.)",
+            "(לקמן שבת" + " ".repeat(1_000_000) + "דף ב.)" to "(לקמן" + " ".repeat(1_000_000) + "דף ב.)",
+        )
+        for ((line, expected) in cases) {
+            var result: Result<String>? = null
+            // A small stack: a regex that recurses per character would overflow here.
+            val worker = Thread(null, { result = runCatching { SefariaSameTractateRefs.strip(line, "שבת") } }, "strip", 256L * 1024)
+            worker.start()
+            worker.join()
+            assertEquals(expected ?: line, result!!.getOrThrow())
+        }
+    }
+
+    @Test
     fun `many references in one line`() {
         val line = "(שבת דף ב.) לקמן (שבת ג.) (לעיל שבת דף ד:) ".repeat(2000)
         assertEquals("(דף ב.) לקמן (ג.) (לעיל דף ד:) ".repeat(2000), SefariaSameTractateRefs.strip(line, "שבת"))
