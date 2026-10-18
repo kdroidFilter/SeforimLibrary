@@ -22,6 +22,10 @@ class LineNoteRehydrationTest {
             "<sup class=\"footnote-marker\">*</sup> <i class=\"footnote\">x</i><i class=\"footnote\">y</i>&amp; סוף",
             "<h2>כותרת<sup class=\"footnote-marker\">1</sup><i class=\"footnote\">ה</i></h2>",
             "טקסט בסוף<i class=\"footnote\">נספח</i>",
+            "א<sup class=\"footnote-marker\">1<i class=\"footnote\"></i></sup><i class=\"footnote\">הערה זרזיר</i> ב",
+            "א<sup class=\"footnote-marker\"><b>1</b></sup><i class=\"footnote\">הערה זרזיר</i> ב",
+            "א<sup class=\"footnote-marker\">1<i class=\"footnote\"></i></sup><i class=\"footnote\">ראשונה</i><i class=\"footnote\">שנייה</i> ב",
+            "<i class=\"footnote\">לפני</i><sup>1</sup> סוף",
         )
         val path = tmp.newFolder().toPath().resolve("seforim.db")
         JdbcSqliteDriver("jdbc:sqlite:${path.toAbsolutePath()}").use { SeforimDb.Schema.create(it) }

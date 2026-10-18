@@ -59,6 +59,7 @@ object LineNoteRehydration {
 
     private const val OPEN = "<i class=\"footnote\">"
     private const val CLOSE = "</i>"
+    private val SUP = Regex("""<sup\b[^>]*>.*?</sup>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
 
     /**
      * Raw offset just after the [charPos]-th visible char (countVisibleChars convention): past its
@@ -86,6 +87,8 @@ object LineNoteRehydration {
                 i++
             }
         }
+        val marker = SUP.findAll(html).firstOrNull { i > it.range.first && i <= it.range.last }
+        if (marker != null) return marker.range.last + 1
         if (html.startsWith("</sup>", i, ignoreCase = true)) i += "</sup>".length
         else if (isTagsOnly(html, i)) i = html.length
         return i
