@@ -75,7 +75,16 @@ class SefariaSameTractateRefsTest {
         for (line in listOf(
             "ובירושלמי (שבת ג,א) גרסינן", "לו.<br>ובירושלמי (שבת ג,א)", "בתוספתא (שבת ג, א)", "ירושלמי [שבת דף ג.]",
             "בירושלמי <b>(שבת ג, א)</b>", "<b>ירושלמי</b> (שבת ג, א)", "בתוספתא<br> <i>(שבת דף ג.)</i>",
+            "דבירושלמי (שבת ג,א)", "מהירושלמי (שבת ג,א)", "שבירושלמי (שבת ג,א)", "בירושל' (שבת ג,א)",
+            "בירו' (שבת ג,א)", "ובתוספ' (שבת ג, א)", "בירוש׳\u200e (שבת דף ב.)",
         )) assertEquals(line, SefariaSameTractateRefs.strip(line, "שבת"))
+    }
+
+    @Test
+    fun `information separators are whitespace as in the Python mirror`() {
+        assertEquals("(דף ב.)", SefariaSameTractateRefs.strip("(שבת\u001fדף ב.)", "שבת"))
+        assertEquals("(לקמן\u001cדף ב.)", SefariaSameTractateRefs.strip("(לקמן שבת\u001cדף ב.)", "שבת"))
+        assertEquals("(ט״ז א.)", SefariaSameTractateRefs.strip("(שבת\u001cט״ז א.)", "שבת"))
     }
 
     @Test
