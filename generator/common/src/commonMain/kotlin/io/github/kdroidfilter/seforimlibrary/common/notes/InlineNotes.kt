@@ -94,6 +94,8 @@ object InlineNotes {
     /** Footnote-marker sups in [line] — after [strip], one per note whose marker is not null. */
     fun countMarkers(line: String): Int = if (!line.contains("footnote-marker")) 0 else MARKER.findAll(line).count()
 
+    internal fun markerRanges(line: String): List<IntRange> = MARKER.findAll(line).map { it.range }.toList()
+
     /** Plain text use (TOC titles, dropped translator notes): every body and every marker sup removed; an unclosed body runs to the end. */
     fun stripMarkersAndBodies(line: String): String {
         if (!line.contains("footnote")) return line

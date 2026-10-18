@@ -7,7 +7,8 @@ package io.github.kdroidfilter.seforimlibrary.common.notes
  */
 object LineNoteRehydration {
 
-    data class NoteAt(val charPos: Int, val body: String)
+    /** Stored note position and body; [hasMarker] includes an empty, non-null SQL marker. */
+    data class NoteAt(val charPos: Int, val body: String, val hasMarker: Boolean = false)
 
     /** [bodies]: the raw [start, end) of every inserted `<i class="footnote">…</i>` in [text]. */
     class Rehydrated(val text: String, val bodies: List<IntRange>) {
@@ -31,9 +32,17 @@ object LineNoteRehydration {
         if (notes.isEmpty()) return Rehydrated(stored, emptyList())
         val out = StringBuilder(stored.length + notes.sumOf { it.body.length + OPEN.length + CLOSE.length })
         val bodies = ArrayList<IntRange>(notes.size)
+        val sups = SUP.findAll(stored).map { it.range }.toList()
+        val markers = if (notes.any { it.hasMarker }) InlineNotes.markerRanges(stored) else emptyList()
+        var anchoredSeen = 0
         var cursor = 0
         for (note in notes) {
-            val at = maxOf(insertionPoint(stored, note.charPos), cursor)
+            var at = insertionPoint(stored, note.charPos, sups)
+            if (note.hasMarker) {
+                val marker = markers.getOrNull(anchoredSeen++)
+                if (marker != null && at == marker.first) at = afterInlineClosings(stored, marker.last + 1)
+            }
+            at = maxOf(at, cursor)
             out.append(stored, cursor, at)
             val start = out.length
             out.append(OPEN).append(note.body).append(CLOSE)
@@ -44,28 +53,30 @@ object LineNoteRehydration {
         return Rehydrated(out.toString(), bodies)
     }
 
-    private fun isTagsOnly(html: String, from: Int): Boolean {
-        var inTag = false
-        for (k in from until html.length) {
-            val c = html[k]
-            when {
-                inTag -> if (c == '>') inTag = false
-                c == '<' -> inTag = true
-                else -> return false
-            }
-        }
-        return true
-    }
-
     private const val OPEN = "<i class=\"footnote\">"
     private const val CLOSE = "</i>"
     private val SUP = Regex("""<sup\b[^>]*>.*?</sup>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
 
+    private val INLINE_CLOSE = Regex(
+        """</(?:b|i|em|strong|u|s|strike|span|sup|sub|small|big|font|del|ins|a|abbr|acronym|cite|code|dfn|kbd|q|samp|tt|var|mark|bdi|bdo|ruby|rt|rp)\s*>""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    private fun afterInlineClosings(html: String, from: Int): Int {
+        var at = from
+        while (at < html.length) {
+            val close = INLINE_CLOSE.matchAt(html, at) ?: break
+            at = close.range.last + 1
+        }
+        return at
+    }
+
     /**
      * Raw offset just after the [charPos]-th visible char (countVisibleChars convention): past its
-     * marker's `</sup>`, else, after the last visible char, at the very end of the line.
+     * marker's `</sup>` and adjacent inline closings. Block boundaries stay after the body,
+     * including at the end of a line, so the next paragraph's words remain separate.
      */
-    internal fun insertionPoint(html: String, charPos: Int): Int {
+    private fun insertionPoint(html: String, charPos: Int, sups: List<IntRange>): Int {
         var i = 0
         if (charPos > 0) {
             var count = 0
@@ -87,10 +98,8 @@ object LineNoteRehydration {
                 i++
             }
         }
-        val marker = SUP.findAll(html).firstOrNull { i > it.range.first && i <= it.range.last }
-        if (marker != null) return marker.range.last + 1
-        if (html.startsWith("</sup>", i, ignoreCase = true)) i += "</sup>".length
-        else if (isTagsOnly(html, i)) i = html.length
-        return i
+        val marker = sups.firstOrNull { i > it.first && i <= it.last }
+        if (marker != null) i = marker.last + 1
+        return afterInlineClosings(html, i)
     }
 }

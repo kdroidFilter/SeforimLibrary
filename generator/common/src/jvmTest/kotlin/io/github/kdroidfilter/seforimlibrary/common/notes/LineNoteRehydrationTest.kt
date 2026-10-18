@@ -26,6 +26,9 @@ class LineNoteRehydrationTest {
             "א<sup class=\"footnote-marker\"><b>1</b></sup><i class=\"footnote\">הערה זרזיר</i> ב",
             "א<sup class=\"footnote-marker\">1<i class=\"footnote\"></i></sup><i class=\"footnote\">ראשונה</i><i class=\"footnote\">שנייה</i> ב",
             "<i class=\"footnote\">לפני</i><sup>1</sup> סוף",
+            "<sup class=\"footnote-marker\"></sup><i class=\"footnote\">ראשונה</i><i class=\"footnote\">שנייה</i> סוף",
+            "<p><b>א</b><i class=\"footnote\">הערה</i></p>המשך",
+            "<p>סוף<i class=\"footnote\">הערה</i></p>",
         )
         val path = tmp.newFolder().toPath().resolve("seforim.db")
         JdbcSqliteDriver("jdbc:sqlite:${path.toAbsolutePath()}").use { SeforimDb.Schema.create(it) }
@@ -44,9 +47,13 @@ class LineNoteRehydrationTest {
                     st.executeQuery("SELECT content FROM line WHERE id = ${100 + i}").use { rs -> rs.next(); rs.getString(1) }
                 }
                 val notes = conn.createStatement().use { st ->
-                    st.executeQuery("SELECT charPos, body FROM line_note WHERE lineId = ${100 + i} ORDER BY noteIndex").use { rs ->
-                        buildList { while (rs.next()) add(NoteAt(rs.getInt(1), rs.getString(2))) }
+                    st.executeQuery("SELECT charPos, body, marker FROM line_note WHERE lineId = ${100 + i} ORDER BY noteIndex").use { rs ->
+                        buildList { while (rs.next()) add(NoteAt(rs.getInt(1), rs.getString(2), rs.getString(3) != null)) }
                     }
+                }
+                if (original.startsWith("<sup class=\"footnote-marker\"></sup>")) {
+                    assertEquals(listOf(true, false), notes.map { it.hasMarker }, "empty SQL marker is anchored")
+                    assertEquals(listOf(0, 0), notes.map { it.charPos }, "adjacent bodies share a position")
                 }
                 assertEquals(original, LineNoteRehydration.rehydrate(stored, notes).text)
             }
@@ -54,12 +61,52 @@ class LineNoteRehydrationTest {
     }
 
     @Test
-    fun `a body goes right after its visible char, past a sup close, or at the very end`() {
+    fun `a body crosses inline closings and stays before block boundaries`() {
         fun back(stored: String, charPos: Int) = LineNoteRehydration.rehydrate(stored, listOf(NoteAt(charPos, "ה"))).text
-        assertEquals("<b>מילה<i class=\"footnote\">ה</i></b> ועוד", back("<b>מילה</b> ועוד", 4))
+        assertEquals("<b>מילה</b><i class=\"footnote\">ה</i> ועוד", back("<b>מילה</b> ועוד", 4))
         assertEquals("<sup>1</sup><i class=\"footnote\">ה</i><b>א</b>", back("<sup>1</sup><b>א</b>", 1))
-        assertEquals("<b>סוף</b><br><i class=\"footnote\">ה</i>", back("<b>סוף</b><br>", 3))
+        assertEquals("<b>סוף</b><i class=\"footnote\">ה</i><br>", back("<b>סוף</b><br>", 3))
+        for (block in listOf("p", "DIV", "li", "td", "custom-block")) {
+            for (tail in listOf("", "המשך")) {
+                assertEquals(
+                    "<$block><b><span>אב</span></b><i class=\"footnote\">ה</i></$block>$tail",
+                    back("<$block><b><span>אב</span></b></$block>$tail", 2),
+                )
+            }
+        }
+        assertEquals("<B>אב</B ><i class=\"footnote\">ה</i></p>", back("<B>אב</B ></p>", 2))
+        assertEquals("<b>אב<i class=\"footnote\">ה</i></ b></p>", back("<b>אב</ b></p>", 2))
         assertEquals(countVisibleChars("<b>מילה</b> ועוד") + 1, countVisibleChars(back("<b>מילה</b> ועוד", 4)))
+    }
+
+    @Test
+    fun `empty markers and unanchored bodies respect sup boundaries and note order`() {
+        val body = "<i class=\"footnote\">ה</i>"
+        for (marker in listOf(
+            "<sup class=\"footnote-marker\">1<i class=\"footnote\"></i></sup>" to 1,
+            "<sup class=\"footnote-marker\"><b>1</b></sup>" to 1,
+            "<sup class=\"footnote-marker\"></sup>" to 0,
+        )) {
+            val notes = listOf(NoteAt(marker.second, "ה", true), NoteAt(marker.second, "ה"))
+            assertEquals(marker.first + body + body, LineNoteRehydration.rehydrate(marker.first, notes).text)
+            if (marker.second > 0) {
+                assertEquals(
+                    marker.first + body,
+                    LineNoteRehydration.rehydrate(marker.first, listOf(NoteAt(marker.second, "ה"))).text,
+                    "a raw position strictly inside any sup is outside it even without marker metadata",
+                )
+            }
+        }
+        assertEquals(
+            body + "<sup>1</sup>",
+            LineNoteRehydration.rehydrate("<sup>1</sup>", listOf(NoteAt(0, "ה"))).text,
+        )
+        assertEquals(
+            "<b>א<sup class=\"footnote-marker\"></sup></b>" + body,
+            LineNoteRehydration.rehydrate(
+                "<b>א<sup class=\"footnote-marker\"></sup></b>", listOf(NoteAt(1, "ה", true)),
+            ).text,
+        )
     }
 
     @Test

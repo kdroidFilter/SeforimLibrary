@@ -45,6 +45,29 @@ class DumpLinesTest {
     }
 
     @Test
+    fun `an empty SQL marker remains anchored and adjacent bodies keep note order`() {
+        val marker = "<sup class=\"footnote-marker\"></sup>"
+        val books = listOf(TestBook(1, "src", "Book", listOf("$marker סוף")))
+        for (split in listOf(false, true)) {
+            val snapshot = dumpBooks(split, books) { c ->
+                c.createStatement().use { st ->
+                    st.execute(
+                        "CREATE TABLE line_note (lineId INTEGER NOT NULL, noteIndex INTEGER NOT NULL, " +
+                            "charPos INTEGER NOT NULL, marker TEXT, body TEXT NOT NULL, PRIMARY KEY (lineId, noteIndex))",
+                    )
+                    st.execute("INSERT INTO line_note SELECT id, 0, 0, '', 'ראשונה' FROM line")
+                    st.execute("INSERT INTO line_note SELECT id, 1, 0, NULL, 'שנייה' FROM line")
+                }
+                assertEquals(listOf(true, false), loadLineNotes(c).values.single().map { it.hasMarker })
+            }
+            assertEquals(
+                listOf("src|Book|0|$marker<i class=\"footnote\">ראשונה</i><i class=\"footnote\">שנייה</i> סוף|Book"),
+                snapshot.rows,
+            )
+        }
+    }
+
+    @Test
     fun `a Sefaria line reaches the linker without its opening seif label`() {
         val rows = dump(
             split = true,

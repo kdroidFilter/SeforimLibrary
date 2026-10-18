@@ -242,7 +242,7 @@ fun main(args: Array<String>) = runBlocking {
         sourceLineDb.createStatement().use { it.execute("PRAGMA query_only = ON") }
         val sourceLineStatement = sourceLineDb.prepareStatement(sourceLineSql)
         val noteStatement = if (hasLineNotes) {
-            sourceLineDb.prepareStatement("SELECT charPos, body FROM line_note WHERE lineId = ? ORDER BY noteIndex")
+            sourceLineDb.prepareStatement("SELECT charPos, body, marker FROM line_note WHERE lineId = ? ORDER BY noteIndex")
         } else null
         var cachedSourceBookId = Long.MIN_VALUE
         var cachedSourceLineIndex = Int.MIN_VALUE
@@ -264,11 +264,17 @@ fun main(args: Array<String>) = runBlocking {
                 val line = found
                 if (line != null && noteStatement != null) {
                     noteStatement.setLong(1, line.id)
+                    val anchoredNotes = HashSet<Int>()
                     val notes = noteStatement.executeQuery().use { rs ->
-                        buildList { while (rs.next()) add(rs.getInt(1) to (rs.getString(2) ?: "")) }
+                        buildList {
+                            while (rs.next()) {
+                                if (rs.getString(3) != null) anchoredNotes += size
+                                add(rs.getInt(1) to (rs.getString(2) ?: ""))
+                            }
+                        }
                     }
                     if (notes.isNotEmpty()) {
-                        val (text, bodies) = rehydrateLinkerLine(line.content, notes)
+                        val (text, bodies) = rehydrateLinkerLine(line.content, notes, anchoredNotes)
                         found = line.copy(content = text, stored = line.content, noteBodies = bodies)
                     }
                 }
@@ -680,11 +686,19 @@ private fun bracketEntity(content: String, start: Int, limit: Int): Pair<Char, I
  * Copy of LineNoteRehydration.rehydrate (kept in step by a test): the recovery overlay compiles
  * this file against an older generator-common. [notes]: (charPos, body) in noteIndex order.
  */
-internal fun rehydrateLinkerLine(stored: String, notes: List<Pair<Int, String>>): Pair<String, List<IntRange>> {
+internal fun rehydrateLinkerLine(
+    stored: String,
+    notes: List<Pair<Int, String>>,
+    anchoredNotes: Set<Int> = emptySet(),
+): Pair<String, List<IntRange>> {
     val out = StringBuilder()
     val bodies = ArrayList<IntRange>(notes.size)
+    val sups = LINKER_SUP.findAll(stored).map { it.range }.toList()
+    val markers = if (anchoredNotes.isEmpty()) emptyList() else LINKER_MARKER.findAll(stored).map { it.range }.toList()
+    var anchoredSeen = 0
     var cursor = 0
-    for ((charPos, body) in notes) {
+    for ((noteIndex, note) in notes.withIndex()) {
+        val (charPos, body) = note
         var at = 0
         if (charPos > 0) {
             var count = 0
@@ -706,16 +720,20 @@ internal fun rehydrateLinkerLine(stored: String, notes: List<Pair<Int, String>>)
                 at++
             }
         }
-        val afterSup = stored.startsWith("</sup>", at, ignoreCase = true)
-        if (afterSup) at += "</sup>".length
-        var tagsOnly = !afterSup
-        var inTag = false
-        for (k in at until stored.length) {
-            if (!tagsOnly) break
-            val c = stored[k]
-            if (inTag) { if (c == '>') inTag = false } else if (c == '<') inTag = true else { tagsOnly = false; break }
+        val enclosingSup = sups.firstOrNull { at > it.first && at <= it.last }
+        if (enclosingSup != null) at = enclosingSup.last + 1
+        while (at < stored.length) {
+            val close = LINKER_INLINE_CLOSE.matchAt(stored, at) ?: break
+            at = close.range.last + 1
         }
-        if (tagsOnly) at = stored.length
+        if (noteIndex in anchoredNotes) {
+            val marker = markers.getOrNull(anchoredSeen++)
+            if (marker != null && at == marker.first) at = marker.last + 1
+        }
+        while (at < stored.length) {
+            val close = LINKER_INLINE_CLOSE.matchAt(stored, at) ?: break
+            at = close.range.last + 1
+        }
         at = maxOf(at, cursor)
         out.append(stored, cursor, at)
         val start = out.length
@@ -726,6 +744,17 @@ internal fun rehydrateLinkerLine(stored: String, notes: List<Pair<Int, String>>)
     out.append(stored, cursor, stored.length)
     return out.toString() to bodies
 }
+
+private val LINKER_SUP = Regex("""<sup\b[^>]*>.*?</sup>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+private val LINKER_MARKER = Regex(
+    """<sup\b[^>]*\bclass\s*=\s*"footnote-marker"[^>]*>.*?</sup>""",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+)
+
+private val LINKER_INLINE_CLOSE = Regex(
+    """</(?:b|i|em|strong|u|s|strike|span|sup|sub|small|big|font|del|ins|a|abbr|acronym|cite|code|dfn|kbd|q|samp|tt|var|mark|bdi|bdo|ruby|rt|rp)\s*>""",
+    RegexOption.IGNORE_CASE,
+)
 
 /** Raw [start, end) of the rehydrated line in the stored one, or null when it touches a note body. */
 internal fun linkerStoredRange(noteBodies: List<IntRange>, start: Int, end: Int): Pair<Int, Int>? {

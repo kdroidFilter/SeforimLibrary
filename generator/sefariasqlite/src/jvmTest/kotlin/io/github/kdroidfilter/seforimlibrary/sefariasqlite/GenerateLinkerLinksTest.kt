@@ -302,6 +302,7 @@ class GenerateLinkerLinksTest {
         storedSource: String = sourceContent,
         targets: List<RefEntry> = listOf(RefEntry("Genesis 1:1", "TgtBook 1:1", "Tanakh/Genesis", 1)),
         notes: List<Pair<Int, String>> = emptyList(),
+        anchoredNotes: Set<Int> = emptySet(),
     ): LinkerRun {
         val dir = Files.createTempDirectory("linkerMainFixture")
         val artifacts = Files.createDirectory(dir.resolve("artifacts"))
@@ -333,9 +334,11 @@ class GenerateLinkerLinksTest {
             }
             repo.close()
             DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
-                c.prepareStatement("INSERT INTO line_note (lineId, noteIndex, charPos, marker, body) VALUES (20, ?, ?, NULL, ?)").use { ps ->
+                c.prepareStatement("INSERT INTO line_note (lineId, noteIndex, charPos, marker, body) VALUES (20, ?, ?, ?, ?)").use { ps ->
                     notes.forEachIndexed { i, (charPos, body) ->
-                        ps.setInt(1, i); ps.setInt(2, charPos); ps.setString(3, body); ps.executeUpdate()
+                        ps.setInt(1, i); ps.setInt(2, charPos)
+                        ps.setString(3, if (i in anchoredNotes) "" else null)
+                        ps.setString(4, body); ps.executeUpdate()
                     }
                 }
             }
@@ -439,20 +442,54 @@ class GenerateLinkerLinksTest {
 
     @Test
     fun theInlineRehydrationMatchesTheSharedOne() {
+        data class Case(val stored: String, val notes: List<Pair<Int, String>>, val anchored: Set<Int> = emptySet())
         val cases = listOf(
-            "א<sup class=\"footnote-marker\">1</sup> ב &amp; ג</b>" to listOf(2 to "x", 2 to "<i>y</i>", 8 to "z"),
-            "<h2>כותרת</h2>" to listOf(0 to "a", 5 to "b"),
-            "<h2>א<sup>1</sup></h2> ב<b>ג</b>" to listOf(2 to "x", 4 to "y"),
-            "" to listOf(0 to "only"),
+            Case("א<sup class=\"footnote-marker\">1</sup> ב &amp; ג</b>", listOf(2 to "x", 2 to "<i>y</i>", 8 to "z")),
+            Case("<h2>כותרת</h2>", listOf(0 to "a", 5 to "b")),
+            Case("<h2>א<sup>1</sup></h2> ב<b>ג</b>", listOf(2 to "x", 4 to "y")),
+            Case("", listOf(0 to "only")),
+            Case("<sup class=\"footnote-marker\">1<i class=\"footnote\"></i></sup>", listOf(1 to "a", 1 to "b"), setOf(0)),
+            Case("<sup class=\"footnote-marker\"><b>1</b></sup>", listOf(1 to "a", 1 to "b")),
+            Case("<sup class=\"footnote-marker\"></sup>", listOf(0 to "a", 0 to "b"), setOf(0)),
+            Case("<sup>1</sup> סוף", listOf(0 to "before")),
+            Case("<b>א<sup class=\"footnote-marker\"></sup></b>", listOf(1 to "a"), setOf(0)),
+            Case("<b>א</b><sup class=\"footnote-marker\"></sup>", listOf(1 to "a"), setOf(0)),
+            Case("<p><b>אב</b></p>המשך", listOf(2 to "a")),
+            Case("<p><b>אב</b></p>", listOf(2 to "a")),
+            Case("<custom-block>אב</custom-block>", listOf(2 to "a")),
+            Case("<B>אב</B ></p>", listOf(2 to "a")),
+            Case("<b>אב</ b></p>", listOf(2 to "a")),
+            Case("<b>סוף</b><br>", listOf(3 to "a")),
+            Case("😀&amp; סוף", listOf(2 to "a", 3 to "b")),
         )
-        for ((stored, notes) in cases) {
-            val shared = LineNoteRehydration.rehydrate(stored, notes.map { LineNoteRehydration.NoteAt(it.first, it.second) })
-            val (text, bodies) = rehydrateLinkerLine(stored, notes)
+        for ((stored, notes, anchored) in cases) {
+            val shared = LineNoteRehydration.rehydrate(stored, notes.mapIndexed { i, note ->
+                LineNoteRehydration.NoteAt(note.first, note.second, i in anchored)
+            })
+            val (text, bodies) = rehydrateLinkerLine(stored, notes, anchored)
             assertEquals(shared.text, text)
             assertEquals(shared.bodies, bodies)
             for (start in 0..text.length) for (end in start..text.length) {
                 assertEquals(shared.storedRange(start, end), linkerStoredRange(bodies, start, end))
             }
+        }
+    }
+
+    @Test
+    fun anEmptyMarkerIsReadFromSqlAndAdjacentBodiesKeepTheirOrder() {
+        val marker = "<sup class=\"footnote-marker\"></sup>"
+        val stored = "$marker Genesis 1:1"
+        val notes = listOf(0 to "ראשונה", 0 to "שנייה")
+        val read = "$marker<i class=\"footnote\">ראשונה</i><i class=\"footnote\">שנייה</i> Genesis 1:1"
+        val start = read.indexOf("Genesis")
+        for (split in listOf(false, true)) {
+            val run = runLinkerMain(
+                record(start, start + 11, base = 0, hashedContent = read) + "\n", strict = "true",
+                splitLineContent = split, storedSource = stored, notes = notes, anchoredNotes = setOf(0),
+            )
+            assertEquals(null, run.failure)
+            // Anchors use visible offsets in stored text: the empty sup contributes none.
+            assertEquals(listOf(1 to 12), run.anchorRanges)
         }
     }
 
