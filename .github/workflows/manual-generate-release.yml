@@ -548,6 +548,7 @@ jobs:
             .github/contracts
             generator/common/src/jvmMain/kotlin/io/github/kdroidfilter/seforimlibrary/common/ids/DiskBackedLinkIdAllocator.kt
             generator/sefariasqlite/src/jvmMain/kotlin/io/github/kdroidfilter/seforimlibrary/sefariasqlite/GenerateLinkerLinks.kt
+            generator/sefariasqlite/src/jvmMain/kotlin/io/github/kdroidfilter/seforimlibrary/sefariasqlite/SefariaRangeRefs.kt
           persist-credentials: false
 
       # `gh` gives GH_TOKEN precedence over GITHUB_TOKEN. Verify the repository
@@ -1596,8 +1597,9 @@ jobs:
 
       # Recovery keeps the expensive source/data build pinned to source_commit, but
       # Phase-2 must run the fail-closed implementation shipped by this workflow
-      # revision. Copy only the two reviewed source files and make the one exact heap
-      # substitution required by the pinned task; all other payload code remains pinned.
+      # revision. Copy only the reviewed source files (the importer, its id allocator and
+      # the section/range ref index it calls) and make the one exact heap substitution
+      # required by the pinned task; all other payload code remains pinned.
       - name: Overlay pinned recovery Phase-2 implementation
         if: inputs.relink_recovery_run_id != ''
         run: |
@@ -1605,6 +1607,7 @@ jobs:
           files=(
             generator/common/src/jvmMain/kotlin/io/github/kdroidfilter/seforimlibrary/common/ids/DiskBackedLinkIdAllocator.kt
             generator/sefariasqlite/src/jvmMain/kotlin/io/github/kdroidfilter/seforimlibrary/sefariasqlite/GenerateLinkerLinks.kt
+            generator/sefariasqlite/src/jvmMain/kotlin/io/github/kdroidfilter/seforimlibrary/sefariasqlite/SefariaRangeRefs.kt
           )
           for file in "${files[@]}"; do
             test -f ".pipeline-control/$file"
