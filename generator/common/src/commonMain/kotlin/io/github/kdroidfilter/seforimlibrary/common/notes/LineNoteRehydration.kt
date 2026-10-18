@@ -40,7 +40,9 @@ object LineNoteRehydration {
             var at = insertionPoint(stored, note.charPos, sups)
             if (note.hasMarker) {
                 val marker = markers.getOrNull(anchoredSeen++)
-                if (marker != null && at == marker.first) at = afterInlineClosings(stored, marker.last + 1)
+                if (marker != null && at <= marker.first && onlyTagsBetween(stored, at, marker.first)) {
+                    at = afterInlineClosings(stored, marker.last + 1)
+                }
             }
             at = maxOf(at, cursor)
             out.append(stored, cursor, at)
@@ -69,6 +71,18 @@ object LineNoteRehydration {
             at = close.range.last + 1
         }
         return at
+    }
+
+    /** Opening markup before an empty marker contributes no visible offset. No gaps are skipped. */
+    private fun onlyTagsBetween(html: String, from: Int, end: Int): Boolean {
+        var at = from
+        while (at < end) {
+            if (html[at] != '<') return false
+            val close = html.indexOf('>', at + 1)
+            if (close < 0 || close >= end) return false
+            at = close + 1
+        }
+        return at == end
     }
 
     /**

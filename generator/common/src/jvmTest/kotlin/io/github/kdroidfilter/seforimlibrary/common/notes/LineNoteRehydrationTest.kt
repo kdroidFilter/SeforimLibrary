@@ -29,6 +29,9 @@ class LineNoteRehydrationTest {
             "<sup class=\"footnote-marker\"></sup><i class=\"footnote\">ראשונה</i><i class=\"footnote\">שנייה</i> סוף",
             "<p><b>א</b><i class=\"footnote\">הערה</i></p>המשך",
             "<p>סוף<i class=\"footnote\">הערה</i></p>",
+            "<p><b><sup class=\"footnote-marker\"></sup><i class=\"footnote\">הערה זרזיר</i>המשך</b></p>",
+            "<p><b><sup class=\"footnote-marker\"></sup><i class=\"footnote\">ראשונה</i><i class=\"footnote\">שנייה</i>המשך</b></p>",
+            "<i class=\"footnote\">לפני</i><p><b><sup>1</sup>המשך</b></p>",
         )
         val path = tmp.newFolder().toPath().resolve("seforim.db")
         JdbcSqliteDriver("jdbc:sqlite:${path.toAbsolutePath()}").use { SeforimDb.Schema.create(it) }
@@ -54,6 +57,10 @@ class LineNoteRehydrationTest {
                 if (original.startsWith("<sup class=\"footnote-marker\"></sup>")) {
                     assertEquals(listOf(true, false), notes.map { it.hasMarker }, "empty SQL marker is anchored")
                     assertEquals(listOf(0, 0), notes.map { it.charPos }, "adjacent bodies share a position")
+                }
+                if (original.startsWith("<p><b><sup class=\"footnote-marker\"></sup>")) {
+                    assertEquals(List(notes.size) { 0 }, notes.map { it.charPos })
+                    assertEquals(listOf(true) + List(notes.size - 1) { false }, notes.map { it.hasMarker })
                 }
                 assertEquals(original, LineNoteRehydration.rehydrate(stored, notes).text)
             }
@@ -107,6 +114,21 @@ class LineNoteRehydrationTest {
                 "<b>א<sup class=\"footnote-marker\"></sup></b>", listOf(NoteAt(1, "ה", true)),
             ).text,
         )
+        val marker = "<sup class=\"footnote-marker\"></sup>"
+        val wrapped = "<p><b>${marker}המשך</b></p>"
+        assertEquals(
+            "<p><b>$marker$body${body}המשך</b></p>",
+            LineNoteRehydration.rehydrate(wrapped, listOf(NoteAt(0, "ה", true), NoteAt(0, "ה"))).text,
+        )
+        assertEquals(body + wrapped, LineNoteRehydration.rehydrate(wrapped, listOf(NoteAt(0, "ה"))).text)
+        for (gap in listOf(" ", "&nbsp;", "א", "<broken")) {
+            val stored = "<p>$gap${marker}המשך</p>"
+            assertEquals(
+                body + stored,
+                LineNoteRehydration.rehydrate(stored, listOf(NoteAt(0, "ה", true))).text,
+                "anchored metadata cannot skip visible text, entities, whitespace or incomplete tags",
+            )
+        }
     }
 
     @Test

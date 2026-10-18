@@ -728,7 +728,9 @@ internal fun rehydrateLinkerLine(
         }
         if (noteIndex in anchoredNotes) {
             val marker = markers.getOrNull(anchoredSeen++)
-            if (marker != null && at == marker.first) at = marker.last + 1
+            if (marker != null && at <= marker.first && linkerOnlyTagsBetween(stored, at, marker.first)) {
+                at = marker.last + 1
+            }
         }
         while (at < stored.length) {
             val close = LINKER_INLINE_CLOSE.matchAt(stored, at) ?: break
@@ -755,6 +757,17 @@ private val LINKER_INLINE_CLOSE = Regex(
     """</(?:b|i|em|strong|u|s|strike|span|sup|sub|small|big|font|del|ins|a|abbr|acronym|cite|code|dfn|kbd|q|samp|tt|var|mark|bdi|bdo|ruby|rt|rp)\s*>""",
     RegexOption.IGNORE_CASE,
 )
+
+private fun linkerOnlyTagsBetween(html: String, from: Int, end: Int): Boolean {
+    var at = from
+    while (at < end) {
+        if (html[at] != '<') return false
+        val close = html.indexOf('>', at + 1)
+        if (close < 0 || close >= end) return false
+        at = close + 1
+    }
+    return at == end
+}
 
 /** Raw [start, end) of the rehydrated line in the stored one, or null when it touches a note body. */
 internal fun linkerStoredRange(noteBodies: List<IntRange>, start: Int, end: Int): Pair<Int, Int>? {

@@ -47,7 +47,7 @@ class DumpLinesTest {
     @Test
     fun `an empty SQL marker remains anchored and adjacent bodies keep note order`() {
         val marker = "<sup class=\"footnote-marker\"></sup>"
-        val books = listOf(TestBook(1, "src", "Book", listOf("$marker סוף")))
+        val books = listOf(TestBook(1, "src", "Book", listOf("<p><b>$marker סוף</b></p>")))
         for (split in listOf(false, true)) {
             val snapshot = dumpBooks(split, books) { c ->
                 c.createStatement().use { st ->
@@ -61,7 +61,7 @@ class DumpLinesTest {
                 assertEquals(listOf(true, false), loadLineNotes(c).values.single().map { it.hasMarker })
             }
             assertEquals(
-                listOf("src|Book|0|$marker<i class=\"footnote\">ראשונה</i><i class=\"footnote\">שנייה</i> סוף|Book"),
+                listOf("src|Book|0|<p><b>$marker<i class=\"footnote\">ראשונה</i><i class=\"footnote\">שנייה</i> סוף</b></p>|Book"),
                 snapshot.rows,
             )
         }

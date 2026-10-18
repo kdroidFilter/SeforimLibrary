@@ -461,6 +461,11 @@ class GenerateLinkerLinksTest {
             Case("<b>אב</ b></p>", listOf(2 to "a")),
             Case("<b>סוף</b><br>", listOf(3 to "a")),
             Case("😀&amp; סוף", listOf(2 to "a", 3 to "b")),
+            Case("<p><b><sup class=\"footnote-marker\"></sup>המשך</b></p>", listOf(0 to "a", 0 to "b"), setOf(0)),
+            Case("<p><b><sup class=\"footnote-marker\"></sup>המשך</b></p>", listOf(0 to "before")),
+            Case("<p> <sup class=\"footnote-marker\"></sup>המשך</p>", listOf(0 to "a"), setOf(0)),
+            Case("<p>&nbsp;<sup class=\"footnote-marker\"></sup>המשך</p>", listOf(0 to "a"), setOf(0)),
+            Case("<p><broken<sup class=\"footnote-marker\"></sup>המשך</p>", listOf(0 to "a"), setOf(0)),
         )
         for ((stored, notes, anchored) in cases) {
             val shared = LineNoteRehydration.rehydrate(stored, notes.mapIndexed { i, note ->
@@ -478,18 +483,31 @@ class GenerateLinkerLinksTest {
     @Test
     fun anEmptyMarkerIsReadFromSqlAndAdjacentBodiesKeepTheirOrder() {
         val marker = "<sup class=\"footnote-marker\"></sup>"
-        val stored = "$marker Genesis 1:1"
         val notes = listOf(0 to "ראשונה", 0 to "שנייה")
-        val read = "$marker<i class=\"footnote\">ראשונה</i><i class=\"footnote\">שנייה</i> Genesis 1:1"
-        val start = read.indexOf("Genesis")
-        for (split in listOf(false, true)) {
-            val run = runLinkerMain(
-                record(start, start + 11, base = 0, hashedContent = read) + "\n", strict = "true",
-                splitLineContent = split, storedSource = stored, notes = notes, anchoredNotes = setOf(0),
-            )
-            assertEquals(null, run.failure)
-            // Anchors use visible offsets in stored text: the empty sup contributes none.
-            assertEquals(listOf(1 to 12), run.anchorRanges)
+        val bodies = "<i class=\"footnote\">ראשונה</i><i class=\"footnote\">שנייה</i>"
+        for ((prefix, suffix) in listOf("" to "", "<p><b>" to "</b></p>")) {
+            val stored = "$prefix$marker Genesis 1:1$suffix"
+            val read = "$prefix$marker$bodies Genesis 1:1$suffix"
+            val start = read.indexOf("Genesis")
+            for (split in listOf(false, true)) {
+                val run = runLinkerMain(
+                    record(start, start + 11, base = 0, hashedContent = read) + "\n", strict = "true",
+                    splitLineContent = split, storedSource = stored, notes = notes, anchoredNotes = setOf(0),
+                )
+                assertEquals(null, run.failure)
+                assertEquals(1L, run.links)
+                // Anchors use visible offsets in stored text: the empty sup contributes none.
+                assertEquals(listOf(1 to 12), run.anchorRanges)
+            }
+            if (prefix.isNotEmpty()) {
+                val misplaced = bodies + stored
+                val staleStart = misplaced.indexOf("Genesis")
+                val stale = runLinkerMain(
+                    record(staleStart, staleStart + 11, base = 0, hashedContent = misplaced) + "\n",
+                    strict = null, storedSource = stored, notes = notes, anchoredNotes = setOf(0),
+                )
+                assertEquals(0L, stale.links, "a hash from bodies placed outside the paragraph is stale")
+            }
         }
     }
 
