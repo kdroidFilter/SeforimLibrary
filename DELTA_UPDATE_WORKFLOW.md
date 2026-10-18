@@ -265,6 +265,13 @@ them is an upsert. The client checks the pre-apply hash in schema-6 order and th
 post-apply hash in schema-7 order. An app that reads schema 6 only gets the planner's
 "update the app" for that edge and keeps its schema-6 DB.
 
+Schema 7 also adds `book.contentHash INTEGER NOT NULL DEFAULT 0` (`SCHEMA_7_COLUMNS`), so the
+6 -> 7 patch carries an `ALTER TABLE "book" ADD COLUMN` migration and upserts every book.
+`stampSchemaVersion` computes it for every book (`BookContentHash.kt`) after every line and
+`line_note` writer: an opaque 64-bit fingerprint of the book's line text (decoded, so
+compression does not change it) and its notes. Same content gives the same value in every
+build, so a 7 -> 7 delta upserts only the books whose text changed. 0 means unknown.
+
 ---
 
 ## 2. CDN / static-host layout

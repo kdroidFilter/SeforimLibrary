@@ -11,7 +11,7 @@
     "generation": ["id", "name"],
     "category": ["heDesc", "heShortDesc", "id", "level", "orderIndex", "parentId", "title"],
     "category_closure": ["ancestorId", "descendantId"],
-    "book": ["categoryId", "collectiveTitleEn", "collectiveTitleHe", "dependenceType", "hasAltStructures", "hasCommentaryConnection", "hasNekudot", "hasOtherConnection", "hasReferenceConnection", "hasSourceConnection", "hasTargumConnection", "hasTeamim", "heDesc", "heRef", "heShortDesc", "id", "isBaseBook", "notesContent", "orderIndex", "sourceId", "title", "totalLines"],
+    "book": ["categoryId", "collectiveTitleEn", "collectiveTitleHe", "contentHash", "dependenceType", "hasAltStructures", "hasCommentaryConnection", "hasNekudot", "hasOtherConnection", "hasReferenceConnection", "hasSourceConnection", "hasTargumConnection", "hasTeamim", "heDesc", "heRef", "heShortDesc", "id", "isBaseBook", "notesContent", "orderIndex", "sourceId", "title", "totalLines"],
     "book_author": ["authorId", "bookId"],
     "book_base_text": ["baseBookId", "bookId"],
     "book_topic": ["bookId", "topicId"],

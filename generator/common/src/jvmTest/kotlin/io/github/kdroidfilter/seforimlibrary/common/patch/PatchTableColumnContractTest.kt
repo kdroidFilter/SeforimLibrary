@@ -68,7 +68,11 @@ class PatchTableColumnContractTest {
             v.jsonArray.map { it.jsonPrimitive.content }
         }
 
-        val actual = freshDatabaseColumns(tables, split, compressed)
+        // A frozen fixture predates the columns a later schema added to its tables.
+        val laterColumns = if (dbSchemaVersion < 7) SCHEMA_7_COLUMNS else emptyMap()
+        val actual = freshDatabaseColumns(tables, split, compressed).mapValues { (table, cols) ->
+            cols - laterColumns[table].orEmpty()
+        }
 
         val hint = "bump db_schema_version or add a column migration"
         val followUp = "If you bump db_schema_version, add a NEW " +

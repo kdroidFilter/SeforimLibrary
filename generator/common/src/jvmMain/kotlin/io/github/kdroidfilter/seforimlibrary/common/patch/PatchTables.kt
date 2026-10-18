@@ -119,6 +119,9 @@ internal val PATCH_TABLES_IN_FK_ORDER: List<PatchTable> = listOf(
 internal val SCHEMA_7_TABLES: Set<String> =
     setOf("book_banner", "book_protection", "line_divine_name", "line_note", "line_note_divine_name")
 
+/** Columns schema 7 added to tables older schemas already had; a 6 -> 7 delta adds them by ADD COLUMN. */
+internal val SCHEMA_7_COLUMNS: Map<String, Set<String>> = mapOf("book" to setOf("contentHash"))
+
 /** Schema-6 contract, frozen. */
 internal val PATCH_TABLES_SCHEMA_6: List<PatchTable> =
     PATCH_TABLES_IN_FK_ORDER.filterNot { it.name in SCHEMA_7_TABLES }

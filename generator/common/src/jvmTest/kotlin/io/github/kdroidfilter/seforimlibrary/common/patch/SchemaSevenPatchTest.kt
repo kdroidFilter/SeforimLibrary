@@ -64,6 +64,52 @@ class SchemaSevenPatchTest {
     }
 
     @Test
+    fun `a 6 to 7 delta adds book contentHash by migration and carries every value`() {
+        val prev = schemaSixDb("prev.db")
+        val next = schemaSevenDb("next.db")
+        connect(next).use { conn ->
+            conn.createStatement().use { st ->
+                st.execute("ALTER TABLE book ADD COLUMN contentHash INTEGER NOT NULL DEFAULT 0")
+                st.execute("UPDATE book SET contentHash = CASE id WHEN 1 THEN -7 ELSE 9007199254740993 END")
+            }
+        }
+        val patch = path("patch.db")
+        val produced = PatchDbProducer().produce(prev, next, patch, fromVersion = 30, toVersion = 31, fromSchemaVersion = 6, toSchemaVersion = 7)
+
+        val migrations = query(patch, "SELECT sql FROM migrations ORDER BY version").map { it.single() as String }
+        assertTrue("ALTER TABLE \"book\" ADD COLUMN \"contentHash\" INTEGER NOT NULL DEFAULT 0" in migrations, migrations.toString())
+        assertEquals(2, produced.upsertCounts.getValue("book"))
+
+        val target = copy(prev)
+        connect(target).use { PatchApplier().apply(it, patch, expectedToContentHash = hash(next, 7), expectedToSchemaVersion = 7) }
+        assertEquals(hash(next, 7), hash(target, 7))
+        assertEquals(
+            listOf(listOf<Any?>(1, -7), listOf<Any?>(2, 9007199254740993L)),
+            query(target, "SELECT id, contentHash FROM book ORDER BY id"),
+        )
+    }
+
+    @Test
+    fun `a 7 to 7 delta upserts only the books whose contentHash changed`() {
+        val prev = schemaSevenDb("prev.db")
+        val next = schemaSevenDb("next.db")
+        for (db in listOf(prev, next)) {
+            connect(db).use { conn ->
+                conn.createStatement().use { it.execute("ALTER TABLE book ADD COLUMN contentHash INTEGER NOT NULL DEFAULT 0") }
+            }
+        }
+        connect(prev).use { conn -> conn.createStatement().use { it.execute("UPDATE book SET contentHash = id * 11") } }
+        connect(next).use { conn -> conn.createStatement().use { it.execute("UPDATE book SET contentHash = CASE id WHEN 2 THEN 5 ELSE id * 11 END") } }
+        val patch = path("patch.db")
+        val produced = PatchDbProducer().produce(prev, next, patch, fromVersion = 31, toVersion = 32, fromSchemaVersion = 7, toSchemaVersion = 7)
+
+        assertEquals(1, produced.upsertCounts.getValue("book"))
+        val target = copy(prev)
+        connect(target).use { PatchApplier().apply(it, patch, expectedToContentHash = hash(next, 7), expectedToSchemaVersion = 7) }
+        assertEquals(listOf(listOf<Any?>(1, 11), listOf<Any?>(2, 5)), query(target, "SELECT id, contentHash FROM book ORDER BY id"))
+    }
+
+    @Test
     fun `stale rows of a schema 7 table that prev carried physically are reset`() {
         val prev = schemaSixDb("prev.db", staleNote = true)
         val next = schemaSevenDb("next.db")
@@ -172,6 +218,22 @@ class SchemaSevenPatchTest {
             ),
             tableHashes(tablesDb("empty.db")),
         )
+    }
+
+    @Test
+    fun `cross-repo golden of book contentHash at the int64 edges`() {
+        val db = path("book.db")
+        connect(db).use { conn ->
+            conn.createStatement().use { st ->
+                st.execute("CREATE TABLE book (id INTEGER PRIMARY KEY NOT NULL, contentHash INTEGER NOT NULL DEFAULT 0)")
+                st.execute(
+                    "INSERT INTO book VALUES (1, -3371204337321344343), (2, 0), " +
+                        "(3, 9223372036854775807), (4, -9223372036854775808)",
+                )
+            }
+        }
+        val actual = connect(db).use { LogicalContentHasher(listOf("book")).computeReport(it).tableHashes }
+        assertEquals(mapOf("book" to GOLDEN_BOOK_CONTENT_HASH), actual)
     }
 
     @Test
@@ -306,5 +368,6 @@ class SchemaSevenPatchTest {
         const val GOLDEN_LINE_NOTE_EMPTY = "027c225d40b02cfc2025d0c279668dcd341af7ab68c725b3b187fac0dbdce8a8"
         const val GOLDEN_LINE_NOTE_DIVINE_NAME_FULL = "d9a81d17557a10c109fe5ab430ce0fd408c569366db8cddadb4124e945d8349c"
         const val GOLDEN_LINE_NOTE_DIVINE_NAME_EMPTY = "4c7710872d55a8575723dac795a2de02e09085ec0643712cc4aa41014d5320aa"
+        const val GOLDEN_BOOK_CONTENT_HASH = "eb5db532be575315bed061263dc4fce8edf21bc4edf27556f8aa689a3c29eb43"
     }
 }
