@@ -263,8 +263,13 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
             "generator/sefariasqlite/src/jvmMain/kotlin/io/github/kdroidfilter/"
             "seforimlibrary/sefariasqlite/GenerateLinkerLinks.kt"
         )
-        self.assertIn(disk_allocator, checkout)
-        self.assertIn(importer, checkout)
+        range_refs = (
+            "generator/sefariasqlite/src/jvmMain/kotlin/io/github/kdroidfilter/"
+            "seforimlibrary/sefariasqlite/SefariaRangeRefs.kt"
+        )
+        for source in (disk_allocator, importer, range_refs):
+            self.assertIn(source, checkout)
+            self.assertIn(f"            {source}\n", overlay)
         self.assertIn("if: inputs.relink_recovery_run_id != ''", overlay)
         self.assertIn('install -m 0644 ".pipeline-control/$file" "$file"', overlay)
         self.assertIn('legacy = \'jvmArgs = listOf("-Xmx6g")\'', overlay)
@@ -286,6 +291,36 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
             self.workflow.index("      - name: Apply LINKER links (Phase-2)\n"),
         )
         self.assertIn('"$GRADLE" :sefariasqlite:generateLinkerLinks', apply_links)
+
+    def test_recovery_overlay_carries_every_new_phase2_dependency(self):
+        # The overlay compiles this revision's importer against a pinned payload, so
+        # each same-package file it calls must be overlaid too, or be one of the files
+        # whose API it has used unchanged since recovery existed (otzaria#2490).
+        overlay = self.step("Overlay pinned recovery Phase-2 implementation")
+        package = (
+            Path(__file__).parents[2] / "generator" / "sefariasqlite" / "src" / "jvmMain"
+            / "kotlin" / "io" / "github" / "kdroidfilter" / "seforimlibrary" / "sefariasqlite"
+        )
+        overlaid = set(re.findall(r"sefariasqlite/([A-Za-z]+\.kt)\n", overlay))
+        pinned = {"SefariaImportModels.kt", "SefariaImportRefs.kt", "LinkerSidecar.kt"}
+        importer = (package / "GenerateLinkerLinks.kt").read_text(encoding="utf-8")
+        declaration = re.compile(
+            r"^(?:internal |public )?(?:data |sealed |enum |abstract |open )?"
+            r"(?:fun|class|object|val|const val|typealias|interface)\s+(?:[A-Za-z_.]+\.)?([A-Za-z_]\w*)",
+            re.M,
+        )
+        own = set(declaration.findall(importer))  # its own "main" and helpers
+        used = {}
+        for source in package.glob("*.kt"):
+            if source.name == "GenerateLinkerLinks.kt":
+                continue
+            for name in declaration.findall(source.read_text(encoding="utf-8")):
+                if name not in own and re.search(rf"\b{name}\b", importer):
+                    used.setdefault(source.name, set()).add(name)
+        self.assertIn("SefariaRangeRefs.kt", used)
+        for source, names in used.items():
+            with self.subTest(source=source):
+                self.assertIn(source, overlaid | pinned, sorted(names))
 
     def test_phase2_implementation_commit_is_part_of_release_identity(self):
         lookup = self.step("Find and verify exact provenance")
