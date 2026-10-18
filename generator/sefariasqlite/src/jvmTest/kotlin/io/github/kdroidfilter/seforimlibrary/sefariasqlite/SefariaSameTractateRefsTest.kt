@@ -88,6 +88,12 @@ class SefariaSameTractateRefsTest {
     }
 
     @Test
+    fun `hatosaf abbreviation is Tosafot`() {
+        assertEquals("והקשו התוספ' (דף ב. ד\"ה אמר)", SefariaSameTractateRefs.strip("והקשו התוספ' (שבת דף ב. ד\"ה אמר)", "שבת"))
+        assertEquals("בתוספ' (שבת פ\"ג)", SefariaSameTractateRefs.strip("בתוספ' (שבת פ\"ג)", "שבת"))
+    }
+
+    @Test
     fun `long runs of spaces or tags do not depend on the stack`() {
         val cases = listOf(
             "בירושלמי" + " ".repeat(1_000_000) + "(שבת ג,א)" to null,

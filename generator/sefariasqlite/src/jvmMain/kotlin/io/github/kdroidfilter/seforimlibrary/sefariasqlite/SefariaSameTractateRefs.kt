@@ -39,8 +39,9 @@ internal object SefariaSameTractateRefs {
             """(?:$WS*[.:]|$WS*,$WS*[אב](?![א-ת])|$WS+ע["'״׳]?[אב](?![א-ת])|$WS+[אב]['׳]?(?=[\s\x1c-\x1f)\],.;:])|(?=[)\]]))""",
     )
     // ירושלמי/תוספתא after any prefix letters, or abbreviated; then spaces, direction marks or tags.
+    // "התוספ'" is Tosafot, not Tosefta.
     // Possessive: a backtracking group of alternatives recurses per repetition in java.util.regex.
-    private const val OTHER_WORK = """(?<![א-ת])[ובדהכלמש]{0,4}(?:ירושלמי|ירושל['׳]|ירוש['׳]|ירו['׳]|תוספתא|תוספת['׳]|תוספ['׳])""" +
+    private const val OTHER_WORK = """(?<![א-ת])[ובדהכלמש]{0,4}(?:ירושלמי|ירושל['׳]|ירוש['׳]|ירו['׳]|תוספתא|תוספת['׳]|(?<!ה)תוספ['׳])""" +
         """(?:[\s\x1c-\x1f\u200e\u200f]|<[^<>]*>)*+"""
 
     private class Patterns(val relative: Regex, val bracketed: Regex)
