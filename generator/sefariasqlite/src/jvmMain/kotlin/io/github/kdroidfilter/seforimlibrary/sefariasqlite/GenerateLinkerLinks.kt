@@ -138,6 +138,8 @@ fun main(args: Array<String>) = runBlocking {
             val existingLast = lastByBase[base]
             if (existingLast == null || e.lineIndex > existingLast.lineIndex) lastByBase[base] = e
         }
+        // A whole daf, chapter or amud of a commentary is not a segment ref (otzaria#2490).
+        val sections = SectionRefIndex.build(allRefs)
         logger.i { "Sidecar: ${allRefs.size} refs, ${refsByCanonical.size} canonical keys" }
 
         // LINKER is a generated, type-owned projection. Replace it by type so
@@ -311,7 +313,9 @@ fun main(args: Array<String>) = runBlocking {
                     val targetCandidates = resolveRefs(rec.target_ref, refsByCanonical, refsByBase)
                         .distinctBy { it.path to it.lineIndex }
                     if (targetCandidates.size > 1) { ambiguousTarget++; continue }
-                    val tgtEntry = targetCandidates.singleOrNull()
+                    // Only a citation with no segment-level match can name a whole section.
+                    val section = if (targetCandidates.isEmpty()) sectionTarget(rec.target_ref, sections) else null
+                    val tgtEntry = targetCandidates.singleOrNull() ?: section?.first
                     val tgtLineId = tgtEntry?.let { lineIdByRefKey[it.path to it.lineIndex] }
                     val tgtMeta = tgtLineId?.let { lineMeta[it] }
                     if (tgtLineId == null || tgtMeta == null) { unresolvedTarget++; continue }
@@ -368,7 +372,8 @@ fun main(args: Array<String>) = runBlocking {
 
                     // Multi-line citation scope (whole amud/section or dashed range) →
                     // remember its end for a link_range(side=1) row.
-                    val endEntry = resolveRefEnd(rec.target_ref, refsByCanonical, refsByBase, lastByBase)
+                    val endEntry = section?.second
+                        ?: resolveRefEnd(rec.target_ref, refsByCanonical, refsByBase, lastByBase)
                     if (endEntry != null &&
                         endEntry.path == tgtEntry.path &&
                         endEntry.lineIndex > tgtEntry.lineIndex

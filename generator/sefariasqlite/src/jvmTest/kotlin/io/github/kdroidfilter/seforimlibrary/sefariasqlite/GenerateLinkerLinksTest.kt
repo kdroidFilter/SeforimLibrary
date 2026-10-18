@@ -290,6 +290,7 @@ class GenerateLinkerLinksTest {
         val links: Long,
         val anchors: Long,
         val anchorRanges: List<Pair<Int, Int>> = emptyList(),
+        val targetSpans: List<Pair<Int, Int?>> = emptyList(),
     )
 
     // Runs the real entry point (reflective main) on a fixture DB + build_state + sidecar.
@@ -298,6 +299,7 @@ class GenerateLinkerLinksTest {
         strict: String?,
         splitLineContent: Boolean = false,
         storedSource: String = sourceContent,
+        targets: List<RefEntry> = listOf(RefEntry("Genesis 1:1", "TgtBook 1:1", "Tanakh/Genesis", 1)),
     ): LinkerRun {
         val dir = Files.createTempDirectory("linkerMainFixture")
         val artifacts = Files.createDirectory(dir.resolve("artifacts"))
@@ -316,10 +318,11 @@ class GenerateLinkerLinksTest {
                 val catId = repo.insertCategory(Category(0, null, "Cat", level = 0, order = 1))
                 repo.insertBook(Book(id = 1, categoryId = catId, sourceId = sourceId, title = "TgtBook", heRef = "TgtBook"))
                 repo.insertBook(Book(id = 2, categoryId = catId, sourceId = sourceId, title = "SrcBook", heRef = "SrcBook"))
-                repo.insertLinesBatch(listOf(
-                    Line(id = 10, bookId = 1, lineIndex = 0, content = "target", heRef = "TgtBook 1:1"),
-                    Line(id = 20, bookId = 2, lineIndex = 0, content = storedSource, heRef = "SrcBook 1"),
-                ))
+                repo.insertLinesBatch(
+                    targets.mapIndexed { i, t ->
+                        Line(id = 10L + i, bookId = 1, lineIndex = t.lineIndex - 1, content = "target", heRef = t.heRef)
+                    } + Line(id = 20, bookId = 2, lineIndex = 0, content = storedSource, heRef = "SrcBook 1"),
+                )
                 repo.executeRawQuery("INSERT INTO connection_type(name) VALUES ('${ConnectionType.LINKER.name}')")
                 var id = 0L
                 driver.executeQuery(null, "SELECT id FROM connection_type WHERE name = 'LINKER'",
@@ -343,10 +346,10 @@ class GenerateLinkerLinksTest {
                 ),
                 buildState,
             )
-            val target = RefEntry("Genesis 1:1", "TgtBook 1:1", "Tanakh/Genesis", 1)
             writeLinkerSidecar(
-                sidecar.toString(), listOf(target), mapOf((target.path to 0) to 10L),
-                mapOf(target.path to "TgtBook"), "Sefaria",
+                sidecar.toString(), targets,
+                targets.mapIndexed { i, t -> (t.path to t.lineIndex - 1) to 10L + i }.toMap(),
+                targets.associate { it.path to "TgtBook" }, "Sefaria",
             )
 
             System.setProperty("seforimDb", db.toString())
@@ -369,11 +372,21 @@ class GenerateLinkerLinksTest {
                     ).use { rs -> buildList { while (rs.next()) add(rs.getInt(1) to rs.getInt(2)) } }
                 }
             }
+            val spans = DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
+                c.createStatement().use { st ->
+                    st.executeQuery(
+                        "SELECT l.targetLineIndex, r.endLineIndex FROM link l " +
+                            "LEFT JOIN link_range r ON r.linkId = l.id AND r.side = 1 " +
+                            "WHERE l.connectionTypeId = $linkerTypeId ORDER BY l.targetLineIndex",
+                    ).use { rs -> buildList { while (rs.next()) add(rs.getInt(1) to rs.getObject(2)?.let { (it as Number).toInt() }) } }
+                }
+            }
             return LinkerRun(
                 failure,
                 count("SELECT COUNT(*) FROM ($linkerLinks)"),
                 count("SELECT COUNT(*) FROM link_anchor WHERE linkId IN ($linkerLinks)"),
                 ranges,
+                spans,
             )
         } finally {
             keys.forEach { key ->
@@ -468,6 +481,20 @@ class GenerateLinkerLinksTest {
         val run = runLinkerMain(record(8, 19, base = 0, hashedContent = stored) + "\n", strict = "true", storedSource = stored)
         assertEquals(null, run.failure)
         assertEquals(listOf(8 to 19), run.anchorRanges)
+    }
+
+    @Test
+    fun aWholeDafCitationLinksItsFirstSegmentAndCoversBothAmudim() {
+        val daf = listOf(
+            RefEntry("Gittin 51a:1", "גיטין, נא., א", "Talmud/Gittin", 1),
+            RefEntry("Gittin 51a:2", "גיטין, נא., ב", "Talmud/Gittin", 2),
+            RefEntry("Gittin 51b:1", "גיטין, נא:, א", "Talmud/Gittin", 3),
+            RefEntry("Gittin 52a:1", "גיטין, נב., א", "Talmud/Gittin", 4),
+        )
+        val run = runLinkerMain(record(4, 15, base = 0, target = "Gittin 51") + "\n", strict = "true", targets = daf)
+        assertEquals(null, run.failure)
+        assertEquals(1L, run.links)
+        assertEquals(listOf(0 to 2), run.targetSpans)
     }
 
     @Test

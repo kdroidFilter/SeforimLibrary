@@ -102,6 +102,50 @@ class SefariaRangeRefsTest {
         assertNull(index.lastUnder("rashi on genesis 9"))
     }
 
+    // ───── SectionRefIndex / sectionTarget (otzaria#2490) ─────
+
+    @Test
+    fun sectionKeysCoverEveryProperPrefixAndTheWholeDaf() {
+        assertEquals(
+            listOf("rashi on gittin 51a", "rashi on gittin 51a:3", "rashi on gittin 51"),
+            sectionKeys("rashi on gittin 51a:3:1"),
+        )
+        assertEquals(listOf("gittin 51"), sectionKeys("gittin 51a"))
+        assertEquals(listOf("jerusalem talmud megillah 1", "jerusalem talmud megillah 1:2"),
+            sectionKeys("jerusalem talmud megillah 1:2:3"))
+        assertEquals(emptyList(), sectionKeys("sifra"))
+    }
+
+    private val talmud = listOf(
+        RefEntry("Tosafot on Gittin 51a:1:1", "", "Tosafot on Gittin", 10),
+        RefEntry("Tosafot on Gittin 51a:2:1", "", "Tosafot on Gittin", 11),
+        RefEntry("Tosafot on Gittin 51b:1:1", "", "Tosafot on Gittin", 12),
+        RefEntry("Tosafot on Gittin 52a:1:1", "", "Tosafot on Gittin", 13),
+        RefEntry("Tosafot on Gittin 53b:4:1", "", "Tosafot on Gittin", 14),
+    )
+
+    @Test
+    fun sectionTargetSpansAWholeDafOrAnAmud() {
+        val index = SectionRefIndex.build(talmud)
+        fun span(ref: String) = sectionTarget(ref, index)?.let { it.first.lineIndex to it.second.lineIndex }
+        assertEquals(10 to 12, span("Tosafot on Gittin 51"))
+        assertEquals(10 to 11, span("Tosafot on Gittin 51a"))
+        assertNull(span("Tosafot on Gittin 54"))
+        // "X-Y" is often perek-halakha notation, not a range of sections.
+        assertNull(span("Tosafot on Gittin 51b-53"))
+        // A segment is not a section: resolveRefs owns it.
+        assertNull(span("Tosafot on Gittin 51a:1:1"))
+    }
+
+    @Test
+    fun aSectionKeySharedByTwoBooksIsNotResolved() {
+        val index = SectionRefIndex.build(
+            listOf(RefEntry("Book 1:1", "", "A", 1), RefEntry("Book 1:2", "", "B", 1)),
+        )
+        assertNull(index.firstUnder("book 1"))
+        assertNull(sectionTarget("Book 1", index))
+    }
+
     // ───── resolveRefs: intermediate-level range start (the former drop bug) ─────
 
     @Test

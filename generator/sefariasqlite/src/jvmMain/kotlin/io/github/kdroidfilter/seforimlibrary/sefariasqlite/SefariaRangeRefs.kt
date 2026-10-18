@@ -76,6 +76,64 @@ internal class PathRefPrefixIndex private constructor(
     }
 }
 
+/**
+ * Corpus-wide index: canonical citation of a whole section → its first and last
+ * segment. Keys are every proper address prefix ("tosafot on gittin 51a",
+ * "jerusalem talmud megillah 1") and, for an amud, its whole daf ("gittin 51",
+ * Sefaria's normal form of "gittin 51a-51b"). A key shared by two books is dropped.
+ */
+internal class SectionRefIndex private constructor(
+    private val first: Map<String, RefEntry>,
+    private val last: Map<String, RefEntry>,
+) {
+    fun firstUnder(section: String): RefEntry? = first[section]
+
+    fun lastUnder(section: String): RefEntry? = last[section]
+
+    companion object {
+        fun build(entries: List<RefEntry>): SectionRefIndex {
+            val first = HashMap<String, RefEntry>()
+            val last = HashMap<String, RefEntry>()
+            val shared = HashSet<String>()
+            for (entry in entries) {
+                for (key in sectionKeys(canonicalCitation(entry.ref))) {
+                    val lowest = first[key]
+                    if (lowest != null && lowest.path != entry.path) shared += key
+                    if (lowest == null || entry.lineIndex < lowest.lineIndex) first[key] = entry
+                    val highest = last[key]
+                    if (highest == null || entry.lineIndex > highest.lineIndex) last[key] = entry
+                }
+            }
+            first.keys.removeAll(shared)
+            last.keys.removeAll(shared)
+            return SectionRefIndex(first, last)
+        }
+    }
+}
+
+/**
+ * First and last segment of a citation naming one whole section ("gittin 51").
+ * A dashed citation is not one section: the linker reads "פ"ב-ח" notation as a range.
+ */
+internal fun sectionTarget(citation: String, sections: SectionRefIndex): Pair<RefEntry, RefEntry>? {
+    val canonical = canonicalCitation(citation)
+    val start = sections.firstUnder(canonical) ?: return null
+    val end = sections.lastUnder(canonical) ?: return null
+    return start to end
+}
+
+private val AMUD_REGEX = Regex("(\\d+)[ab]")
+
+/** "rashi on gittin 51a:3:1" → ["rashi on gittin 51a", "rashi on gittin 51a:3", "rashi on gittin 51"]. */
+internal fun sectionKeys(canonical: String): List<String> {
+    if (TRAILING_ADDRESS_REGEX.find(canonical) == null) return emptyList()
+    val prefixes = addressPrefixes(canonical)
+    val keys = prefixes.dropLast(1).toMutableList()
+    val amud = AMUD_REGEX.matchEntire(prefixes[0].substringAfterLast(' '))
+    if (amud != null) keys += prefixes[0].substringBeforeLast(' ') + " " + amud.groupValues[1]
+    return keys
+}
+
 /** "title 13:11:1" → ["title 13", "title 13:11", "title 13:11:1"]. */
 internal fun addressPrefixes(canonical: String): List<String> {
     val m = TRAILING_ADDRESS_REGEX.find(canonical) ?: return listOf(canonical)
