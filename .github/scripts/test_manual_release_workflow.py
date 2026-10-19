@@ -247,7 +247,7 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
         self.assertIn('size=20G', mount)
         self.assertIn('$((30*1024*1024))', mount)
         self.assertIn('(<30 GiB)', mount)
-        self.assertIn('generatorHeap=8g', heaps)
+        self.assertIn('generatorHeap=13g', heaps)
         self.assertIn('linkerHeap=12g', heaps)
 
     def test_recovery_overlays_exact_phase2_sources_from_workflow_revision(self):
@@ -2108,7 +2108,7 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
         for line in (
             "org.gradle.jvmargs=-Xmx3g",
             "kotlin.compiler.execution.strategy=in-process",
-            "generatorHeap=8g",
+            "generatorHeap=13g",
             "linkerHeap=12g",
         ):
             self.assertEqual(heaps.count(line + "\n"), 1, line)

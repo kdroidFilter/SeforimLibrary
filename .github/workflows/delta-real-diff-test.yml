@@ -122,12 +122,12 @@ jobs:
             echo "::error::${WORKERS} Runner.Worker processes active — another job holds this host. Rerun when it is idle."
             exit 1
           fi
-          # One generator fork is -Xmx8g; less than ~10 GiB free is a late OOM
+          # One generator fork is -Xmx13g; less than ~16 GiB free is a late OOM
           # instead of a clean refusal.
           AVAIL_KB=$(awk '/MemAvailable/{print $2}' /proc/meminfo)
           echo "MemAvailable: $((AVAIL_KB/1024/1024)) GiB"
-          if [ "$AVAIL_KB" -lt $((10*1024*1024)) ]; then
-            echo "::error::only $((AVAIL_KB/1024/1024)) GiB available (<10 GiB). Aborting before work."
+          if [ "$AVAIL_KB" -lt $((16*1024*1024)) ]; then
+            echo "::error::only $((AVAIL_KB/1024/1024)) GiB available (<16 GiB). Aborting before work."
             exit 1
           fi
           # Two ~7 GiB databases plus the extracted sources live side by side.
@@ -157,7 +157,7 @@ jobs:
           cat > "$MANAGED" <<EOF
           org.gradle.jvmargs=-Xmx3g
           kotlin.compiler.execution.strategy=in-process
-          generatorHeap=8g
+          generatorHeap=13g
           linkerHeap=12g
           EOF
           awk -v b="$BEGIN" -v e="$END" '

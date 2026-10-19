@@ -705,7 +705,8 @@ jobs:
           # atomic publish + Gradle + base). Demand a near-idle box up front
           # rather than risk a late OOM mid-build. The old 24 GiB gate was
           # calibrated against a single ~7 GiB DB copy and understated the
-          # publish, which holds two. Other generator forks stay capped at 8 GiB.
+          # publish, which holds two. Other generator forks are capped at 13 GiB
+          # (8 GiB OOMed on 2026-10-19; 13 + ~11 tmpfs + 3 daemon fits this gate).
           AVAIL_KB=$(awk '/MemAvailable/{print $2}' /proc/meminfo)
           echo "MemAvailable: $((AVAIL_KB/1024/1024)) GiB"
           if [ "$AVAIL_KB" -lt $((30*1024*1024)) ]; then
@@ -739,7 +740,7 @@ jobs:
           cat > "$MANAGED" <<EOF
           org.gradle.jvmargs=-Xmx3g
           kotlin.compiler.execution.strategy=in-process
-          generatorHeap=8g
+          generatorHeap=13g
           linkerHeap=12g
           EOF
           awk -v b="$BEGIN" -v e="$END" '
