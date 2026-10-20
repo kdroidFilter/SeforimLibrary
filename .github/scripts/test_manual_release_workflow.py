@@ -292,6 +292,23 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
         )
         self.assertIn('"$GRADLE" :sefariasqlite:generateLinkerLinks', apply_links)
 
+    def test_recovery_refuses_a_payload_that_remaps_link_anchor(self):
+        # The pinned Phase-2 writes full-line anchors; a payload whose buildLineNoteIndex
+        # shifts link_anchor to the stored line would mix both coordinate systems.
+        overlay = self.step("Overlay pinned recovery Phase-2 implementation")
+        guard = overlay[overlay.index("notes=generator/"):overlay.index("          fi\n") + len("          fi\n")]
+        self.assertLess(overlay.index(guard), overlay.index('install -m 0644 ".pipeline-control/$file" "$file"'))
+        notes = "generator/common/src/jvmMain/kotlin/io/github/kdroidfilter/seforimlibrary/common/notes/LineNoteIndex.kt"
+        current = (Path(__file__).parents[2] / notes).read_text(encoding="utf-8")
+        script = textwrap.dedent(guard).replace("${{ inputs.source_commit }}", "c0ffee")
+        for body, refused in (("private fun remapAnchors(lineId: Long) {}", True), (current, False), (None, False)):
+            with tempfile.TemporaryDirectory() as tmp:
+                if body is not None:
+                    (Path(tmp) / notes).parent.mkdir(parents=True)
+                    (Path(tmp) / notes).write_text(body, encoding="utf-8")
+                run = subprocess.run(["bash", "-euo", "pipefail", "-c", script], cwd=tmp, capture_output=True, text=True)
+                self.assertEqual(run.returncode != 0, refused, run.stdout + run.stderr)
+
     def test_recovery_overlay_carries_every_new_phase2_dependency(self):
         # The overlay compiles this revision's importer against a pinned payload, so
         # each same-package file it calls must be overlaid too, or be one of the files
