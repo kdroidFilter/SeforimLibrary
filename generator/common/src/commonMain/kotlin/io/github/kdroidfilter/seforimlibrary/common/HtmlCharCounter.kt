@@ -50,3 +50,34 @@ fun countVisibleChars(html: String, endExclusive: Int): Int {
     }
     return count
 }
+
+/**
+ * The visible chars of [html], each as [countVisibleChars] counts it: one char outside a tag,
+ * or a whole `&...;` entity. Lines with equal units give every visible offset the same meaning.
+ */
+fun visibleUnits(html: String): List<String> {
+    val units = ArrayList<String>()
+    var inTag = false
+    var i = 0
+    while (i < html.length) {
+        val c = html[i]
+        when {
+            inTag -> if (c == '>') inTag = false
+            c == '<' -> inTag = true
+            c == '&' -> {
+                val end = minOf(html.length, i + 10)
+                var j = i + 1
+                while (j < end && html[j] != ';') j++
+                if (j < end) {
+                    units += html.substring(i, j + 1)
+                    i = j
+                } else {
+                    units += "&"
+                }
+            }
+            else -> units += c.toString()
+        }
+        i++
+    }
+    return units
+}

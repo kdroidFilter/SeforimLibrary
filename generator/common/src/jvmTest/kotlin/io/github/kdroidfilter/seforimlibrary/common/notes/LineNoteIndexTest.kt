@@ -5,6 +5,7 @@ import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
 import io.github.kdroidfilter.seforimlibrary.common.patch.compressLineContent
 import io.github.kdroidfilter.seforimlibrary.common.patch.splitLineContent
+import io.github.kdroidfilter.seforimlibrary.common.visibleUnits
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import org.junit.Rule
 import org.junit.Test
@@ -81,16 +82,17 @@ class LineNoteIndexTest {
     }
 
     @Test
-    fun `anchors after a removed body shift, anchors inside one are dropped`() {
+    fun `anchors keep addressing the full line, in a body or across one too`() {
         val db = db(listOf(noted, "יעד"))
-        connect(db).use { conn ->
+        val sql = "SELECT linkId, side, charStart, charEnd, label FROM link_anchor ORDER BY linkId, side, charStart"
+        val before = connect(db).use { conn ->
             conn.createStatement().use { st ->
                 st.execute("INSERT INTO connection_type(id, name) VALUES (1, 'COMMENTARY')")
                 st.execute(
                     "INSERT INTO link(id, sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, " +
                         "targetBookOrderIndex, connectionTypeId) VALUES (1, 1, 1, 100, 101, 1, 0, 1), (2, 1, 1, 101, 100, 0, 0, 1)",
                 )
-                // side 0 of link 1 and side 1 of link 2 are on line 100; side 1 of link 1 is on line 101.
+                // Points and ranges before, inside, across and after the bodies at [3,5) and [7,10).
                 st.execute(
                     "INSERT INTO link_anchor(linkId, side, charStart, charEnd, label) VALUES " +
                         "(1, 0, 1, NULL, 'a'), (1, 0, 3, NULL, NULL), (1, 0, 4, NULL, NULL), (1, 0, 5, NULL, NULL), " +
@@ -98,26 +100,27 @@ class LineNoteIndexTest {
                         "(2, 1, 7, 10, NULL), (2, 1, 2, 11, NULL), (2, 1, 4, 8, NULL), (2, 0, 7, NULL, NULL)",
                 )
             }
-            val report = rebuildLineNoteIndex(conn, logger)
-            assertEquals(5, report.anchorsRemapped)
-            assertEquals(2, report.anchorsClipped, "ranges with one end in a body are cut back to its edge")
-            assertEquals(2, report.anchorsDroppedInBody, "a point inside a body, a range wholly inside one")
-            assertEquals(1, report.anchorsDroppedOnCollision, "5 shifts onto the untouched anchor at 3")
+            query(db, sql).also { assertEquals(1, rebuildLineNoteIndex(conn, logger).linesChanged) }
         }
-        assertEquals(
-            listOf(
-                listOf<Any?>(1, 0, 1, null, "a"),
-                listOf<Any?>(1, 0, 3, null, null),
-                listOf<Any?>(1, 0, 4, 7, null),
-                listOf<Any?>(1, 0, 5, 6, null),
-                listOf<Any?>(1, 0, 6, null, null),
-                listOf<Any?>(1, 1, 5, null, null),
-                listOf<Any?>(2, 0, 7, null, null),
-                listOf<Any?>(2, 1, 2, 6, null),
-                listOf<Any?>(2, 1, 3, 5, null),
-            ),
-            query(db, "SELECT linkId, side, charStart, charEnd, label FROM link_anchor ORDER BY linkId, side, charStart"),
-        )
+        assertEquals(before, query(db, sql))
+        // The stored line with each body spliced in at its charPos reads as the original did.
+        val full = visibleUnits(query(db, "SELECT content FROM line WHERE id = 100").single().single() as String).toMutableList()
+        query(db, "SELECT charPos, body FROM line_note WHERE lineId = 100 ORDER BY noteIndex DESC").forEach { (pos, body) ->
+            full.addAll(pos as Int, visibleUnits(body as String))
+        }
+        assertEquals(visibleUnits(noted), full)
+    }
+
+    @Test
+    fun `a line whose offsets would not map back stays inline and reported`() {
+        // Stripped, "&b" would join the ";" after the body into one entity.
+        val line = "א&b<i class=\"footnote\">x</i>;ג"
+        val db = db(listOf(line, noted))
+        val report = connect(db).use { rebuildLineNoteIndex(it, logger) }
+        assertEquals(1, report.unmappableLines)
+        assertEquals(1, report.linesChanged)
+        assertEquals(line, query(db, "SELECT content FROM line WHERE id = 100").single().single())
+        assertEquals(listOf(listOf<Any?>(101)), query(db, "SELECT DISTINCT lineId FROM line_note"))
     }
 
     @Test

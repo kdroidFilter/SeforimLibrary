@@ -316,7 +316,7 @@ tasks.register<JavaExec>("buildLineDhIndex") {
 
 tasks.register<JavaExec>("buildLineNoteIndex") {
     group = "application"
-    description = "Move inline footnote bodies out of line text into line_note, shifting link_anchor offsets."
+    description = "Move inline footnote bodies out of line text into line_note; link_anchor offsets keep counting them."
     dependsOn("jvmJar")
     mainClass.set("io.github.kdroidfilter.seforimlibrary.common.notes.BuildLineNoteIndexCliKt")
     classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")

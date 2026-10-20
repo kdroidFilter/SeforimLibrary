@@ -411,19 +411,21 @@ class GenerateLinkerLinksTest {
     }
 
     @Test
-    fun theLinkerReadsTheLineWithItsNotesAndAnAnchorOnANoteIsNotWritten() {
+    fun theLinkerReadsTheLineWithItsNotesAndAnAnchorInANoteKeepsItsPlace() {
         val stored = "see Genesis 1:1 and again"
         val notes = listOf(15 to "Genesis 1:1")
         val read = "see Genesis 1:1<i class=\"footnote\">Genesis 1:1</i> and again"
-        assertEquals(read, rehydrateLinkerLine(stored, notes).first)
+        assertEquals(read, rehydrateLinkerLine(stored, notes))
         val inNote = read.indexOf(">Genesis") + 1
         val body = record(4, 15, base = 0, hashedContent = read) + "\n" +
+            record(12, inNote + 7, base = 0, hashedContent = read) + "\n" +
             record(inNote, inNote + 11, base = 0, hashedContent = read) + "\n"
         for (split in listOf(false, true)) {
             val run = runLinkerMain(body, strict = "true", splitLineContent = split, storedSource = stored, notes = notes)
             assertEquals(null, run.failure)
             assertEquals(1L, run.links, "the citation in the note still links its line")
-            assertEquals(listOf(4 to 15), run.anchorRanges, "only the citation outside the note gets an anchor")
+            // Full-line offsets: the body's visible chars follow the stored "see Genesis 1:1".
+            assertEquals(listOf(4 to 15, 12 to 22, 15 to 26), run.anchorRanges, "in the note and across its start too")
         }
         // A record hashed on the stored text alone is stale once the line has notes.
         val stale = runLinkerMain(record(4, 15, base = 0, hashedContent = stored) + "\n", strict = null, storedSource = stored, notes = notes)
@@ -431,13 +433,13 @@ class GenerateLinkerLinksTest {
     }
 
     @Test
-    fun anAnchorAfterANoteMapsBackToTheStoredLine() {
+    fun anAnchorAfterANoteCountsTheNoteBody() {
         val stored = "x Genesis 1:1"
         val notes = listOf(1 to "הערה")
-        val read = rehydrateLinkerLine(stored, notes).first
+        val read = rehydrateLinkerLine(stored, notes)
         val start = read.indexOf("Genesis")
         val run = runLinkerMain(record(start, start + 11, base = 0, hashedContent = read) + "\n", strict = "true", storedSource = stored, notes = notes)
-        assertEquals(listOf(2 to 13), run.anchorRanges)
+        assertEquals(listOf(6 to 17), run.anchorRanges)
     }
 
     @Test
@@ -471,12 +473,7 @@ class GenerateLinkerLinksTest {
             val shared = LineNoteRehydration.rehydrate(stored, notes.mapIndexed { i, note ->
                 LineNoteRehydration.NoteAt(note.first, note.second, i in anchored)
             })
-            val (text, bodies) = rehydrateLinkerLine(stored, notes, anchored)
-            assertEquals(shared.text, text)
-            assertEquals(shared.bodies, bodies)
-            for (start in 0..text.length) for (end in start..text.length) {
-                assertEquals(shared.storedRange(start, end), linkerStoredRange(bodies, start, end))
-            }
+            assertEquals(shared, rehydrateLinkerLine(stored, notes, anchored))
         }
     }
 
@@ -496,8 +493,8 @@ class GenerateLinkerLinksTest {
                 )
                 assertEquals(null, run.failure)
                 assertEquals(1L, run.links)
-                // Anchors use visible offsets in stored text: the empty sup contributes none.
-                assertEquals(listOf(1 to 12), run.anchorRanges)
+                // Full-line offsets: both bodies (11 visible chars) come first; the empty sup adds none.
+                assertEquals(listOf(12 to 23), run.anchorRanges)
             }
             if (prefix.isNotEmpty()) {
                 val misplaced = bodies + stored

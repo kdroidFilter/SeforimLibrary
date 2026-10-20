@@ -409,7 +409,9 @@ CREATE INDEX IF NOT EXISTS idx_link_type_target_line ON link(connectionTypeId, t
 -- Word-level anchor of a link inside a line's text.
 -- Coordinates are VISIBLE-char offsets (HTML tags skipped, each entity = one
 -- char — the same convention as line.charCount / countVisibleChars), counted
--- from the start of the anchored line's content.
+-- from the start of the anchored line's content. From schema 7 that is the full
+-- line: the stored text with each line_note body's visible chars at its charPos,
+-- in noteIndex order, so an anchor may lie in or across a note body.
 --   side      0 = the anchor sits in the SOURCE line's text (the stored
 --              base→dependant direction puts the base text on the source
 --              side, so commentary markers are side 0). 1 is reserved for
@@ -650,6 +652,7 @@ CREATE TABLE IF NOT EXISTS line_divine_name (
 -- stored line where the body stood; marker is the inner HTML of the
 -- <sup class="footnote-marker"> left in place before the note, NULL when the note
 -- had none. The k-th marker sup of the line belongs to the k-th row with a marker.
+-- link_anchor offsets keep counting each body at its charPos (see link_anchor).
 CREATE TABLE IF NOT EXISTS line_note (
     lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
     noteIndex INTEGER NOT NULL,

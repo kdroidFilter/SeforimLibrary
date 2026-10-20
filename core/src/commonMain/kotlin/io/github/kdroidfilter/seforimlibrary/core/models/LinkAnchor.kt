@@ -7,7 +7,8 @@ import kotlinx.serialization.Serializable
  *
  * Coordinates are visible-char offsets (HTML tags skipped, each entity counted
  * as one char — the same convention as `line.charCount`), from the start of
- * the anchored line's content.
+ * the anchored line's content. From schema 7 that is the full line: the stored
+ * text with each `line_note` body's visible chars at its `charPos`, in note order.
  *
  * @property linkId The link this anchor belongs to
  * @property side 0 = anchor sits in the source line's text (base side of the

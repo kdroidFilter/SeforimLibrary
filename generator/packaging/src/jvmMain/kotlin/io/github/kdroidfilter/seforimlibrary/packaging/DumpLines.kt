@@ -204,7 +204,7 @@ fun main(args: Array<String>) {
                             strippedLines = 0
                         }
                         val stored = notes[rs.getLong(7)]
-                            ?.let { LineNoteRehydration.rehydrate(rs.getString(4) ?: "", it).text }
+                            ?.let { LineNoteRehydration.rehydrate(rs.getString(4) ?: "", it) }
                             ?: (rs.getString(4) ?: "")
                         val content = LinkerInputView.linkerContent(mode, stored)
                         if (content.length != stored.length) strippedLines++

@@ -57,4 +57,12 @@ class HtmlCharCounterTest {
         // Visible: "Title" (5) + "Hello " (6) + "world" (5) + " " (1) + "& welcome!" (10) = 27
         assertEquals(27, countVisibleChars(html))
     }
+
+    @Test
+    fun `visible units are the chars countVisibleChars counts`() {
+        val html = "<p>a&amp;b & c<b>&nbsp;</b>&toolongentity;</p>"
+        val units = visibleUnits(html)
+        assertEquals(countVisibleChars(html), units.size)
+        assertEquals(listOf("a", "&amp;", "b", " ", "&", " ", "c", "&nbsp;", "&", "t"), units.take(10))
+    }
 }

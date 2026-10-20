@@ -62,14 +62,14 @@ class LineNoteRehydrationTest {
                     assertEquals(List(notes.size) { 0 }, notes.map { it.charPos })
                     assertEquals(listOf(true) + List(notes.size - 1) { false }, notes.map { it.hasMarker })
                 }
-                assertEquals(original, LineNoteRehydration.rehydrate(stored, notes).text)
+                assertEquals(original, LineNoteRehydration.rehydrate(stored, notes))
             }
         }
     }
 
     @Test
     fun `a body crosses inline closings and stays before block boundaries`() {
-        fun back(stored: String, charPos: Int) = LineNoteRehydration.rehydrate(stored, listOf(NoteAt(charPos, "ה"))).text
+        fun back(stored: String, charPos: Int) = LineNoteRehydration.rehydrate(stored, listOf(NoteAt(charPos, "ה")))
         assertEquals("<b>מילה</b><i class=\"footnote\">ה</i> ועוד", back("<b>מילה</b> ועוד", 4))
         assertEquals("<sup>1</sup><i class=\"footnote\">ה</i><b>א</b>", back("<sup>1</sup><b>א</b>", 1))
         assertEquals("<b>סוף</b><i class=\"footnote\">ה</i><br>", back("<b>סוף</b><br>", 3))
@@ -95,49 +95,39 @@ class LineNoteRehydrationTest {
             "<sup class=\"footnote-marker\"></sup>" to 0,
         )) {
             val notes = listOf(NoteAt(marker.second, "ה", true), NoteAt(marker.second, "ה"))
-            assertEquals(marker.first + body + body, LineNoteRehydration.rehydrate(marker.first, notes).text)
+            assertEquals(marker.first + body + body, LineNoteRehydration.rehydrate(marker.first, notes))
             if (marker.second > 0) {
                 assertEquals(
                     marker.first + body,
-                    LineNoteRehydration.rehydrate(marker.first, listOf(NoteAt(marker.second, "ה"))).text,
+                    LineNoteRehydration.rehydrate(marker.first, listOf(NoteAt(marker.second, "ה"))),
                     "a raw position strictly inside any sup is outside it even without marker metadata",
                 )
             }
         }
         assertEquals(
             body + "<sup>1</sup>",
-            LineNoteRehydration.rehydrate("<sup>1</sup>", listOf(NoteAt(0, "ה"))).text,
+            LineNoteRehydration.rehydrate("<sup>1</sup>", listOf(NoteAt(0, "ה"))),
         )
         assertEquals(
             "<b>א<sup class=\"footnote-marker\"></sup></b>" + body,
             LineNoteRehydration.rehydrate(
                 "<b>א<sup class=\"footnote-marker\"></sup></b>", listOf(NoteAt(1, "ה", true)),
-            ).text,
+            ),
         )
         val marker = "<sup class=\"footnote-marker\"></sup>"
         val wrapped = "<p><b>${marker}המשך</b></p>"
         assertEquals(
             "<p><b>$marker$body${body}המשך</b></p>",
-            LineNoteRehydration.rehydrate(wrapped, listOf(NoteAt(0, "ה", true), NoteAt(0, "ה"))).text,
+            LineNoteRehydration.rehydrate(wrapped, listOf(NoteAt(0, "ה", true), NoteAt(0, "ה"))),
         )
-        assertEquals(body + wrapped, LineNoteRehydration.rehydrate(wrapped, listOf(NoteAt(0, "ה"))).text)
+        assertEquals(body + wrapped, LineNoteRehydration.rehydrate(wrapped, listOf(NoteAt(0, "ה"))))
         for (gap in listOf(" ", "&nbsp;", "א", "<broken")) {
             val stored = "<p>$gap${marker}המשך</p>"
             assertEquals(
                 body + stored,
-                LineNoteRehydration.rehydrate(stored, listOf(NoteAt(0, "ה", true))).text,
+                LineNoteRehydration.rehydrate(stored, listOf(NoteAt(0, "ה", true))),
                 "anchored metadata cannot skip visible text, entities, whitespace or incomplete tags",
             )
         }
-    }
-
-    @Test
-    fun `stored ranges skip the inserted bodies and refuse ranges that touch one`() {
-        val back = LineNoteRehydration.rehydrate("אב גד", listOf(NoteAt(2, "xx")))
-        val body = back.bodies.single()
-        assertEquals(2 until 2 + "<i class=\"footnote\">xx</i>".length, body)
-        assertEquals(0 to 2, back.storedRange(0, 2))
-        assertEquals(null, back.storedRange(1, body.first + 1))
-        assertEquals(2 to 5, back.storedRange(body.last + 1, back.text.length))
     }
 }

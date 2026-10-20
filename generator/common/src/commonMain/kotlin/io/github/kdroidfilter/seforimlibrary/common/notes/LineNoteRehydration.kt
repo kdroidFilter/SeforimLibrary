@@ -3,35 +3,18 @@ package io.github.kdroidfilter.seforimlibrary.common.notes
 /**
  * The line as it read before buildLineNoteIndex: each `line_note` body put back at its
  * `charPos` as `<i class="footnote">BODY</i>`. The linker reads this text, so citations
- * inside notes keep producing links from their line.
+ * inside notes keep producing links from their line. Its visible chars are the original's
+ * (buildLineNoteIndex keeps a line inline otherwise), the coordinates of `link_anchor`.
  */
 object LineNoteRehydration {
 
     /** Stored note position and body; [hasMarker] includes an empty, non-null SQL marker. */
     data class NoteAt(val charPos: Int, val body: String, val hasMarker: Boolean = false)
 
-    /** [bodies]: the raw [start, end) of every inserted `<i class="footnote">…</i>` in [text]. */
-    class Rehydrated(val text: String, val bodies: List<IntRange>) {
-        /**
-         * Raw offset in the stored (stripped) line for raw offsets [start, end) of [text],
-         * or null when the range touches an inserted body.
-         */
-        fun storedRange(start: Int, end: Int): Pair<Int, Int>? {
-            var shift = 0
-            for (body in bodies) {
-                val bodyEnd = body.last + 1
-                if (start < bodyEnd && end > body.first) return null
-                if (bodyEnd <= start) shift += bodyEnd - body.first
-            }
-            return (start - shift) to (end - shift)
-        }
-    }
-
     /** [notes] in noteIndex order (charPos never decreases along it). */
-    fun rehydrate(stored: String, notes: List<NoteAt>): Rehydrated {
-        if (notes.isEmpty()) return Rehydrated(stored, emptyList())
+    fun rehydrate(stored: String, notes: List<NoteAt>): String {
+        if (notes.isEmpty()) return stored
         val out = StringBuilder(stored.length + notes.sumOf { it.body.length + OPEN.length + CLOSE.length })
-        val bodies = ArrayList<IntRange>(notes.size)
         val sups = SUP.findAll(stored).map { it.range }.toList()
         val markers = if (notes.any { it.hasMarker }) InlineNotes.markerRanges(stored) else emptyList()
         var anchoredSeen = 0
@@ -46,13 +29,10 @@ object LineNoteRehydration {
             }
             at = maxOf(at, cursor)
             out.append(stored, cursor, at)
-            val start = out.length
             out.append(OPEN).append(note.body).append(CLOSE)
-            bodies += start until out.length
             cursor = at
         }
-        out.append(stored, cursor, stored.length)
-        return Rehydrated(out.toString(), bodies)
+        return out.append(stored, cursor, stored.length).toString()
     }
 
     private const val OPEN = "<i class=\"footnote\">"

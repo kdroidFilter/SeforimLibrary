@@ -656,18 +656,9 @@ start. Duplicates and unsorted spans inside that line remain supported. An exist
 overlap is preserved without further extension. No corpus-wide anchor map is kept.
 
 Offsets remain raw UTF-16 positions until the completed range is mapped through
-`countVisibleChars`. With PR #73's extracted notes, preserve its mapping and apply
-completion **before** it, retaining the next-citation boundary:
-
-```kotlin
-val storedRange = linkerStoredRange(
-    srcLine.noteBodies, start, closeDanglingBrackets(content, start, end, anchorLimit),
-)
-```
-
-Here `content` is the rehydrated line read by the linker, not `srcLine.stored`.
-The footnote opening tag is a hard barrier, so extending cannot make an otherwise
-valid range overlap a rehydrated note and disappear during this mapping.
+`countVisibleChars`, applied to `content`: from schema 7 that is the line rehydrated with its
+`line_note` bodies, whose visible chars are the full line's, so the anchor keeps its exact
+place also when it lies in or across a note body (the `link_anchor` coordinates).
 
 No schema migration, linker engine change or NER relink is required. Rerun Phase-2
 against matching artifacts/sidecar and regenerate the release/delta to ship the new
