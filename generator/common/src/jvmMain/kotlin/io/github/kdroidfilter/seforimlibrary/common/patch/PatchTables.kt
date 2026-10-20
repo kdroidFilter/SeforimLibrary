@@ -181,9 +181,7 @@ val SCHEMA_7_TABLE_DDL: Map<String, String> = linkedMapOf(
         CREATE TABLE IF NOT EXISTS line_divine_name (
             lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
             charStart INTEGER NOT NULL,
-            charEnd INTEGER NOT NULL,
-            kind INTEGER NOT NULL,
-            source INTEGER NOT NULL,
+            span INTEGER NOT NULL,
             PRIMARY KEY (lineId, charStart)
         ) WITHOUT ROWID
     """.trimIndent(),
@@ -202,9 +200,7 @@ val SCHEMA_7_TABLE_DDL: Map<String, String> = linkedMapOf(
             lineId INTEGER NOT NULL,
             noteIndex INTEGER NOT NULL,
             charStart INTEGER NOT NULL,
-            charEnd INTEGER NOT NULL,
-            kind INTEGER NOT NULL,
-            source INTEGER NOT NULL,
+            span INTEGER NOT NULL,
             PRIMARY KEY (lineId, noteIndex, charStart),
             FOREIGN KEY (lineId, noteIndex) REFERENCES line_note(lineId, noteIndex) ON DELETE CASCADE
         ) WITHOUT ROWID

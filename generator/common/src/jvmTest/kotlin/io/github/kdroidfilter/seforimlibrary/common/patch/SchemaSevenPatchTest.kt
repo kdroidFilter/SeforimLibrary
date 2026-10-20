@@ -1,6 +1,9 @@
 package io.github.kdroidfilter.seforimlibrary.common.patch
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import io.github.kdroidfilter.seforimlibrary.common.divine.DivineKind
+import io.github.kdroidfilter.seforimlibrary.common.divine.DivineSource
+import io.github.kdroidfilter.seforimlibrary.common.divine.DivineSpanCode
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import org.junit.Rule
 import org.junit.Test
@@ -190,9 +193,10 @@ class SchemaSevenPatchTest {
             }
             conn.createStatement().use { st ->
                 st.execute("INSERT INTO book_protection (bookId, level) VALUES (1, 1), (2, 2)")
+                // (charEnd, kind, source): (24, 3, 4), (4, 1, 1), (6, 7, 3), (17, 5, 2); same rows in the Dart golden.
                 st.execute(
-                    "INSERT INTO line_divine_name (lineId, charStart, charEnd, kind, source) VALUES " +
-                        "(2, 20, 24, 3, 4), (1, 0, 4, 1, 1), (2, 3, 6, 7, 3), (1, 12, 17, 5, 2)",
+                    "INSERT INTO line_divine_name (lineId, charStart, span) VALUES " +
+                        "(2, 20, 579), (1, 0, 529), (2, 3, 439), (1, 12, 677)",
                 )
             }
         }
@@ -202,7 +206,7 @@ class SchemaSevenPatchTest {
             mapOf(
                 "book_banner" to "87026c32c4996eee6e5c75b65ce5e08be1a1a28e52864a57a696cbb6555a0c59",
                 "book_protection" to "015c3c2291e1ebac6c68a6f33c8c01b42af0ce46dc3840d7e0a12ae370ae1319",
-                "line_divine_name" to "ab37c80ae94f079eabde2b02cd108fc90f1c75f523f0f8fd1f9b87f5a8dc67b6",
+                "line_divine_name" to "5ed480458a0ab23dfaaa765fc98696a9d06300c5951085ebb8666925fce92840",
                 "line_note" to GOLDEN_LINE_NOTE_FULL,
                 "line_note_divine_name" to GOLDEN_LINE_NOTE_DIVINE_NAME_FULL,
             ),
@@ -212,7 +216,7 @@ class SchemaSevenPatchTest {
             mapOf(
                 "book_banner" to "473b121ac837ac17a9627ed583981faec4074ec3217224c18bb0a6bb62752240",
                 "book_protection" to "260da62f074581043b5bf203c9790203a9ea052f9d1e14e27ecc780f66790a81",
-                "line_divine_name" to "278213e576ad7f0865c73036789d82ec801bb65e594d9eee0ec6e6e799325b85",
+                "line_divine_name" to "239a3a2f98562426e3b5a8830f4f3c8749ef55315b6a9a0c49e3337c81f55007",
                 "line_note" to GOLDEN_LINE_NOTE_EMPTY,
                 "line_note_divine_name" to GOLDEN_LINE_NOTE_DIVINE_NAME_EMPTY,
             ),
@@ -286,7 +290,7 @@ class SchemaSevenPatchTest {
                 SCHEMA_7_TABLE_DDL.values.forEach { st.execute(it) }
                 st.execute("INSERT INTO book_banner VALUES (1, 'באדיבות'), (2, 'שורה\nשנייה')")
                 st.execute("INSERT INTO book_protection VALUES (2, 1)")
-                st.execute("INSERT INTO line_divine_name VALUES (10, 0, 4, 1, 1), (12, 2, 6, 5, 3)")
+                st.execute("INSERT INTO line_divine_name VALUES (10, 0, 529), (12, 2, 565)") // ends 4, 6
             }
         }
         insertNotes(p, listOf(listOf(10, 0, 2, 1, "גוף <i>פנימי</i>"), listOf(10, 1, 6, 0, "נספח"), listOf(11, 0, 1, 1, "ב")))
@@ -308,10 +312,14 @@ class SchemaSevenPatchTest {
     private fun insertNoteNames(db: Path, rows: List<List<Int>>) {
         connect(db).use { conn ->
             conn.prepareStatement(
-                "INSERT INTO line_note_divine_name (lineId, noteIndex, charStart, charEnd, kind, source) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO line_note_divine_name (lineId, noteIndex, charStart, span) VALUES (?, ?, ?, ?)",
             ).use { ps ->
                 for (row in rows) {
-                    row.forEachIndexed { i, v -> ps.setInt(i + 1, v) }
+                    val (lineId, noteIndex, charStart, charEnd) = row
+                    val kind = DivineKind.entries.single { it.code == row[4] }
+                    val source = DivineSource.entries.single { it.code == row[5] }
+                    ps.setInt(1, lineId); ps.setInt(2, noteIndex); ps.setInt(3, charStart)
+                    ps.setInt(4, DivineSpanCode.encode(charStart, charEnd, kind, source))
                     ps.executeUpdate()
                 }
             }
@@ -366,8 +374,8 @@ class SchemaSevenPatchTest {
         // Shared with otzaria_library_updater: the Dart hasher must give the same hex.
         const val GOLDEN_LINE_NOTE_FULL = "8c5772a1b7560b4c29abafe619d7e3ba35882aed9d1e933eb8ce1f2c0ea00284"
         const val GOLDEN_LINE_NOTE_EMPTY = "1424aefc886962c989c6ba346334c848597e391523ab4a2562b35f4621be946f"
-        const val GOLDEN_LINE_NOTE_DIVINE_NAME_FULL = "5c2aded4a4b3fa5a4146308c2bc07cbfe0926766ddcb2e6c4b13785db1b893cf"
-        const val GOLDEN_LINE_NOTE_DIVINE_NAME_EMPTY = "4c7710872d55a8575723dac795a2de02e09085ec0643712cc4aa41014d5320aa"
+        const val GOLDEN_LINE_NOTE_DIVINE_NAME_FULL = "6e85bbf63c7ad1dbcefdc54ff74edca27957d4310bf65e2f2e486a8effb64507"
+        const val GOLDEN_LINE_NOTE_DIVINE_NAME_EMPTY = "c79ab180b41eb063b7754e8000ff73748940002a1617ea31e40d6f74f3cb650c"
         const val GOLDEN_BOOK_CONTENT_HASH = "eb5db532be575315bed061263dc4fce8edf21bc4edf27556f8aa689a3c29eb43"
     }
 }

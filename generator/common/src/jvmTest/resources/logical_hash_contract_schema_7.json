@@ -232,14 +232,14 @@
     "INSERT INTO link_anchor VALUES (2,0,4,5,NULL),(1,1,0,9,'ב'),(1,0,7,1,'א')",
     "CREATE TABLE book_banner (bookId INTEGER PRIMARY KEY NOT NULL, text TEXT NOT NULL)",
     "INSERT INTO book_banner VALUES (10,'באדיבות'),(3,'שורה\nשנייה')",
-    "CREATE TABLE line_divine_name (lineId INTEGER NOT NULL, charStart INTEGER NOT NULL, charEnd INTEGER NOT NULL, kind INTEGER NOT NULL, source INTEGER NOT NULL, PRIMARY KEY (lineId, charStart)) WITHOUT ROWID",
-    "INSERT INTO line_divine_name VALUES (2,20,24,3,4),(1,0,4,1,1),(2,3,6,7,3),(1,12,17,5,2)",
+    "CREATE TABLE line_divine_name (lineId INTEGER NOT NULL, charStart INTEGER NOT NULL, span INTEGER NOT NULL, PRIMARY KEY (lineId, charStart)) WITHOUT ROWID",
+    "INSERT INTO line_divine_name VALUES (2,20,579),(1,0,529),(2,3,439),(1,12,677)",
     "CREATE TABLE line_note (lineId INTEGER NOT NULL, noteIndex INTEGER NOT NULL, charPos INTEGER NOT NULL, hasMarker INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (lineId, noteIndex)) WITHOUT ROWID",
     "INSERT INTO line_note VALUES (2,0,5,1,'הערה <i>פנימית</i> א'),(1,1,12,0,'נספח בסוף השורה'),(1,0,3,1,'גוף \"ב\"\nשורה שנייה'),(2,1,9,1,'<b>ב</b> &amp; ג')",
-    "CREATE TABLE line_note_divine_name (lineId INTEGER NOT NULL, noteIndex INTEGER NOT NULL, charStart INTEGER NOT NULL, charEnd INTEGER NOT NULL, kind INTEGER NOT NULL, source INTEGER NOT NULL, PRIMARY KEY (lineId, noteIndex, charStart)) WITHOUT ROWID",
-    "INSERT INTO line_note_divine_name VALUES (2,0,0,4,1,1),(1,1,6,11,5,2),(1,0,3,6,7,3),(2,0,10,14,3,4)"
+    "CREATE TABLE line_note_divine_name (lineId INTEGER NOT NULL, noteIndex INTEGER NOT NULL, charStart INTEGER NOT NULL, span INTEGER NOT NULL, PRIMARY KEY (lineId, noteIndex, charStart)) WITHOUT ROWID",
+    "INSERT INTO line_note_divine_name VALUES (2,0,0,529),(1,1,6,677),(1,0,3,439),(2,0,10,579)"
   ],
-  "wholeHash": "2d97ee31efbe19b0eba147e8e2b8765d46b9df968b61d3507b9b3270caef8188",
+  "wholeHash": "b3af11365331cd5a54219c8e9ff75651dfa260af5eefd71494675f805c96f3b4",
   "tableHashes": {
     "source": "feae8f08d36404f2acc5777efbde1f0a91f8296474d3dc30fb7de6652934331f",
     "author": "b91e11e69a8aa4b551cc0aca7484cbae4a270dca18dfa2c8f8ea5ea56c7811ce",
@@ -281,9 +281,9 @@
     "default_targum": "4672d9d1693961becf13e330344dc8b962bd0b94f353703f60a04d00cb037b31",
     "book_banner": "de37ced272743f9c6a17c9b8d9518186ffe73e07a67cf8ed1deb3c92352bd5a9",
     "book_protection": "cf448b16fbc7f1c35d36cc8871043adda8d98a8fb08ce19692dcb7269f28a9ac",
-    "line_divine_name": "ab37c80ae94f079eabde2b02cd108fc90f1c75f523f0f8fd1f9b87f5a8dc67b6",
+    "line_divine_name": "5ed480458a0ab23dfaaa765fc98696a9d06300c5951085ebb8666925fce92840",
     "line_note": "8c5772a1b7560b4c29abafe619d7e3ba35882aed9d1e933eb8ce1f2c0ea00284",
-    "line_note_divine_name": "5c2aded4a4b3fa5a4146308c2bc07cbfe0926766ddcb2e6c4b13785db1b893cf",
+    "line_note_divine_name": "6e85bbf63c7ad1dbcefdc54ff74edca27957d4310bf65e2f2e486a8effb64507",
     "schema_meta": "88991959dc665f0e2f8971c26c77d943613726ce0188600f446d3ca74981d130"
   }
 }

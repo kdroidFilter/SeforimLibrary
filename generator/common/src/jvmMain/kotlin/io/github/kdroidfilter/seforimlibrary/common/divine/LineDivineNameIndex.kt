@@ -65,16 +65,14 @@ fun rebuildLineDivineNameIndex(
             st.execute("DELETE FROM line_note_divine_name")
         }
         val lineReport = conn.prepareStatement(
-            "INSERT INTO line_divine_name (lineId, charStart, charEnd, kind, source) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO line_divine_name (lineId, charStart, span) VALUES (?, ?, ?)",
         ).use { insert ->
             var pending = 0
             val report = scanCorpus(conn, overrides, logger, requireTanach) { line, result ->
                 for (span in result.spans) {
                     insert.setLong(1, line.id)
                     insert.setInt(2, span.charStart)
-                    insert.setInt(3, span.charEnd)
-                    insert.setInt(4, span.kind.code)
-                    insert.setInt(5, span.source.code)
+                    insert.setInt(3, DivineSpanCode.encode(span.charStart, span.charEnd, span.kind, span.source))
                     insert.addBatch()
                     if (++pending >= 10_000) { insert.executeBatch(); pending = 0 }
                 }
@@ -83,7 +81,7 @@ fun rebuildLineDivineNameIndex(
             report
         }
         val noteReport = conn.prepareStatement(
-            "INSERT INTO line_note_divine_name (lineId, noteIndex, charStart, charEnd, kind, source) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO line_note_divine_name (lineId, noteIndex, charStart, span) VALUES (?, ?, ?, ?)",
         ).use { insert ->
             var pending = 0
             val report = scanNoteBodies(conn, logger, requireTanach) { lineId, noteIndex, result ->
@@ -91,9 +89,7 @@ fun rebuildLineDivineNameIndex(
                     insert.setLong(1, lineId)
                     insert.setInt(2, noteIndex)
                     insert.setInt(3, span.charStart)
-                    insert.setInt(4, span.charEnd)
-                    insert.setInt(5, span.kind.code)
-                    insert.setInt(6, span.source.code)
+                    insert.setInt(4, DivineSpanCode.encode(span.charStart, span.charEnd, span.kind, span.source))
                     insert.addBatch()
                     if (++pending >= 10_000) { insert.executeBatch(); pending = 0 }
                 }

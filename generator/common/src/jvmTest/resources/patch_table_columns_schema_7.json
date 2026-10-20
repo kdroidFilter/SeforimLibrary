@@ -41,9 +41,9 @@
     "default_targum": ["bookId", "position", "targumBookId"],
     "book_banner": ["bookId", "text"],
     "book_protection": ["bookId", "level"],
-    "line_divine_name": ["charEnd", "charStart", "kind", "lineId", "source"],
+    "line_divine_name": ["charStart", "lineId", "span"],
     "line_note": ["body", "charPos", "hasMarker", "lineId", "noteIndex"],
-    "line_note_divine_name": ["charEnd", "charStart", "kind", "lineId", "noteIndex", "source"],
+    "line_note_divine_name": ["charStart", "lineId", "noteIndex", "span"],
     "schema_meta": ["key", "value"]
   }
 }

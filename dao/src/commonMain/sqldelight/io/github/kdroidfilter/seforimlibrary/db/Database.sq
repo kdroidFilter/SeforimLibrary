@@ -636,14 +636,13 @@ CREATE TABLE IF NOT EXISTS book_protection (
 );
 
 -- Schema 7. Verified sacred divine names of each line, in the visible-char
--- coordinates of the stored line (without note bodies), for the app's display substitution (kind/source
--- codes in DivineNameModel.kt). Built by buildLineDivineNameIndex.
+-- coordinates of the stored line (without note bodies), for the app's display substitution.
+-- Built by buildLineDivineNameIndex.
+-- span = (charEnd - charStart) << 7 | source << 4 | kind (DivineSpanCode in DivineNameModel.kt).
 CREATE TABLE IF NOT EXISTS line_divine_name (
     lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
     charStart INTEGER NOT NULL,
-    charEnd INTEGER NOT NULL,
-    kind INTEGER NOT NULL,
-    source INTEGER NOT NULL,
+    span INTEGER NOT NULL,
     PRIMARY KEY (lineId, charStart)
 ) WITHOUT ROWID;
 
@@ -665,14 +664,12 @@ CREATE TABLE IF NOT EXISTS line_note (
 ) WITHOUT ROWID;
 
 -- Schema 7. Verified divine names inside each note body, in visible-char offsets
--- within the body; same kind/source codes as line_divine_name.
+-- within the body; same span encoding as line_divine_name.
 CREATE TABLE IF NOT EXISTS line_note_divine_name (
     lineId INTEGER NOT NULL,
     noteIndex INTEGER NOT NULL,
     charStart INTEGER NOT NULL,
-    charEnd INTEGER NOT NULL,
-    kind INTEGER NOT NULL,
-    source INTEGER NOT NULL,
+    span INTEGER NOT NULL,
     PRIMARY KEY (lineId, noteIndex, charStart),
     FOREIGN KEY (lineId, noteIndex) REFERENCES line_note(lineId, noteIndex) ON DELETE CASCADE
 ) WITHOUT ROWID;
