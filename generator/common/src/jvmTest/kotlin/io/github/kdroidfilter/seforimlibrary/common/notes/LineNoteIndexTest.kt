@@ -112,15 +112,14 @@ class LineNoteIndexTest {
     }
 
     @Test
-    fun `a line whose offsets would not map back stays inline and reported`() {
+    fun `a line whose offsets would not map back fails the run and changes nothing`() {
         // Stripped, "&b" would join the ";" after the body into one entity.
         val line = "א&b<i class=\"footnote\">x</i>;ג"
-        val db = db(listOf(line, noted))
-        val report = connect(db).use { rebuildLineNoteIndex(it, logger) }
-        assertEquals(1, report.unmappableLines)
-        assertEquals(1, report.linesChanged)
-        assertEquals(line, query(db, "SELECT content FROM line WHERE id = 100").single().single())
-        assertEquals(listOf(listOf<Any?>(101)), query(db, "SELECT DISTINCT lineId FROM line_note"))
+        val db = db(listOf(noted, line))
+        val error = assertFailsWith<IllegalStateException> { connect(db).use { rebuildLineNoteIndex(it, logger) } }
+        assertTrue("line 101" in error.message.orEmpty())
+        assertEquals(listOf(listOf<Any?>(noted), listOf<Any?>(line)), query(db, "SELECT content FROM line ORDER BY id"))
+        assertTrue(query(db, "SELECT * FROM line_note").isEmpty())
     }
 
     @Test

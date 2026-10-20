@@ -636,7 +636,7 @@ CREATE TABLE IF NOT EXISTS book_protection (
 );
 
 -- Schema 7. Verified sacred divine names of each line, in the visible-char
--- coordinates of link_anchor, for the app's display substitution (kind/source
+-- coordinates of the stored line (without note bodies), for the app's display substitution (kind/source
 -- codes in DivineNameModel.kt). Built by buildLineDivineNameIndex.
 CREATE TABLE IF NOT EXISTS line_divine_name (
     lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,

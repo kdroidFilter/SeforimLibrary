@@ -28,7 +28,7 @@ fun main() {
         logger.i {
             "line_note: ${report.notes} notes (${report.unanchoredNotes} without a marker) moved out of " +
                 "${report.linesChanged} lines; left inline: ${report.unclosedLines} unclosed, " +
-                "${report.orphanMarkerLines} with a marker but no note, ${report.unmappableLines} with unmappable offsets; " +
+                "${report.orphanMarkerLines} with a marker but no note; " +
                 "${report.linesWithoutNote} pre-filtered lines had no note"
         }
     }

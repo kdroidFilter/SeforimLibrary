@@ -34,8 +34,8 @@ enum class DivineSource(val code: Int) {
 
 /**
  * One verified sacred occurrence. [rawStart]/[rawEnd] index the stored HTML;
- * [charStart]/[charEnd] are the contract's visible-char coordinates
- * (same space as `link_anchor`, see `countVisibleChars`).
+ * [charStart]/[charEnd] are the contract's visible-char coordinates of that
+ * HTML (a stored line has no note bodies, unlike `link_anchor`; see `countVisibleChars`).
  */
 data class DivineSpan(
     val rawStart: Int,

@@ -20,8 +20,6 @@ data class LineNoteIndexReport(
     val unclosedLines: Long,
     /** Lines left untouched: a marker sup not followed by a note would break the k-th marker rule. */
     val orphanMarkerLines: Long,
-    /** Lines left untouched: without their bodies a visible offset would no longer map back exactly. */
-    val unmappableLines: Long,
     /** NULL version_line rows of changed lines given the old text (split shape only), so they keep it. */
     val versionRowsMaterialized: Long,
 )
@@ -34,8 +32,8 @@ data class LineNoteIndexReport(
  * Line ids are kept. `version_line` and `link_anchor` are left as they were: anchor offsets keep
  * addressing the full line, i.e. the stored line with each body's visible chars at its `charPos`
  * (in noteIndex order), which is also what [LineNoteRehydration] gives back. A line for which
- * either reading differs from the original stays inline. A line that already has `line_note`
- * rows fails the run, so a second run over a built DB changes nothing.
+ * either reading differs from the original fails the run, as does a line that already has
+ * `line_note` rows, so a second run over a built DB changes nothing.
  */
 fun rebuildLineNoteIndex(conn: Connection, logger: Logger, batchSize: Int = 2_000): LineNoteIndexReport {
     check(conn.autoCommit) { "rebuildLineNoteIndex requires an unowned JDBC connection" }
@@ -68,7 +66,6 @@ private class LineNotePass(
     private var unanchored = 0L
     private var unclosed = 0L
     private var orphanMarkers = 0L
-    private var unmappable = 0L
     private var materialized = 0L
     private var batches = 0
     private val opened = ArrayList<java.sql.PreparedStatement>()
@@ -108,7 +105,7 @@ private class LineNotePass(
             if (++batches % 50 == 0) logger.i { "line_note: $scanned lines with notes scanned, $changed changed" }
         }
         val report = LineNoteIndexReport(
-            scanned, withoutNote, changed, notes, unanchored, unclosed, orphanMarkers, unmappable, materialized,
+            scanned, withoutNote, changed, notes, unanchored, unclosed, orphanMarkers, materialized,
         )
         logger.i { "line_note: $report" }
         return report
@@ -143,9 +140,8 @@ private class LineNotePass(
             removedBefore += countVisibleChars(content, note.end) - start
         }
         val moved = found.mapIndexed { index, note -> LineNoteRehydration.NoteAt(charPos[index], note.body, note.marker != null) }
-        if (!keepsOffsets(content, stripped, moved)) {
-            if (unmappable++ < SAMPLE) logger.w { "line_note: line $id would not map its visible offsets back; left inline" }
-            return
+        check(keepsOffsets(content, stripped, moved)) {
+            "line $id: without its note bodies the line would not map link_anchor offsets back exactly"
         }
         found.forEachIndexed { index, note ->
             insertNote.setLong(1, id)
