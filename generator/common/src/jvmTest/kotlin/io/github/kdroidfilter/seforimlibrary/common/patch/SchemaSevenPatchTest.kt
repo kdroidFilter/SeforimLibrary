@@ -163,9 +163,9 @@ class SchemaSevenPatchTest {
     }
 
     @Test
-    fun `line_note hashes rows ordered by every column alphabetically`() {
+    fun `line_note hashes rows in primary-key order, not by body`() {
         val db = tablesDb("order.db")
-        insertNotes(db, listOf(listOf(2, 0, 7, "1", "ב"), listOf(1, 0, 3, null, "א")))
+        insertNotes(db, listOf(listOf(2, 0, 7, "1", "א"), listOf(1, 0, 3, null, "ב")))
         val actual = connect(db).use { LogicalContentHasher(listOf("line_note")).computeReport(it).tableHashes }
 
         val bytes = ByteArrayOutputStream()
@@ -174,8 +174,8 @@ class SchemaSevenPatchTest {
         bytes.write(0x00)
         fun text(s: String) { bytes.write(3); bytes.write(s.toByteArray()); bytes.write(0x1F) }
         fun int(n: Int) { bytes.write(2); bytes.write(n.toString().toByteArray()); bytes.write(0x1F) }
-        text("א"); int(3); int(1); bytes.write(0); bytes.write(0x1F); int(0); bytes.write(0xFF)
-        text("ב"); int(7); int(2); text("1"); int(0); bytes.write(0xFF)
+        text("ב"); int(3); int(1); bytes.write(0); bytes.write(0x1F); int(0); bytes.write(0xFF)
+        text("א"); int(7); int(2); text("1"); int(0); bytes.write(0xFF)
         val expected = MessageDigest.getInstance("SHA-256").digest(bytes.toByteArray()).joinToString("") { "%02x".format(it) }
         assertEquals(mapOf("line_note" to expected), actual)
     }
@@ -202,7 +202,7 @@ class SchemaSevenPatchTest {
             mapOf(
                 "book_banner" to "87026c32c4996eee6e5c75b65ce5e08be1a1a28e52864a57a696cbb6555a0c59",
                 "book_protection" to "015c3c2291e1ebac6c68a6f33c8c01b42af0ce46dc3840d7e0a12ae370ae1319",
-                "line_divine_name" to "e0b9cc2885495c4bf2ebdfe044b06948aa8cb0c859e777d45b880e59f3d4e799",
+                "line_divine_name" to "ab37c80ae94f079eabde2b02cd108fc90f1c75f523f0f8fd1f9b87f5a8dc67b6",
                 "line_note" to GOLDEN_LINE_NOTE_FULL,
                 "line_note_divine_name" to GOLDEN_LINE_NOTE_DIVINE_NAME_FULL,
             ),
@@ -364,9 +364,9 @@ class SchemaSevenPatchTest {
         )
 
         // Shared with otzaria_library_updater: the Dart hasher must give the same hex.
-        const val GOLDEN_LINE_NOTE_FULL = "380d6d28f0dc83595a26b002ec90e7fd7fdb690cf58086c6a05457f553459ba9"
+        const val GOLDEN_LINE_NOTE_FULL = "b01db649c8a87765a89d0667849cad5389f9cc5b64137486e06d1bb631b6c487"
         const val GOLDEN_LINE_NOTE_EMPTY = "027c225d40b02cfc2025d0c279668dcd341af7ab68c725b3b187fac0dbdce8a8"
-        const val GOLDEN_LINE_NOTE_DIVINE_NAME_FULL = "d9a81d17557a10c109fe5ab430ce0fd408c569366db8cddadb4124e945d8349c"
+        const val GOLDEN_LINE_NOTE_DIVINE_NAME_FULL = "5c2aded4a4b3fa5a4146308c2bc07cbfe0926766ddcb2e6c4b13785db1b893cf"
         const val GOLDEN_LINE_NOTE_DIVINE_NAME_EMPTY = "4c7710872d55a8575723dac795a2de02e09085ec0643712cc4aa41014d5320aa"
         const val GOLDEN_BOOK_CONTENT_HASH = "eb5db532be575315bed061263dc4fce8edf21bc4edf27556f8aa689a3c29eb43"
     }

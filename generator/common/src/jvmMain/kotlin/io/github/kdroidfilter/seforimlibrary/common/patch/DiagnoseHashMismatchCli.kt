@@ -78,7 +78,7 @@ private fun hashSingleTable(conn: Connection, table: String): String {
     md.update(sorted.joinToString(",", prefix = "cols:").toByteArray())
     md.update(byteArrayOf(0x00))
     val colsCsv = sorted.joinToString(",") { "\"$it\"" }
-    val pkOrder = if ("id" in sorted) "id" else colsCsv
+    val pkOrder = LogicalContentHasher.orderByClause(LogicalContentHasher.DEFAULT_ROW_ORDER, table, sorted)
     var rowCount = 0
     conn.createStatement().use { st ->
         st.executeQuery("SELECT $colsCsv FROM \"$table\" ORDER BY $pkOrder").use { rs ->

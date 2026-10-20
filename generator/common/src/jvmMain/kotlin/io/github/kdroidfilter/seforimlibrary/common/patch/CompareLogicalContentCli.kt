@@ -59,7 +59,7 @@ private fun hashSingle(conn: Connection, table: String): String {
     md.update(sorted.joinToString(",", prefix = "cols:").toByteArray())
     md.update(byteArrayOf(0x00))
     val csv = sorted.joinToString(",") { "\"$it\"" }
-    val order = if ("id" in sorted) "id" else csv
+    val order = LogicalContentHasher.orderByClause(LogicalContentHasher.DEFAULT_ROW_ORDER, table, sorted)
     var rows = 0
     conn.createStatement().use { st ->
         st.executeQuery("SELECT $csv FROM \"$table\" ORDER BY $order").use { rs ->

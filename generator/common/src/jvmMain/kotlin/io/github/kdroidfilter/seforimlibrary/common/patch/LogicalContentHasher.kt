@@ -10,8 +10,8 @@ import java.security.MessageDigest
  * SQLite does not guarantee that the byte layout of two files is identical
  * even when the row contents are; page order, fragmentation, sqlite_sequence
  * and (post-Phase 1) reused-id holes all break a naive `sha256(file)`. The
- * logical hash dumps each tracked table ordered by its primary key, encodes
- * every cell with an explicit type tag, and feeds the stream into sha256.
+ * logical hash dumps each tracked table in its [rowOrder], encodes every cell
+ * with an explicit type tag, and feeds the stream into sha256.
  *
  * Two builds whose row contents are semantically identical produce identical
  * logical hashes. The hash is the source of truth for:
@@ -21,8 +21,16 @@ import java.security.MessageDigest
  */
 class LogicalContentHasher(
     private val tables: List<String> = DEFAULT_TABLES,
+    private val rowOrder: Map<String, List<String>>? = DEFAULT_ROW_ORDER,
     private val logger: Logger = Logger.withTag("LogicalContentHasher"),
 ) {
+
+    init {
+        if (rowOrder != null) {
+            val undeclared = tables.filterNot(rowOrder::containsKey)
+            require(undeclared.isEmpty()) { "No hash row order declared for $undeclared" }
+        }
+    }
 
     /**
      * Whole-DB hash plus the per-table digest of exactly the bytes each table
@@ -54,10 +62,8 @@ class LogicalContentHasher(
             sink.update(cols.joinToString(",", prefix = "cols:").toByteArray())
             sink.update(byteArrayOf(0x00))
 
-            val colsSql = cols.joinToString(",") { "\"$it\"" }
-            val pkOrder = if ("id" in cols) "id" else cols.joinToString(",") { "\"$it\"" }
             conn.createStatement().use { st ->
-                st.executeQuery("SELECT $colsSql FROM \"$t\" ORDER BY $pkOrder").use { rs ->
+                st.executeQuery(selectSql(t, cols)).use { rs ->
                     val n = rs.metaData.columnCount
                     while (rs.next()) {
                         for (i in 1..n) encodeCell(sink, rs, i)
@@ -69,6 +75,10 @@ class LogicalContentHasher(
         }
         return Report(hex(whole.digest()), tableHashes)
     }
+
+    /** The query that streams [table]'s rows, [cols] in canonical order. */
+    internal fun selectSql(table: String, cols: List<String>): String =
+        "SELECT ${cols.joinToString(",") { "\"$it\"" }} FROM \"$table\" ORDER BY ${orderByClause(rowOrder, table, cols)}"
 
     /** Feeds the same bytes to the whole-DB digest and the current table's digest. */
     private class DualDigest(private val whole: MessageDigest, private val table: MessageDigest) {
@@ -178,6 +188,33 @@ class LogicalContentHasher(
         /** Current-schema default for build-time diagnostics and current DB tests. */
         val DEFAULT_TABLES: List<String> = TABLES_SCHEMA_7
 
+        /** First schema whose rows are hashed in primary-key order, streamed from the PK index without a temp sort. */
+        const val PK_ROW_ORDER_SCHEMA_VERSION: Int = 7
+
+        /** Row order of the current schema, matching [DEFAULT_TABLES]. */
+        val DEFAULT_ROW_ORDER: Map<String, List<String>>? = rowOrderForSchemaVersion(CURRENT_DB_SCHEMA_VERSION)
+
+        /**
+         * Columns each table's rows are hashed in: from schema 7 the primary key the patch-table
+         * contract declares; null keeps the frozen schema <= 6 rule (`id`, else every column).
+         */
+        fun rowOrderForSchemaVersion(schemaVersion: Int): Map<String, List<String>>? =
+            if (schemaVersion < PK_ROW_ORDER_SCHEMA_VERSION) {
+                null
+            } else {
+                patchTablesForSchemaVersion(schemaVersion).associate { it.name to it.primaryKey }
+            }
+
+        /** ORDER BY of [table]: its [rowOrder] columns, or the frozen schema <= 6 rule when null. */
+        internal fun orderByClause(rowOrder: Map<String, List<String>>?, table: String, cols: List<String>): String =
+            if (rowOrder != null) {
+                rowOrder.getValue(table).joinToString(",") { "\"$it\"" }
+            } else if ("id" in cols) {
+                "id"
+            } else {
+                cols.joinToString(",") { "\"$it\"" }
+            }
+
         fun tablesForSchemaVersion(schemaVersion: Int): List<String> = when (schemaVersion) {
             1 -> TABLES_SCHEMA_1
             2 -> TABLES_SCHEMA_2
@@ -192,6 +229,10 @@ class LogicalContentHasher(
         fun forSchemaVersion(
             schemaVersion: Int,
             logger: Logger = Logger.withTag("LogicalContentHasher"),
-        ): LogicalContentHasher = LogicalContentHasher(tablesForSchemaVersion(schemaVersion), logger)
+        ): LogicalContentHasher = LogicalContentHasher(
+            tablesForSchemaVersion(schemaVersion),
+            rowOrderForSchemaVersion(schemaVersion),
+            logger,
+        )
     }
 }
