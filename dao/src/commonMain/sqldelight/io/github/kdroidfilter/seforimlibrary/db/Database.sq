@@ -68,6 +68,7 @@
 --     default_targum.bookId           -> book(id)                ON DELETE CASCADE
 --     default_targum.targumBookId     -> book(id)                ON DELETE CASCADE
 --     book_banner.bookId              -> book(id)                ON DELETE CASCADE
+--     book_banner.bannerId            -> banner(id)
 --     book_protection.bookId          -> book(id)                ON DELETE CASCADE
 --     line_divine_name.lineId         -> line(id)                ON DELETE CASCADE
 --     line_note.lineId                -> line(id)                ON DELETE CASCADE
@@ -624,10 +625,16 @@ CREATE TABLE IF NOT EXISTS default_targum (
 CREATE INDEX IF NOT EXISTS idx_default_targum_book ON default_targum(bookId);
 CREATE INDEX IF NOT EXISTS idx_default_targum_target ON default_targum(targumBookId);
 
--- Schema 7. Per-book publisher banner and protection level (sparse).
+-- Schema 7. Per-book publisher banner and protection level (sparse). banner holds the
+-- texts of ForDB book_banners.csv by its id; the reader expands {title} with book.title.
+CREATE TABLE IF NOT EXISTS banner (
+    id INTEGER PRIMARY KEY NOT NULL,
+    text TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS book_banner (
     bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
-    text TEXT NOT NULL
+    bannerId INTEGER NOT NULL REFERENCES banner(id)
 );
 
 CREATE TABLE IF NOT EXISTS book_protection (

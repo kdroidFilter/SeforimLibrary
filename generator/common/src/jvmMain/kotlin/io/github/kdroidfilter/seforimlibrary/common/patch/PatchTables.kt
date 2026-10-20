@@ -105,6 +105,7 @@ internal val PATCH_TABLES_IN_FK_ORDER: List<PatchTable> = listOf(
     PatchTable("default_targum",      listOf("bookId", "targumBookId"),      updatable = true),
 
     // Schema 7. Per-book notices and per-line indexes built after every content writer.
+    PatchTable("banner",             listOf("id"),       updatable = true),
     PatchTable("book_banner",        listOf("bookId"),   updatable = true),
     PatchTable("book_protection",    listOf("bookId"),   updatable = true),
     PatchTable("line_divine_name",   listOf("lineId", "charStart"), updatable = true),
@@ -117,7 +118,7 @@ internal val PATCH_TABLES_IN_FK_ORDER: List<PatchTable> = listOf(
 
 /** Tables schema 7 added; a 6 -> 7 delta creates them through its migrations. */
 internal val SCHEMA_7_TABLES: Set<String> =
-    setOf("book_banner", "book_protection", "line_divine_name", "line_note", "line_note_divine_name")
+    setOf("banner", "book_banner", "book_protection", "line_divine_name", "line_note", "line_note_divine_name")
 
 /** Columns schema 7 added to tables older schemas already had; a 6 -> 7 delta adds them by ADD COLUMN. */
 internal val SCHEMA_7_COLUMNS: Map<String, Set<String>> = mapOf("book" to setOf("contentHash"))
@@ -165,10 +166,16 @@ internal fun patchTablesForSchemaVersion(schemaVersion: Int): List<PatchTable> =
  * run it first, so they also work on a DB created before schema 7.
  */
 val SCHEMA_7_TABLE_DDL: Map<String, String> = linkedMapOf(
+    "banner" to """
+        CREATE TABLE IF NOT EXISTS banner (
+            id INTEGER PRIMARY KEY NOT NULL,
+            text TEXT NOT NULL
+        )
+    """.trimIndent(),
     "book_banner" to """
         CREATE TABLE IF NOT EXISTS book_banner (
             bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
-            text TEXT NOT NULL
+            bannerId INTEGER NOT NULL REFERENCES banner(id)
         )
     """.trimIndent(),
     "book_protection" to """

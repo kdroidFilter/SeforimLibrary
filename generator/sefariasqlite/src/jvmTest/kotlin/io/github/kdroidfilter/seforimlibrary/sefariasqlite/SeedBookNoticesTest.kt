@@ -14,7 +14,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-/** ForDB book_banners.csv / book_protection.csv → book_banner / book_protection. */
+/** ForDB book_banners.csv / book_protection.csv → banner + book_banner / book_protection. */
 class SeedBookNoticesTest {
     @JvmField @Rule
     val tmp = TemporaryFolder()
@@ -32,12 +32,13 @@ class SeedBookNoticesTest {
         val bySource = rows.associateBy { it.sourceName }
         assertEquals(setOf("BeitAharonVeYisraelToOtzaria", "National-LibraryToOtzaria", "wikiJewishBooksToOtzaria"), bySource.keys)
         assertTrue(rows.all { it.bookName.isEmpty() })
+        assertEquals(listOf(1L, 2L, 3L), rows.map { it.value.id })
         assertEquals(
             "כל הזכויות שמורות למכון בית אהרן וישראל שע\"י מרכז סטאלין קארלין.\n" +
                 "אין להעתיק ולשכפל בכל צורה שהיא ללא אישור מפורש בכתב מהמו\"ל",
-            bySource.getValue("BeitAharonVeYisraelToOtzaria").value,
+            bySource.getValue("BeitAharonVeYisraelToOtzaria").value.text,
         )
-        assertContains(bySource.getValue("wikiJewishBooksToOtzaria").value, "\n")
+        assertContains(bySource.getValue("wikiJewishBooksToOtzaria").value.text, "\n")
     }
 
     @Test
@@ -58,19 +59,17 @@ class SeedBookNoticesTest {
         assertFailsWith<IllegalArgumentException> { parseBookProtection("sourceName,bookName,level\nKSK,,0\n") }
         assertFailsWith<IllegalArgumentException> { parseBookProtection("sourceName,bookName,level\nKSK,,x\n") }
         assertFailsWith<IllegalArgumentException> { parseBookProtection("sourceName,bookName,level\nKSK,,1\nKSK,,2\n") }
-        assertFailsWith<IllegalArgumentException> { parseBookBanners("sourceName,bookName,text\n\"S\",\"\",\"\"\n") }
-        assertFailsWith<IllegalArgumentException> { parseBookBanners("sourceName,bookName,text\n\"S\",\"\",\"open\n") }
+        assertFailsWith<IllegalArgumentException> { parseBookBanners("id,sourceName,bookName,text\n1,\"S\",\"\",\"\"\n") }
+        assertFailsWith<IllegalArgumentException> { parseBookBanners("id,sourceName,bookName,text\n1,\"S\",\"\",\"open\n") }
+        assertFailsWith<IllegalArgumentException> { parseBookBanners("sourceName,bookName,text\n\"S\",\"\",\"x\"\n") }
+        for (id in listOf("", "0", "-1", " 1", "01", "1.0", "x")) {
+            assertFailsWith<IllegalArgumentException>(id) { parseBookBanners("id,sourceName,bookName,text\n\"$id\",S,,x\n") }
+        }
+        val repeated = assertFailsWith<IllegalArgumentException> {
+            parseBookBanners("id,sourceName,bookName,text\n7,S,,x\n7,S,ב,y\n")
+        }
+        assertContains(repeated.message.orEmpty(), "repeats id(s) 7")
         assertEquals(emptyList(), parseBookBanners(""))
-    }
-
-    @Test
-    fun `title expands percent-encoded inside a link target and raw elsewhere`() {
-        assertEquals(
-            "על ספר א (ב) ב&ג [כאן](https://w.org/wiki/%D7%90%20%28%D7%91%29.html) [שוב](x?t=%D7%90%20%28%D7%91%29)",
-            expandBannerTitle("על ספר {title} ב&ג [כאן](https://w.org/wiki/{title}.html) [שוב](x?t={title})", "א (ב)"),
-        )
-        assertEquals("[a](u?q=%23%3F%26%29)", expandBannerTitle("[a](u?q={title})", "#?&)"))
-        assertEquals("ללא תבנית", expandBannerTitle("ללא תבנית", "x"))
     }
 
     @Test
@@ -81,9 +80,9 @@ class SeedBookNoticesTest {
                 it,
                 BookNoticeRows(
                     banners = listOf(
-                        BookNoticeRow("Wiki", "", "באדיבות\n[כאן](https://w.org/{title})"),
-                        BookNoticeRow("Wiki", "ספר ב", "מיוחד ל{title}"),
-                        BookNoticeRow("Other", "חסר", "לא יימצא"),
+                        BookNoticeRow("Wiki", "", BannerText(5, "באדיבות\n[כאן](https://w.org/{title})")),
+                        BookNoticeRow("Wiki", "ספר ב", BannerText(2, "מיוחד ל{title}")),
+                        BookNoticeRow("Other", "חסר", BannerText(9, "לא יימצא")),
                     ),
                     protections = listOf(
                         BookNoticeRow("KSK", "", 1),
@@ -94,12 +93,14 @@ class SeedBookNoticesTest {
             )
             assertEquals(listOf("Other / חסר"), result.unmatchedBanners)
             assertEquals(emptyList(), result.unmatchedProtection)
+            // Texts stay verbatim under their CSV ids; only texts some book uses are kept.
             assertEquals(
-                listOf(
-                    listOf<Any?>(1, "באדיבות\n[כאן](https://w.org/%D7%A1%D7%A4%D7%A8%20%D7%90)"),
-                    listOf<Any?>(2, "מיוחד לספר ב"),
-                ),
-                rows(it, "SELECT bookId, text FROM book_banner ORDER BY bookId"),
+                listOf(listOf<Any?>(2, "מיוחד ל{title}"), listOf<Any?>(5, "באדיבות\n[כאן](https://w.org/{title})")),
+                rows(it, "SELECT id, text FROM banner ORDER BY id"),
+            )
+            assertEquals(
+                listOf(listOf<Any?>(1, 5), listOf<Any?>(2, 2)),
+                rows(it, "SELECT bookId, bannerId FROM book_banner ORDER BY bookId"),
             )
             assertEquals(
                 listOf(listOf<Any?>(3, 1), listOf<Any?>(4, 2)),
@@ -111,8 +112,13 @@ class SeedBookNoticesTest {
     @Test
     fun `a rerun replaces the rows and empty inputs leave the tables empty`() {
         db().use {
-            applyBookNotices(it, BookNoticeRows(listOf(BookNoticeRow("Wiki", "", "x")), listOf(BookNoticeRow("KSK", "", 1))), logger)
+            val input = BookNoticeRows(listOf(BookNoticeRow("Wiki", "", BannerText(1, "x"))), listOf(BookNoticeRow("KSK", "", 1)))
+            applyBookNotices(it, input, logger)
+            applyBookNotices(it, input, logger)
+            assertEquals(listOf(listOf<Any?>(1, "x")), rows(it, "SELECT * FROM banner"))
+            assertEquals(listOf(listOf<Any?>(1, 1), listOf<Any?>(2, 1)), rows(it, "SELECT * FROM book_banner"))
             applyBookNotices(it, BookNoticeRows(emptyList(), emptyList()), logger)
+            assertEquals(emptyList(), rows(it, "SELECT * FROM banner"))
             assertEquals(emptyList(), rows(it, "SELECT * FROM book_banner"))
             assertEquals(emptyList(), rows(it, "SELECT * FROM book_protection"))
         }
@@ -134,8 +140,8 @@ class SeedBookNoticesTest {
 
     @Test
     fun `a BOM and CRLF line endings do not change the parsed rows`() {
-        val plain = "sourceName,bookName,text\n\"S\",\"\",\"שורה א\nשורה ב\"\n"
-        val expected = listOf(BookNoticeRow("S", "", "שורה א\nשורה ב"))
+        val plain = "id,sourceName,bookName,text\n\"4\",\"S\",\"\",\"שורה א\nשורה ב\"\n"
+        val expected = listOf(BookNoticeRow("S", "", BannerText(4, "שורה א\nשורה ב")))
         assertEquals(expected, parseBookBanners(forDbText(plain.lines())))
         // readForDbZip's readLines() strips CR; the BOM survives it and must go.
         val bomCrlf = "\uFEFF" + plain.replace("\n", "\r\n")

@@ -4,8 +4,6 @@ import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
 import io.github.kdroidfilter.seforimlibrary.common.patch.SCHEMA_7_TABLE_DDL
 import io.github.kdroidfilter.seforimlibrary.common.reports.GeneratorReport
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 import java.sql.Connection
 import java.sql.DriverManager
 import kotlin.io.path.exists
@@ -17,7 +15,7 @@ internal const val BOOK_BANNERS_FILE = "book_banners.csv"
 /** Per-book protection level, by source with per-book overrides. */
 internal const val BOOK_PROTECTION_FILE = "book_protection.csv"
 
-private val BANNER_HEADER = listOf("sourceName", "bookName", "text")
+private val BANNER_HEADER = listOf("id", "sourceName", "bookName", "text")
 private val PROTECTION_HEADER = listOf("sourceName", "bookName", "level")
 
 /**
@@ -26,8 +24,11 @@ private val PROTECTION_HEADER = listOf("sourceName", "bookName", "level")
  */
 internal data class BookNoticeRow<T>(val sourceName: String, val bookName: String, val value: T)
 
+/** A banner text and its stable `banner.id`, set by hand in the CSV and never reused. */
+internal data class BannerText(val id: Long, val text: String)
+
 internal data class BookNoticeRows(
-    val banners: List<BookNoticeRow<String>>,
+    val banners: List<BookNoticeRow<BannerText>>,
     val protections: List<BookNoticeRow<Int>>,
 )
 
@@ -40,7 +41,7 @@ internal data class BookNoticesResult(
 )
 
 /**
- * Seeds the `book_banner` and `book_protection` tables from
+ * Seeds the `banner`, `book_banner` and `book_protection` tables from
  * otzaria-library/ForDB/[BOOK_BANNERS_FILE] and [BOOK_PROTECTION_FILE].
  *
  * Both files are optional: an archive without one leaves its table empty. Runs after
@@ -88,55 +89,52 @@ internal fun loadBookNoticeRows(logger: Logger): BookNoticeRows = BookNoticeRows
 /** The archive reader splits files into lines; quoted fields may span them, so re-join first. */
 internal fun forDbText(lines: List<String>): String = lines.joinToString("\n").removePrefix("\uFEFF")
 
-internal fun parseBookBanners(text: String): List<BookNoticeRow<String>> =
-    parseNoticeRows(text, BOOK_BANNERS_FILE, BANNER_HEADER) { value, where ->
-        require(value.isNotBlank()) { "$where has an empty text" }
-        value
+internal fun parseBookBanners(text: String): List<BookNoticeRow<BannerText>> {
+    val rows = parseNoticeRows(text, BOOK_BANNERS_FILE, BANNER_HEADER) { fields, where ->
+        require(BANNER_ID.matches(fields[0])) { "$where has id '${fields[0]}'; expected an integer >= 1" }
+        require(fields[3].isNotBlank()) { "$where has an empty text" }
+        BannerText(fields[0].toLong(), fields[3])
     }
+    val repeated = rows.groupBy { it.value.id }.filterValues { it.size > 1 }.keys
+    require(repeated.isEmpty()) { "$BOOK_BANNERS_FILE repeats id(s) ${repeated.sorted().joinToString()}" }
+    return rows
+}
 
 internal fun parseBookProtection(text: String): List<BookNoticeRow<Int>> =
-    parseNoticeRows(text, BOOK_PROTECTION_FILE, PROTECTION_HEADER) { value, where ->
-        val level = value.trim().toIntOrNull()
-        require(level != null && level >= 1) { "$where has level '$value'; expected an integer >= 1" }
+    parseNoticeRows(text, BOOK_PROTECTION_FILE, PROTECTION_HEADER) { fields, where ->
+        val level = fields[2].trim().toIntOrNull()
+        require(level != null && level >= 1) { "$where has level '${fields[2]}'; expected an integer >= 1" }
         level
     }
+
+private val BANNER_ID = Regex("[1-9][0-9]{0,17}")
 
 private fun <T> parseNoticeRows(
     text: String,
     fileName: String,
     header: List<String>,
-    parseValue: (String, String) -> T,
+    parseValue: (List<String>, String) -> T,
 ): List<BookNoticeRow<T>> {
     val records = parseForDbCsvRecords(text)
     if (records.isEmpty()) return emptyList()
     require(records.first() == header) { "$fileName must start with the header ${header.joinToString(",")}" }
+    val source = header.indexOf("sourceName")
+    val book = header.indexOf("bookName")
     val seen = HashSet<Pair<String, String>>()
     return records.drop(1).mapIndexed { index, fields ->
         val where = "$fileName record ${index + 2}"
-        require(fields.size == header.size && fields[0].isNotBlank()) { "$where is malformed: $fields" }
-        require(seen.add(fields[0] to fields[1])) { "$where repeats source '${fields[0]}' book '${fields[1]}'" }
-        BookNoticeRow(fields[0], fields[1], parseValue(fields[2], where))
+        require(fields.size == header.size && fields[source].isNotBlank()) { "$where is malformed: $fields" }
+        require(seen.add(fields[source] to fields[book])) {
+            "$where repeats source '${fields[source]}' book '${fields[book]}'"
+        }
+        BookNoticeRow(fields[source], fields[book], parseValue(fields, where))
     }
 }
 
 /**
- * Expands `{title}`: percent-encoded (space → %20) inside a `[label](target)` link
- * target, raw everywhere else.
- */
-internal fun expandBannerTitle(template: String, title: String): String {
-    val encoded = URLEncoder.encode(title, StandardCharsets.UTF_8).replace("+", "%20")
-    val linked = LINK_PATTERN.replace(template) { m ->
-        "[${m.groupValues[1]}](${m.groupValues[2].replace(TITLE_PLACEHOLDER, encoded)})"
-    }
-    return linked.replace(TITLE_PLACEHOLDER, title)
-}
-
-private const val TITLE_PLACEHOLDER = "{title}"
-private val LINK_PATTERN = Regex("""\[([^\]\n]*)]\(([^)\n]*)\)""")
-
-/**
- * Replaces both tables (DELETE + INSERT in bookId order). Source defaults expand to
+ * Replaces the tables (DELETE + INSERT in key order). Source defaults expand to
  * every book of the source; a per-book row wins over its source's default.
+ * `banner` keeps only the texts some book uses, verbatim: the reader expands `{title}`.
  * [strict] = false (the ForDB gate, run on the last published DB, which lacks new and
  * private books) turns unmatched protection rows into warnings.
  */
@@ -146,7 +144,9 @@ internal fun applyBookNotices(
     logger: Logger,
     strict: Boolean = true,
 ): BookNoticesResult {
-    conn.createStatement().use { st -> listOf("book_banner", "book_protection").forEach { st.execute(SCHEMA_7_TABLE_DDL.getValue(it)) } }
+    conn.createStatement().use { st ->
+        listOf("banner", "book_banner", "book_protection").forEach { st.execute(SCHEMA_7_TABLE_DDL.getValue(it)) }
+    }
 
     data class Book(val id: Long, val title: String, val source: String)
     val books = conn.createStatement().use { st ->
@@ -183,12 +183,20 @@ internal fun applyBookNotices(
 
     conn.createStatement().use { st ->
         st.execute("DELETE FROM book_banner")
+        st.execute("DELETE FROM banner")
         st.execute("DELETE FROM book_protection")
     }
-    conn.prepareStatement("INSERT INTO book_banner (bookId, text) VALUES (?, ?)").use { ps ->
+    conn.prepareStatement("INSERT INTO banner (id, text) VALUES (?, ?)").use { ps ->
+        for (banner in banners.values.map { it.second }.distinct().sortedBy { it.id }) {
+            ps.setLong(1, banner.id)
+            ps.setString(2, banner.text)
+            ps.executeUpdate()
+        }
+    }
+    conn.prepareStatement("INSERT INTO book_banner (bookId, bannerId) VALUES (?, ?)").use { ps ->
         for ((id, entry) in banners.toSortedMap()) {
             ps.setLong(1, id)
-            ps.setString(2, expandBannerTitle(entry.second, entry.first.title))
+            ps.setLong(2, entry.second.id)
             ps.executeUpdate()
         }
     }

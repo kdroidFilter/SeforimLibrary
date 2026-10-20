@@ -352,14 +352,14 @@ tasks.register<JavaExec>("seedAllMetadata") {
     )
 }
 
-// Publisher banners and protection levels — book_banner / book_protection from the
+// Publisher banners and protection levels — banner + book_banner / book_protection from the
 // optional ForDB book_banners.csv / book_protection.csv. Runs after every stage that
 // writes or renames books (it matches final titles).
 // Usage:
 //   ./gradlew :sefariasqlite:seedBookNotices -PseforimDb=/path/to/seforim.db
 tasks.register<JavaExec>("seedBookNotices") {
     group = "application"
-    description = "Seed book_banner and book_protection from ForDB book_banners.csv / book_protection.csv."
+    description = "Seed banner, book_banner and book_protection from ForDB book_banners.csv / book_protection.csv."
 
     dependsOn("jvmJar")
     mainClass.set("io.github.kdroidfilter.seforimlibrary.sefariasqlite.SeedBookNoticesPostProcessKt")

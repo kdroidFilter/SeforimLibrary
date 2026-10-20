@@ -18,7 +18,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/** The 6 -> 7 transition: an ordinary delta whose migrations create the four schema-7 tables. */
+/** The 6 -> 7 transition: an ordinary delta whose migrations create the schema-7 tables. */
 class SchemaSevenPatchTest {
     @JvmField @Rule
     val tmp = TemporaryFolder()
@@ -40,7 +40,7 @@ class SchemaSevenPatchTest {
         assertEquals(expected, migrations)
         assertEquals(
             mapOf(
-                "book_banner" to 2, "book_protection" to 1, "line_divine_name" to 2, "line_note" to 3,
+                "banner" to 2, "book_banner" to 2, "book_protection" to 1, "line_divine_name" to 2, "line_note" to 3,
                 "line_note_divine_name" to 1,
             ),
             produced.upsertCounts.filterKeys { it in SCHEMA_7_TABLES },
@@ -53,7 +53,7 @@ class SchemaSevenPatchTest {
         connect(target).use { conn ->
             conn.createStatement().use { it.execute("PRAGMA foreign_keys = ON") }
             val result = PatchApplier().apply(conn, patch, expectedToContentHash = hash(next, 7), expectedToSchemaVersion = 7)
-            assertEquals(10, result.migrationsApplied)
+            assertEquals(12, result.migrationsApplied)
         }
         assertEquals(hash(next, 7), hash(target, 7))
         assertEquals(
@@ -184,14 +184,36 @@ class SchemaSevenPatchTest {
     }
 
     @Test
+    fun `a banner wording change is one banner row and a new book one book_banner row`() {
+        val prev = schemaSevenDb("prev.db")
+        val next = schemaSevenDb("next.db")
+        connect(next).use { conn ->
+            conn.createStatement().use { st ->
+                st.execute("INSERT INTO book VALUES (3, 'ג')")
+                st.execute("UPDATE banner SET text = 'באדיבות המו\"ל' WHERE id = 4")
+                st.execute("INSERT INTO book_banner VALUES (3, 4)")
+            }
+        }
+        val patch = path("patch.db")
+        val produced = PatchDbProducer().produce(prev, next, patch, fromVersion = 31, toVersion = 32, fromSchemaVersion = 7, toSchemaVersion = 7)
+
+        assertEquals(1, produced.upsertCounts.getValue("banner"))
+        assertEquals(1, produced.upsertCounts.getValue("book_banner"))
+        val target = copy(prev)
+        connect(target).use { PatchApplier().apply(it, patch, expectedToContentHash = hash(next, 7), expectedToSchemaVersion = 7) }
+        assertEquals(hash(next, 7), hash(target, 7))
+    }
+
+    @Test
     fun `cross-repo golden per-table hashes of the schema 7 tables`() {
         val full = tablesDb("golden.db")
         connect(full).use { conn ->
-            conn.prepareStatement("INSERT INTO book_banner (bookId, text) VALUES (?, ?)").use { ps ->
-                ps.setLong(1, 1); ps.setString(2, "ספר זה באדיבות המו\"ל\n[לאתר המו\"ל](https://example.com/books?id=1)"); ps.executeUpdate()
-                ps.setLong(1, 2); ps.setString(2, "שורה ראשונה\nשורה שנייה"); ps.executeUpdate()
+            conn.prepareStatement("INSERT INTO banner (id, text) VALUES (?, ?)").use { ps ->
+                ps.setLong(1, 7); ps.setString(2, "ספר זה באדיבות המו\"ל\n[לאתר המו\"ל](https://example.com/wiki/{title})"); ps.executeUpdate()
+                ps.setLong(1, 3); ps.setString(2, "שורה ראשונה\nשורה שנייה"); ps.executeUpdate()
             }
             conn.createStatement().use { st ->
+                st.execute("INSERT INTO book_banner (bookId, bannerId) VALUES (2, 7), (1, 7), (3, 3)")
                 st.execute("INSERT INTO book_protection (bookId, level) VALUES (1, 1), (2, 2)")
                 // (charEnd, kind, source): (24, 3, 4), (4, 1, 1), (6, 7, 3), (17, 5, 2); same rows in the Dart golden.
                 st.execute(
@@ -204,7 +226,8 @@ class SchemaSevenPatchTest {
         insertNoteNames(full, GOLDEN_NOTE_NAMES)
         assertEquals(
             mapOf(
-                "book_banner" to "87026c32c4996eee6e5c75b65ce5e08be1a1a28e52864a57a696cbb6555a0c59",
+                "banner" to "aea9be7ae48f7214bafb8b438c4445c4007d3e1e7b7c0d309ce94eab9be04689",
+                "book_banner" to "5b85390ed44d6cb3cd83b9a0c15a39dd1a66a39244f614699c9537abae98e553",
                 "book_protection" to "015c3c2291e1ebac6c68a6f33c8c01b42af0ce46dc3840d7e0a12ae370ae1319",
                 "line_divine_name" to "5ed480458a0ab23dfaaa765fc98696a9d06300c5951085ebb8666925fce92840",
                 "line_note" to GOLDEN_LINE_NOTE_FULL,
@@ -214,7 +237,8 @@ class SchemaSevenPatchTest {
         )
         assertEquals(
             mapOf(
-                "book_banner" to "473b121ac837ac17a9627ed583981faec4074ec3217224c18bb0a6bb62752240",
+                "banner" to "0c43cad9ba168dad63f91972f3687622f971e8f75b15db32f829ef74ffd13833",
+                "book_banner" to "a5eaa7ed08b7e7271d2d09eba8b0e2e90fca6c00fd909c2c95a1cea2793bf2a3",
                 "book_protection" to "260da62f074581043b5bf203c9790203a9ea052f9d1e14e27ecc780f66790a81",
                 "line_divine_name" to "239a3a2f98562426e3b5a8830f4f3c8749ef55315b6a9a0c49e3337c81f55007",
                 "line_note" to GOLDEN_LINE_NOTE_EMPTY,
@@ -252,7 +276,7 @@ class SchemaSevenPatchTest {
     private fun tableHashes(db: Path): Map<String, String> =
         connect(db).use { LogicalContentHasher(SCHEMA_7_TABLES_IN_ORDER, LogicalContentHasher.rowOrderForSchemaVersion(7)).computeReport(it).tableHashes }
 
-    /** book + line only, plus the four schema-7 tables, empty. */
+    /** book + line only, plus the schema-7 tables, empty. */
     private fun tablesDb(name: String): Path {
         val p = path(name)
         connect(p).use { conn ->
@@ -288,7 +312,8 @@ class SchemaSevenPatchTest {
             conn.createStatement().use { st ->
                 st.execute("UPDATE line SET charCount = 18 WHERE id = 10")
                 SCHEMA_7_TABLE_DDL.values.forEach { st.execute(it) }
-                st.execute("INSERT INTO book_banner VALUES (1, 'באדיבות'), (2, 'שורה\nשנייה')")
+                st.execute("INSERT INTO banner VALUES (4, 'באדיבות'), (1, 'שורה\nשנייה [ויקי](https://w.org/{title})')")
+                st.execute("INSERT INTO book_banner VALUES (1, 4), (2, 1)")
                 st.execute("INSERT INTO book_protection VALUES (2, 1)")
                 st.execute("INSERT INTO line_divine_name VALUES (10, 0, 529), (12, 2, 565)") // ends 4, 6
             }
@@ -353,7 +378,7 @@ class SchemaSevenPatchTest {
 
     private companion object {
         val SCHEMA_7_TABLES_IN_ORDER =
-            listOf("book_banner", "book_protection", "line_divine_name", "line_note", "line_note_divine_name")
+            listOf("banner", "book_banner", "book_protection", "line_divine_name", "line_note", "line_note_divine_name")
 
         // Same rows in the Dart golden test; a note without a marker, nested <i>, newline and quotes on purpose.
         val GOLDEN_NOTES: List<List<Any?>> = listOf(

@@ -41,6 +41,7 @@
     "line_alt_toc",
     "default_commentator",
     "default_targum",
+    "banner",
     "book_banner",
     "book_protection",
     "line_divine_name",
@@ -185,6 +186,9 @@
       "bookId",
       "targumBookId"
     ],
+    "banner": [
+      "id"
+    ],
     "book_banner": [
       "bookId"
     ],
@@ -230,8 +234,10 @@
     "INSERT INTO line_dh VALUES (10,'בראשית',1,'א'),(10,'אלה',0,'ב'),(3,'ואלה',0,'ג')",
     "CREATE TABLE link_anchor (linkId INTEGER NOT NULL, side INTEGER NOT NULL DEFAULT 0, charStart INTEGER NOT NULL, charEnd INTEGER, label TEXT, PRIMARY KEY (linkId, side, charStart))",
     "INSERT INTO link_anchor VALUES (2,0,4,5,NULL),(1,1,0,9,'ב'),(1,0,7,1,'א')",
-    "CREATE TABLE book_banner (bookId INTEGER PRIMARY KEY NOT NULL, text TEXT NOT NULL)",
-    "INSERT INTO book_banner VALUES (10,'באדיבות'),(3,'שורה\nשנייה')",
+    "CREATE TABLE banner (id INTEGER PRIMARY KEY NOT NULL, text TEXT NOT NULL)",
+    "INSERT INTO banner VALUES (2,'שורה\nשנייה'),(1,'באדיבות')",
+    "CREATE TABLE book_banner (bookId INTEGER PRIMARY KEY NOT NULL, bannerId INTEGER NOT NULL)",
+    "INSERT INTO book_banner VALUES (10,1),(3,2)",
     "CREATE TABLE line_divine_name (lineId INTEGER NOT NULL, charStart INTEGER NOT NULL, span INTEGER NOT NULL, PRIMARY KEY (lineId, charStart)) WITHOUT ROWID",
     "INSERT INTO line_divine_name VALUES (2,20,579),(1,0,529),(2,3,439),(1,12,677)",
     "CREATE TABLE line_note (lineId INTEGER NOT NULL, noteIndex INTEGER NOT NULL, charPos INTEGER NOT NULL, hasMarker INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (lineId, noteIndex)) WITHOUT ROWID",
@@ -239,7 +245,7 @@
     "CREATE TABLE line_note_divine_name (lineId INTEGER NOT NULL, noteIndex INTEGER NOT NULL, charStart INTEGER NOT NULL, span INTEGER NOT NULL, PRIMARY KEY (lineId, noteIndex, charStart)) WITHOUT ROWID",
     "INSERT INTO line_note_divine_name VALUES (2,0,0,529),(1,1,6,677),(1,0,3,439),(2,0,10,579)"
   ],
-  "wholeHash": "b3af11365331cd5a54219c8e9ff75651dfa260af5eefd71494675f805c96f3b4",
+  "wholeHash": "deb56e700d32c81c2df4334f9009b02ad5e837d50de46426fe08a44e76e8c939",
   "tableHashes": {
     "source": "feae8f08d36404f2acc5777efbde1f0a91f8296474d3dc30fb7de6652934331f",
     "author": "b91e11e69a8aa4b551cc0aca7484cbae4a270dca18dfa2c8f8ea5ea56c7811ce",
@@ -279,7 +285,8 @@
     "line_alt_toc": "89b47bc49be7fd7d90c27e5e779a49b80c3cf14a646be06760eb5e48b1573986",
     "default_commentator": "c069e35fc927ede3d6b997e7da5cb0a64d7ae758c076585661ab7b54f69380ea",
     "default_targum": "4672d9d1693961becf13e330344dc8b962bd0b94f353703f60a04d00cb037b31",
-    "book_banner": "de37ced272743f9c6a17c9b8d9518186ffe73e07a67cf8ed1deb3c92352bd5a9",
+    "banner": "d08dbc453b4acbdcdba131f49c355e4074fb57c7c85fd0c42fa0b19ffad2e288",
+    "book_banner": "4a53bd96848342d03de2cee0fa2d30ed33302b152e225a979a221af765b5ea47",
     "book_protection": "cf448b16fbc7f1c35d36cc8871043adda8d98a8fb08ce19692dcb7269f28a9ac",
     "line_divine_name": "5ed480458a0ab23dfaaa765fc98696a9d06300c5951085ebb8666925fce92840",
     "line_note": "8c5772a1b7560b4c29abafe619d7e3ba35882aed9d1e933eb8ce1f2c0ea00284",
