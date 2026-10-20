@@ -15,7 +15,8 @@ import java.sql.Connection
  *  2. every line by `lineIndex`: `'L'`, lineIndex (i64), UTF-8 length (i32), the UTF-8 text —
  *     the decoded text when `line_content` holds a zstd frame, so compression never changes it;
  *  3. every `line_note` of the book by (lineIndex, noteIndex): `'N'`, lineIndex (i64),
- *     noteIndex (i64), charPos (i64), marker (0, or 1 + i32 length + UTF-8), body (i32 length + UTF-8).
+ *     noteIndex (i64), charPos (i64), marker (0, or 1 + i32 length + UTF-8), body (i32 length + UTF-8,
+ *     decoded like the line text).
  * The value is the first 8 digest bytes as a signed big-endian i64; 0 is reserved for
  * "unknown" and maps to 1. Row ids, heRef, tocEntryId and charCount are not inputs.
  */
@@ -78,7 +79,7 @@ object BookContentHash {
             null
         } else {
             conn.prepareStatement(
-                "SELECT l.lineIndex, n.noteIndex, n.charPos, CAST(n.marker AS BLOB), CAST(n.body AS BLOB) " +
+                "SELECT l.lineIndex, n.noteIndex, n.charPos, CAST(n.marker AS BLOB), typeof(n.body), CAST(n.body AS BLOB) " +
                     "FROM line l JOIN line_note n ON n.lineId = l.id WHERE l.bookId = ? " +
                     "ORDER BY l.lineIndex, l.id, n.noteIndex",
             )
@@ -124,7 +125,8 @@ object BookContentHash {
                             out.writeInt(marker.size)
                             out.write(marker)
                         }
-                        val body = rs.getBytes(5) ?: ByteArray(0)
+                        val stored = rs.getBytes(6) ?: ByteArray(0)
+                        val body = if (rs.getString(5) == "blob") decode(stored) else stored
                         out.writeInt(body.size)
                         out.write(body)
                         flush()

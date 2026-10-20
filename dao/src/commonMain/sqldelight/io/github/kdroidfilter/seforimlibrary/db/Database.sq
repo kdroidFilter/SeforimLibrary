@@ -653,6 +653,7 @@ CREATE TABLE IF NOT EXISTS line_divine_name (
 -- <sup class="footnote-marker"> left in place before the note, NULL when the note
 -- had none. The k-th marker sup of the line belongs to the k-th row with a marker.
 -- link_anchor offsets keep counting each body at its charPos (see link_anchor).
+-- In a DB with zstd_dict, body is a zstd frame (BLOB) like line_content.content.
 CREATE TABLE IF NOT EXISTS line_note (
     lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
     noteIndex INTEGER NOT NULL,

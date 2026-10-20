@@ -269,7 +269,7 @@ Schema 7 also adds `book.contentHash INTEGER NOT NULL DEFAULT 0` (`SCHEMA_7_COLU
 6 -> 7 patch carries an `ALTER TABLE "book" ADD COLUMN` migration and upserts every book.
 `stampSchemaVersion` computes it for every book (`BookContentHash.kt`) after every line and
 `line_note` writer: an opaque 64-bit fingerprint of the book's line text (decoded, so
-compression does not change it) and its notes. Same content gives the same value in every
+compression does not change it) and its notes (bodies decoded the same way). Same content gives the same value in every
 build, so a 7 -> 7 delta upserts only the books whose text changed. 0 means unknown.
 
 ---

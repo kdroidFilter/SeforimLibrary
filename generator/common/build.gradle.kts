@@ -213,7 +213,7 @@ tasks.register<JavaExec>("splitLineContent") {
 
 tasks.register<JavaExec>("compressLineContent") {
     group = "application"
-    description = "Compresses line_content/version_line text of the finished seforim.db into zstd frames with the bundled dictionary."
+    description = "Compresses line_content/version_line text and line_note bodies of the finished seforim.db into zstd frames with the bundled dictionary."
     dependsOn("jvmJar")
     mainClass.set("io.github.kdroidfilter.seforimlibrary.common.patch.CompressLineContentCliKt")
     classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
