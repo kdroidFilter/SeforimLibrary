@@ -58,6 +58,15 @@ class LogicalHashRowOrderTest {
         }
     }
 
+    @Test
+    fun `a declared row-order column missing from the table fails loudly`() {
+        DriverManager.getConnection("jdbc:sqlite::memory:").use { conn ->
+            conn.createStatement().use { it.execute("CREATE TABLE line_note (lineId INTEGER NOT NULL, body TEXT NOT NULL)") }
+            val hasher = LogicalContentHasher(listOf("line_note"), LogicalContentHasher.rowOrderForSchemaVersion(7))
+            assertFailsWith<IllegalArgumentException> { hasher.computeReport(conn) }
+        }
+    }
+
     private fun freshDb(block: (Connection) -> Unit) {
         val db = tmp.newFolder().toPath().resolve("fresh-seforim.db")
         JdbcSqliteDriver("jdbc:sqlite:${db.toAbsolutePath()}").use { SeforimDb.Schema.create(it) }

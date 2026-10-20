@@ -207,8 +207,8 @@ class CiWorkflowTest(unittest.TestCase):
 
     def test_contract_fixture_steps_say_what_they_checked(self):
         body = "\n".join(self.run_bodies(self.contract))
-        self.assertIn('echo "fixtures: 6 present"', body)
-        self.assertIn('echo "fixtures: 3 pairs byte-identical"', body)
+        self.assertIn('echo "fixtures: 8 present"', body)
+        self.assertIn('echo "fixtures: 4 pairs byte-identical"', body)
 
     def test_pull_requests_run_the_local_orchestration_contract_suites(self):
         # Those suites used to run in exactly one place: the release workflow's

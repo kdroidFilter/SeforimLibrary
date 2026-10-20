@@ -166,7 +166,7 @@ class SchemaSevenPatchTest {
     fun `line_note hashes rows in primary-key order, not by body`() {
         val db = tablesDb("order.db")
         insertNotes(db, listOf(listOf(2, 0, 7, "1", "א"), listOf(1, 0, 3, null, "ב")))
-        val actual = connect(db).use { LogicalContentHasher(listOf("line_note")).computeReport(it).tableHashes }
+        val actual = connect(db).use { LogicalContentHasher(listOf("line_note"), LogicalContentHasher.rowOrderForSchemaVersion(7)).computeReport(it).tableHashes }
 
         val bytes = ByteArrayOutputStream()
         bytes.write(" table:line_note ".toByteArray())
@@ -232,7 +232,7 @@ class SchemaSevenPatchTest {
                 )
             }
         }
-        val actual = connect(db).use { LogicalContentHasher(listOf("book")).computeReport(it).tableHashes }
+        val actual = connect(db).use { LogicalContentHasher(listOf("book"), LogicalContentHasher.rowOrderForSchemaVersion(7)).computeReport(it).tableHashes }
         assertEquals(mapOf("book" to GOLDEN_BOOK_CONTENT_HASH), actual)
     }
 
@@ -246,7 +246,7 @@ class SchemaSevenPatchTest {
     }
 
     private fun tableHashes(db: Path): Map<String, String> =
-        connect(db).use { LogicalContentHasher(SCHEMA_7_TABLES_IN_ORDER).computeReport(it).tableHashes }
+        connect(db).use { LogicalContentHasher(SCHEMA_7_TABLES_IN_ORDER, LogicalContentHasher.rowOrderForSchemaVersion(7)).computeReport(it).tableHashes }
 
     /** book + line only, plus the four schema-7 tables, empty. */
     private fun tablesDb(name: String): Path {

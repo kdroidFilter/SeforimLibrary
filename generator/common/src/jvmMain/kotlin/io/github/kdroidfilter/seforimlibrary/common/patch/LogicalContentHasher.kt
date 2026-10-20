@@ -20,8 +20,8 @@ import java.security.MessageDigest
  *  - the client's post-apply self-check.
  */
 class LogicalContentHasher(
-    private val tables: List<String> = DEFAULT_TABLES,
-    private val rowOrder: Map<String, List<String>>? = DEFAULT_ROW_ORDER,
+    private val tables: List<String>,
+    private val rowOrder: Map<String, List<String>>?,
     private val logger: Logger = Logger.withTag("LogicalContentHasher"),
 ) {
 
@@ -191,9 +191,6 @@ class LogicalContentHasher(
         /** First schema whose rows are hashed in primary-key order, streamed from the PK index without a temp sort. */
         const val PK_ROW_ORDER_SCHEMA_VERSION: Int = 7
 
-        /** Row order of the current schema, matching [DEFAULT_TABLES]. */
-        val DEFAULT_ROW_ORDER: Map<String, List<String>>? = rowOrderForSchemaVersion(CURRENT_DB_SCHEMA_VERSION)
-
         /**
          * Columns each table's rows are hashed in: from schema 7 the primary key the patch-table
          * contract declares; null keeps the frozen schema <= 6 rule (`id`, else every column).
@@ -208,7 +205,10 @@ class LogicalContentHasher(
         /** ORDER BY of [table]: its [rowOrder] columns, or the frozen schema <= 6 rule when null. */
         internal fun orderByClause(rowOrder: Map<String, List<String>>?, table: String, cols: List<String>): String =
             if (rowOrder != null) {
-                rowOrder.getValue(table).joinToString(",") { "\"$it\"" }
+                val pk = rowOrder.getValue(table)
+                // sqlite takes an unknown quoted name as a string literal, i.e. no order at all.
+                require(cols.containsAll(pk)) { "Hash row order $pk of '$table' is not in its columns $cols" }
+                pk.joinToString(",") { "\"$it\"" }
             } else if ("id" in cols) {
                 "id"
             } else {

@@ -2,14 +2,14 @@ package io.github.kdroidfilter.seforimlibrary.common.patch
 
 import co.touchlab.kermit.Logger
 import co.touchlab.kermit.Severity
+import java.nio.file.Path
 import java.nio.file.Paths
-import java.security.MessageDigest
 import java.sql.Connection
 import java.sql.DriverManager
 
 /**
- * Per-table LogicalContentHasher comparison between two seforim.db files.
- * Reports which tables hash-match and which diverge.
+ * Per-table LogicalContentHasher comparison between two seforim.db files, each
+ * hashed under its own `db_schema_version`. Reports which tables match and which diverge.
  *
  * Required system properties:
  *   - `leftDb`   absolute path to one DB
@@ -19,9 +19,9 @@ fun main() {
     Logger.setMinSeverity(Severity.Info)
     val left = Paths.get(System.getProperty("leftDb") ?: error("-PleftDb= missing"))
     val right = Paths.get(System.getProperty("rightDb") ?: error("-PrightDb= missing"))
-    val tables = LogicalContentHasher.DEFAULT_TABLES
-    val l = perTable(left.toString(), tables)
-    val r = perTable(right.toString(), tables)
+    val l = perTableLogicalHashes(left, "leftSchemaVersion")
+    val r = perTableLogicalHashes(right, "rightSchemaVersion")
+    val tables = (l.keys + r.keys).distinct()
     println()
     println("Per-table comparison")
     println("====================")
@@ -38,46 +38,25 @@ fun main() {
     if (diff == 0) println("✅ The two databases are logically identical.")
 }
 
-private fun perTable(dbPath: String, tables: List<String>): Map<String, String> {
-    val out = HashMap<String, String>()
-    DriverManager.getConnection("jdbc:sqlite:$dbPath").use { conn ->
-        for (t in tables) out[t] = hashSingle(conn, t)
+/**
+ * Per-table logical hashes of [db] under its own `db_schema_version` contract (the
+ * values a manifest's table hashes carry), each with its row count.
+ */
+internal fun perTableLogicalHashes(db: Path, schemaKey: String): Map<String, String> {
+    val schemaVersion = resolveSchemaVersion(db, schemaKey)
+    return DriverManager.getConnection("jdbc:sqlite:${db.toAbsolutePath()}").use { conn ->
+        LogicalContentHasher.forSchemaVersion(schemaVersion).computeReport(conn).tableHashes
+            .mapValues { (table, hash) -> "$hash (rows=${rowCount(conn, table)})" }
     }
-    return out
 }
 
-private fun hashSingle(conn: Connection, table: String): String {
-    val md = MessageDigest.getInstance("SHA-256")
-    val cols = ArrayList<String>()
-    conn.createStatement().use { st ->
-        st.executeQuery("PRAGMA table_info(\"$table\")").use { rs ->
-            while (rs.next()) cols += rs.getString("name")
-        }
+private fun rowCount(conn: Connection, table: String): String {
+    val exists = conn.prepareStatement("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").use { ps ->
+        ps.setString(1, table)
+        ps.executeQuery().use { it.next() }
     }
-    if (cols.isEmpty()) return "no_table"
-    val sorted = cols.sorted()
-    md.update(sorted.joinToString(",", prefix = "cols:").toByteArray())
-    md.update(byteArrayOf(0x00))
-    val csv = sorted.joinToString(",") { "\"$it\"" }
-    val order = LogicalContentHasher.orderByClause(LogicalContentHasher.DEFAULT_ROW_ORDER, table, sorted)
-    var rows = 0
-    conn.createStatement().use { st ->
-        st.executeQuery("SELECT $csv FROM \"$table\" ORDER BY $order").use { rs ->
-            while (rs.next()) {
-                rows++
-                for (i in 1..sorted.size) {
-                    val obj = rs.getObject(i)
-                    when {
-                        obj == null || rs.wasNull() -> md.update(byteArrayOf(0))
-                        obj is ByteArray -> { md.update(byteArrayOf(1)); md.update(obj) }
-                        obj is Number -> { md.update(byteArrayOf(2)); md.update(obj.toString().toByteArray()) }
-                        else -> { md.update(byteArrayOf(3)); md.update(obj.toString().toByteArray()) }
-                    }
-                    md.update(byteArrayOf(0x1F))
-                }
-                md.update(byteArrayOf(0xFF.toByte()))
-            }
-        }
+    if (!exists) return "no_table"
+    return conn.createStatement().use { st ->
+        st.executeQuery("SELECT count(*) FROM \"$table\"").use { rs -> rs.next(); rs.getLong(1).toString() }
     }
-    return "${md.digest().joinToString("") { "%02x".format(it) }} (rows=$rows)"
 }

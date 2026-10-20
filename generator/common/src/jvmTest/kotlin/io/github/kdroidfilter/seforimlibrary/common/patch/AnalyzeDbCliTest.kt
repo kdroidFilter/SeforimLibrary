@@ -21,7 +21,7 @@ class AnalyzeDbCliTest {
                         "INSERT INTO link SELECT i, i, i % 3 FROM n",
                 )
             }
-            val before = LogicalContentHasher().computeReport(conn)
+            val before = LogicalContentHasher.forSchemaVersion(CURRENT_DB_SCHEMA_VERSION).computeReport(conn)
 
             analyzeForQueryPlanner(conn)
 
@@ -32,7 +32,7 @@ class AnalyzeDbCliTest {
                 }
             }
             assertEquals("100 34 1", stat)
-            assertEquals(before, LogicalContentHasher().computeReport(conn))
+            assertEquals(before, LogicalContentHasher.forSchemaVersion(CURRENT_DB_SCHEMA_VERSION).computeReport(conn))
             assertTrue(conn.autoCommit)
         }
     }
