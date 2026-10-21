@@ -59,6 +59,16 @@ class LogicalHashContractTest {
     }
 
     @Test
+    fun `the schema 7 oracle creates every schema 7 table with its real DDL`() {
+        val oracle = oracles.single { it.schemaVersion == 7 }
+        fun norm(sql: String) = sql.replace(Regex("\\s+"), " ").replace(Regex(" ?([(),]) ?"), "$1").trim()
+        for ((table, ddl) in SCHEMA_7_TABLE_DDL) {
+            val created = oracle.setupSql.filter { Regex("^CREATE TABLE (IF NOT EXISTS )?$table ").containsMatchIn(it) }
+            assertEquals(listOf(norm(ddl)), created.map(::norm), "oracle DDL of '$table'")
+        }
+    }
+
+    @Test
     fun `whole hash and every per-table hash match the shared oracle`() = oracles.forEach { o ->
         val report = o.withFixtureDb {
             LogicalContentHasher.forSchemaVersion(o.schemaVersion).computeReport(it)
