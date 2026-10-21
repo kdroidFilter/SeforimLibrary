@@ -6,6 +6,7 @@ import java.nio.file.Path
 import java.sql.DriverManager
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class DumpLinesTest {
 
@@ -41,6 +42,28 @@ class DumpLinesTest {
                 ),
                 snapshot.rows,
             )
+        }
+    }
+
+    @Test
+    fun `a hasMarker that is not INTEGER 0 or 1 fails the read`() {
+        val db = Files.createTempFile("line-note-flag", ".db")
+        try {
+            for (value in listOf("'x'", "0.5", "X'01'", "2")) {
+                DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
+                    c.createStatement().use { st ->
+                        st.execute("DROP TABLE IF EXISTS line_note")
+                        st.execute(
+                            "CREATE TABLE line_note (lineId INTEGER NOT NULL, noteIndex INTEGER NOT NULL, " +
+                                "charPos INTEGER NOT NULL, hasMarker INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (lineId, noteIndex))",
+                        )
+                        st.execute("INSERT INTO line_note VALUES (1, 0, 0, $value, 'גוף')")
+                    }
+                    assertFailsWith<IllegalStateException>(value) { loadLineNotes(c) }
+                }
+            }
+        } finally {
+            Files.deleteIfExists(db)
         }
     }
 

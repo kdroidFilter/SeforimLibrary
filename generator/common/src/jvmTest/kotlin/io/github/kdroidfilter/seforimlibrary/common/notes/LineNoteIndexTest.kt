@@ -203,6 +203,8 @@ class LineNoteIndexTest {
             "א<sup class=\"footnote-marker\">1</sup><i class=\"footnote\">ג</i> ב<sup class=\"note footnote-marker\">5</sup>",
             // The readers take the italic left after the marker for its body and skip the marker.
             "א<sup class=\"footnote-marker\">1</sup><i class=\"footnote\">ג</i><i class=\"a footnote\">x</i>",
+            // DAGESH after "sup": no sup for the generator's \b, a marker for the readers' Dart \b.
+            "א<sup\u05BC class=\"footnote-marker\">1</sup><i class=\"footnote\">ג</i>",
         )
         for (line in lines) {
             val db = db(listOf(line))

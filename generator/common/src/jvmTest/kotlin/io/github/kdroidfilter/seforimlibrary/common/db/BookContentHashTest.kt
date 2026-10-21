@@ -78,9 +78,12 @@ class BookContentHashTest {
                 assertTrue("line 10" in error.message.orEmpty(), edit)
             }
         }
-        connect(freshDb()).use { conn ->
-            conn.createStatement().use { it.execute("UPDATE line_note SET hasMarker = 2 WHERE lineId = 10 AND noteIndex = 1") }
-            assertFailsWith<IllegalStateException> { BookContentHash.compute(conn, 1) }
+        // Values JDBC getInt would coerce to 0 or 1: the read is strict.
+        for (value in listOf("2", "'x'", "0.5", "1.9", "X'01'", "4294967297")) {
+            connect(freshDb()).use { conn ->
+                conn.createStatement().use { it.execute("UPDATE line_note SET hasMarker = $value WHERE lineId = 10 AND noteIndex = 1") }
+                assertFailsWith<IllegalStateException>(value) { BookContentHash.compute(conn, 1) }
+            }
         }
     }
 

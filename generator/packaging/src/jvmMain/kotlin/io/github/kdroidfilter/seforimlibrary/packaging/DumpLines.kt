@@ -278,7 +278,7 @@ internal fun loadLineNotes(src: Connection): Map<Long, List<LineNoteRehydration.
         s.executeQuery("SELECT lineId, charPos, body, hasMarker FROM line_note ORDER BY lineId, noteIndex").use { rs ->
             while (rs.next()) {
                 out.getOrPut(rs.getLong(1)) { ArrayList() } +=
-                    LineNoteRehydration.NoteAt(rs.getInt(2), rs.getString(3), LineNoteRehydration.hasMarker(rs.getInt(4)))
+                    LineNoteRehydration.NoteAt(rs.getInt(2), rs.getString(3), LineNoteRehydration.hasMarker(rs.getObject(4)))
             }
         }
     }

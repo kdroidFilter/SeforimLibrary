@@ -10,6 +10,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.sql.DriverManager
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class LineNoteRehydrationTest {
     @JvmField @Rule
@@ -51,7 +52,7 @@ class LineNoteRehydrationTest {
                 }
                 val notes = conn.createStatement().use { st ->
                     st.executeQuery("SELECT charPos, body, hasMarker FROM line_note WHERE lineId = ${100 + i} ORDER BY noteIndex").use { rs ->
-                        buildList { while (rs.next()) add(NoteAt(rs.getInt(1), rs.getString(2), LineNoteRehydration.hasMarker(rs.getInt(3)))) }
+                        buildList { while (rs.next()) add(NoteAt(rs.getInt(1), rs.getString(2), LineNoteRehydration.hasMarker(rs.getObject(3)))) }
                     }
                 }
                 if (original.startsWith("<sup class=\"footnote-marker\"></sup>")) {
@@ -128,6 +129,14 @@ class LineNoteRehydrationTest {
                 LineNoteRehydration.rehydrate(stored, listOf(NoteAt(0, "ה", true))),
                 "anchored metadata cannot skip visible text, entities, whitespace or incomplete tags",
             )
+        }
+    }
+
+    @Test
+    fun `hasMarker takes only an INTEGER 0 or 1`() {
+        assertEquals(listOf(false, true, false, true), listOf<Any>(0, 1, 0L, 1L).map { LineNoteRehydration.hasMarker(it) })
+        for (bad in listOf<Any?>(2, -1L, 4294967297L, "1", "x", 0.5, 1.0, byteArrayOf(1), null)) {
+            assertFailsWith<IllegalStateException>("$bad") { LineNoteRehydration.hasMarker(bad) }
         }
     }
 }

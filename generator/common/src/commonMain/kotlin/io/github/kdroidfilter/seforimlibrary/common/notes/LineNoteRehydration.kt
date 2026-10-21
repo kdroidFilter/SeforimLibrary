@@ -11,11 +11,11 @@ object LineNoteRehydration {
     /** Stored note position and body; [hasMarker] is `line_note.hasMarker` (an empty marker included). */
     data class NoteAt(val charPos: Int, val body: String, val hasMarker: Boolean = false)
 
-    /** `line_note.hasMarker` as stored: 0 or 1, anything else is a broken row. */
-    fun hasMarker(stored: Int): Boolean = when (stored) {
-        0 -> false
-        1 -> true
-        else -> error("line_note.hasMarker is $stored, not 0 or 1")
+    /** `line_note.hasMarker` as stored (JDBC `getObject`): INTEGER 0 or 1, anything else is a broken row. */
+    fun hasMarker(stored: Any?): Boolean = when {
+        (stored is Int || stored is Long) && (stored as Number).toLong() == 0L -> false
+        (stored is Int || stored is Long) && (stored as Number).toLong() == 1L -> true
+        else -> error("line_note.hasMarker is ${stored?.let { "${it::class.simpleName} $it" }}, not INTEGER 0 or 1")
     }
 
     /** [notes] in noteIndex order (charPos never decreases along it). */

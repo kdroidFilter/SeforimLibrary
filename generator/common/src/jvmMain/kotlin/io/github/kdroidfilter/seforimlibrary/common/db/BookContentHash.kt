@@ -139,7 +139,7 @@ object BookContentHash {
                         out.writeLong(rs.getLong(1))
                         out.writeLong(rs.getLong(2))
                         out.writeLong(rs.getLong(3))
-                        if (!LineNoteRehydration.hasMarker(rs.getInt(4))) {
+                        if (!LineNoteRehydration.hasMarker(rs.getObject(4))) {
                             out.writeByte(0)
                         } else {
                             val marker = markers.getValue(rs.getLong(7)).removeFirst()

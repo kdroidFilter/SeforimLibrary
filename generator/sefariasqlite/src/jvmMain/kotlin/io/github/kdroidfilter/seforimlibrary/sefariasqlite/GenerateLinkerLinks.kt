@@ -264,7 +264,7 @@ fun main(args: Array<String>) = runBlocking {
                     val notes = noteStatement.executeQuery().use { rs ->
                         buildList {
                             while (rs.next()) {
-                                if (LineNoteRehydration.hasMarker(rs.getInt(3))) anchoredNotes += size
+                                if (LineNoteRehydration.hasMarker(rs.getObject(3))) anchoredNotes += size
                                 add(rs.getInt(1) to (rs.getString(2) ?: ""))
                             }
                         }

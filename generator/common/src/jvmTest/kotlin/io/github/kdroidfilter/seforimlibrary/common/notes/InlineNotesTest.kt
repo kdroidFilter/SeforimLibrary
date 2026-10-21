@@ -154,5 +154,10 @@ class InlineNotesTest {
         assertEquals(0, count("<sup class=\"footnote-mar\u212Aer\">1</sup>"), "ASCII case folding")
         assertEquals(0, count("<sup class=\"footnote-marker\">1</sup>\u3000<i class=\"a footnote\">x</i>"), "JavaScript \\s")
         assertEquals(1, count("<sup class=\"footnote-marker\">1</sup>\u0085<i class=\"footnote\">x</i>"))
+        // A combining mark (DAGESH, Mn) next to an ASCII letter is a word boundary for Dart, not for Java's \b.
+        assertEquals(1, count("<sup\u05BC class=\"footnote-marker\">1</sup>"))
+        assertEquals(1, count("<sup class=\"\u05BCfootnote-marker\u05BC\">1</sup>"))
+        assertEquals(0, count("<sup class=\"footnote-marker\">1</sup><i\u05BC class=\"a \u05BCfootnote\u05BC\">x</i>"))
+        assertEquals(1, count("<sup class=\"footnote-marker\">1</sup><i class=\"a\u05BCfootnotes\">x</i>"))
     }
 }

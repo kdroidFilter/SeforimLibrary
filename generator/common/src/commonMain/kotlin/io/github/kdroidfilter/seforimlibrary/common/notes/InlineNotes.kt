@@ -102,7 +102,7 @@ object InlineNotes {
 
     /**
      * The sups the readers (app `_strippedMarkers`, search engine `stripped_markers`) take as markers of
-     * moved-out bodies, with their Dart RegExp semantics: ASCII case folding and `\b`, JavaScript `\s`.
+     * moved-out bodies, with their Dart RegExp semantics: ASCII case folding and word boundaries, JavaScript `\s`.
      */
     internal fun consumerMarkerRanges(line: String): List<IntRange> =
         if (!line.contains("footnote-marker", ignoreCase = true)) {
@@ -145,12 +145,15 @@ object InlineNotes {
 
     private const val JS_SPACE = "[\\t\\n\\u000B\\f\\r \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]"
 
+    // Dart's \b: an ASCII word character on one side only (Java's \b also joins combining marks to a word).
+    private const val ASCII_B = "(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))"
+
     private val CONSUMER_MARKER = Regex(
-        "<${asciiAnyCase("sup")}\\b[^>]*\\b${asciiAnyCase("footnote-marker")}\\b[^>]*>.*?</${asciiAnyCase("sup")}>",
+        "<${asciiAnyCase("sup")}$ASCII_B[^>]*$ASCII_B${asciiAnyCase("footnote-marker")}$ASCII_B[^>]*>.*?</${asciiAnyCase("sup")}>",
         RegexOption.DOT_MATCHES_ALL,
     )
     private val CONSUMER_BODY_START = Regex(
-        "$JS_SPACE*<${asciiAnyCase("i")}\\b[^>]*\\b${asciiAnyCase("class")}$JS_SPACE*=$JS_SPACE*\"[^\"]*\\b${asciiAnyCase("footnote")}\\b",
+        "$JS_SPACE*<${asciiAnyCase("i")}$ASCII_B[^>]*$ASCII_B${asciiAnyCase("class")}$JS_SPACE*=$JS_SPACE*\"[^\"]*$ASCII_B${asciiAnyCase("footnote")}$ASCII_B",
     )
 
     private fun matchingClose(line: String, openAt: Int): MatchResult? {
