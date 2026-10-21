@@ -16,7 +16,9 @@ on:
   workflow_dispatch:
     inputs:
       inputs_from:
-        description: 'Which snapshot both builds see'
+        # 'released' needs a ForDB archive with the schema-7 notice and override files
+        # (divine_name_overrides.csv is required): use 'latest' until v33 is out.
+        description: 'Which snapshot both builds see (use latest until v33 is released)'
         required: true
         default: 'released'
         type: choice
