@@ -116,9 +116,9 @@ version older than the oldest delta are routed to the full bundle.
 
 ## Banners and protection
 
-`banner` + `book_banner` / `book_protection` come from the optional ForDB files `book_banners.csv` /
-`book_protection.csv` (`seedBookNotices`). The tables always exist in a new build (empty
-when the file is absent). They are schema-7 contract tables like `line_divine_name` and
+`banner` + `book_banner` / `book_protection` come from the required ForDB files `book_banners.csv` /
+`book_protection.csv` (`seedBookNotices`); an archive without either fails the build, since
+silently dropping protection is worse than a failed release. The tables always exist in a new build. They are schema-7 contract tables like `line_divine_name` and
 `line_note` (DELTA_UPDATE_WORKFLOW.md §1.5).
 
 `banner` holds each text that some book uses, verbatim, under the `id` of its CSV row, and

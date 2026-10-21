@@ -353,7 +353,7 @@ tasks.register<JavaExec>("seedAllMetadata") {
 }
 
 // Publisher banners and protection levels — banner + book_banner / book_protection from the
-// optional ForDB book_banners.csv / book_protection.csv. Runs after every stage that
+// required ForDB book_banners.csv / book_protection.csv. Runs after every stage that
 // writes or renames books (it matches final titles).
 // Usage:
 //   ./gradlew :sefariasqlite:seedBookNotices -PseforimDb=/path/to/seforim.db

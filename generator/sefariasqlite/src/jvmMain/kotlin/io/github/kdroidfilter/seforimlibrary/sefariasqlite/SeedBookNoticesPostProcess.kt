@@ -9,10 +9,10 @@ import java.sql.DriverManager
 import kotlin.io.path.exists
 import kotlin.system.exitProcess
 
-/** Per-book publisher banner text, by source with per-book overrides. */
+/** Per-book publisher banner text, by source with per-book overrides. Required. */
 internal const val BOOK_BANNERS_FILE = "book_banners.csv"
 
-/** Per-book protection level, by source with per-book overrides. */
+/** Per-book protection level, by source with per-book overrides. Required. */
 internal const val BOOK_PROTECTION_FILE = "book_protection.csv"
 
 private val BANNER_HEADER = listOf("id", "sourceName", "bookName", "text")
@@ -44,7 +44,7 @@ internal data class BookNoticesResult(
  * Seeds the `banner`, `book_banner` and `book_protection` tables from
  * otzaria-library/ForDB/[BOOK_BANNERS_FILE] and [BOOK_PROTECTION_FILE].
  *
- * Both files are optional: an archive without one leaves its table empty. Runs after
+ * Both files are required: a missing one fails the build. Runs after
  * every stage that writes or renames books, so `bookName` is the final DB title.
  * A protection row (per book or source default) that matches no book fails the build:
  * dropping protection silently is worse than a failed release.
@@ -78,12 +78,13 @@ fun main(args: Array<String>) {
     }
 }
 
-/** Reads and parses both optional files from the ForDB archive. */
-internal fun loadBookNoticeRows(logger: Logger): BookNoticeRows = BookNoticeRows(
-    banners = downloadOptionalForDbFile(BOOK_BANNERS_FILE, logger)
-        ?.let { parseBookBanners(forDbText(it)) }.orEmpty(),
-    protections = downloadOptionalForDbFile(BOOK_PROTECTION_FILE, logger)
-        ?.let { parseBookProtection(forDbText(it)) }.orEmpty(),
+/** Reads and parses both required files from the ForDB archive ([read] is for tests). */
+internal fun loadBookNoticeRows(
+    logger: Logger,
+    read: (String) -> List<String> = { downloadRequiredForDbFile(it, logger) },
+): BookNoticeRows = BookNoticeRows(
+    banners = parseBookBanners(forDbText(read(BOOK_BANNERS_FILE))),
+    protections = parseBookProtection(forDbText(read(BOOK_PROTECTION_FILE))),
 )
 
 /** The archive reader splits files into lines; quoted fields may span them, so re-join first. */

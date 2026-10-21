@@ -29,10 +29,23 @@ class SeedBookNoticesTest {
     fun `the real banner file keeps its multi-line quoted texts`() {
         val rows = parseBookBanners(forDbText(resourceLines("book_banners.csv")))
 
-        val bySource = rows.associateBy { it.sourceName }
+        val defaults = rows.filter { it.bookName.isEmpty() }
+        val bySource = defaults.associateBy { it.sourceName }
         assertEquals(setOf("BeitAharonVeYisraelToOtzaria", "National-LibraryToOtzaria", "wikiJewishBooksToOtzaria"), bySource.keys)
-        assertTrue(rows.all { it.bookName.isEmpty() })
-        assertEquals(listOf(1L, 2L, 3L), rows.map { it.value.id })
+        assertEquals(listOf(1L, 2L, 3L), defaults.map { it.value.id })
+        // Per-book wiki rows: the default wording with an explicit, encoded page path for {title}.
+        val overrides = rows - defaults.toSet()
+        assertEquals((4L..12L).toList(), overrides.map { it.value.id })
+        val wikiText = bySource.getValue("wikiJewishBooksToOtzaria").value.text
+        val wikiPrefix = "https://wiki.jewishbooks.org.il/mediawiki/wiki/"
+        val linkTarget = Regex("""\]\(([^)\s]+)\)""")
+        for (row in overrides) {
+            assertEquals("wikiJewishBooksToOtzaria", row.sourceName)
+            val url = linkTarget.find(row.value.text)!!.groupValues[1]
+            val page = url.removePrefix(wikiPrefix)
+            assertTrue(page != url && wikiPrefix !in page && "{title}" !in page, url)
+            assertEquals(wikiText.replace("{title}", page), row.value.text)
+        }
         assertEquals(
             "כל הזכויות שמורות למכון בית אהרן וישראל שע\"י מרכז סטאלין קארלין.\n" +
                 "אין להעתיק ולשכפל בכל צורה שהיא ללא אישור מפורש בכתב מהמו\"ל",
@@ -51,6 +64,21 @@ class SeedBookNoticesTest {
             ),
             rows,
         )
+    }
+
+    @Test
+    fun `a ForDB archive without either notices file fails instead of seeding empty tables`() {
+        val files = mapOf(
+            BOOK_BANNERS_FILE to resourceLines("book_banners.csv"),
+            BOOK_PROTECTION_FILE to resourceLines("book_protection.csv"),
+        )
+        assertEquals(12, loadBookNoticeRows(logger) { requiredForDbFile(files, it) }.banners.size)
+        for (missing in files.keys) {
+            val error = assertFailsWith<IllegalStateException> {
+                loadBookNoticeRows(logger) { requiredForDbFile(files - missing, it) }
+            }
+            assertContains(error.message.orEmpty(), "is missing required file $missing")
+        }
     }
 
     @Test
