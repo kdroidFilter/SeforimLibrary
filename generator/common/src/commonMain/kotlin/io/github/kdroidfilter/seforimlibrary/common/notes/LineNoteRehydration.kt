@@ -8,8 +8,15 @@ package io.github.kdroidfilter.seforimlibrary.common.notes
  */
 object LineNoteRehydration {
 
-    /** Stored note position and body; [hasMarker] includes an empty, non-null SQL marker. */
+    /** Stored note position and body; [hasMarker] is `line_note.hasMarker` (an empty marker included). */
     data class NoteAt(val charPos: Int, val body: String, val hasMarker: Boolean = false)
+
+    /** `line_note.hasMarker` as stored: 0 or 1, anything else is a broken row. */
+    fun hasMarker(stored: Int): Boolean = when (stored) {
+        0 -> false
+        1 -> true
+        else -> error("line_note.hasMarker is $stored, not 0 or 1")
+    }
 
     /** [notes] in noteIndex order (charPos never decreases along it). */
     fun rehydrate(stored: String, notes: List<NoteAt>): String {

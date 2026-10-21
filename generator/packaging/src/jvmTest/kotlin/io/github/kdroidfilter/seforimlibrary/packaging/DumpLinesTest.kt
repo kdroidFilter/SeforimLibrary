@@ -25,12 +25,12 @@ class DumpLinesTest {
                 c.createStatement().use { st ->
                     st.execute(
                         "CREATE TABLE line_note (lineId INTEGER NOT NULL, noteIndex INTEGER NOT NULL, " +
-                            "charPos INTEGER NOT NULL, marker TEXT, body TEXT NOT NULL, PRIMARY KEY (lineId, noteIndex))",
+                            "charPos INTEGER NOT NULL, hasMarker INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (lineId, noteIndex))",
                     )
                     st.execute(
-                        "INSERT INTO line_note SELECT id, 0, 2, '1', 'ראה בראשית א א' FROM line WHERE lineIndex = 0",
+                        "INSERT INTO line_note SELECT id, 0, 2, 1, 'ראה בראשית א א' FROM line WHERE lineIndex = 0",
                     )
-                    st.execute("INSERT INTO line_note SELECT id, 1, 4, NULL, 'סוף' FROM line WHERE lineIndex = 0")
+                    st.execute("INSERT INTO line_note SELECT id, 1, 4, 0, 'סוף' FROM line WHERE lineIndex = 0")
                 }
             }
             assertEquals(
@@ -45,7 +45,7 @@ class DumpLinesTest {
     }
 
     @Test
-    fun `an empty SQL marker remains anchored and adjacent bodies keep note order`() {
+    fun `an empty marker remains anchored and adjacent bodies keep note order`() {
         val marker = "<sup class=\"footnote-marker\"></sup>"
         val books = listOf(TestBook(1, "src", "Book", listOf("<p><b>$marker סוף</b></p>")))
         for (split in listOf(false, true)) {
@@ -53,10 +53,10 @@ class DumpLinesTest {
                 c.createStatement().use { st ->
                     st.execute(
                         "CREATE TABLE line_note (lineId INTEGER NOT NULL, noteIndex INTEGER NOT NULL, " +
-                            "charPos INTEGER NOT NULL, marker TEXT, body TEXT NOT NULL, PRIMARY KEY (lineId, noteIndex))",
+                            "charPos INTEGER NOT NULL, hasMarker INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (lineId, noteIndex))",
                     )
-                    st.execute("INSERT INTO line_note SELECT id, 0, 0, '', 'ראשונה' FROM line")
-                    st.execute("INSERT INTO line_note SELECT id, 1, 0, NULL, 'שנייה' FROM line")
+                    st.execute("INSERT INTO line_note SELECT id, 0, 0, 1, 'ראשונה' FROM line")
+                    st.execute("INSERT INTO line_note SELECT id, 1, 0, 0, 'שנייה' FROM line")
                 }
                 assertEquals(listOf(true, false), loadLineNotes(c).values.single().map { it.hasMarker })
             }

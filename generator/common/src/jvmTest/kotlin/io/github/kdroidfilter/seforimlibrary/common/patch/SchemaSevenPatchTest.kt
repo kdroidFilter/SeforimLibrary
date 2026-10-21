@@ -55,11 +55,11 @@ class SchemaSevenPatchTest {
         assertEquals(hash(next, 7), hash(target, 7))
         assertEquals(
             listOf(
-                listOf<Any?>(10, 0, 2, "1", "גוף <i>פנימי</i>"),
-                listOf<Any?>(10, 1, 6, null, "נספח"),
-                listOf<Any?>(11, 0, 1, "*", "ב"),
+                listOf<Any?>(10, 0, 2, 1, "גוף <i>פנימי</i>"),
+                listOf<Any?>(10, 1, 6, 0, "נספח"),
+                listOf<Any?>(11, 0, 1, 1, "ב"),
             ),
-            query(target, "SELECT lineId, noteIndex, charPos, marker, body FROM line_note ORDER BY lineId, noteIndex"),
+            query(target, "SELECT lineId, noteIndex, charPos, hasMarker, body FROM line_note ORDER BY lineId, noteIndex"),
         )
     }
 
@@ -165,17 +165,17 @@ class SchemaSevenPatchTest {
     @Test
     fun `line_note hashes rows in primary-key order, not by body`() {
         val db = tablesDb("order.db")
-        insertNotes(db, listOf(listOf(2, 0, 7, "1", "א"), listOf(1, 0, 3, null, "ב")))
+        insertNotes(db, listOf(listOf(2, 0, 7, 1, "א"), listOf(1, 0, 3, 0, "ב")))
         val actual = connect(db).use { LogicalContentHasher(listOf("line_note"), LogicalContentHasher.rowOrderForSchemaVersion(7)).computeReport(it).tableHashes }
 
         val bytes = ByteArrayOutputStream()
         bytes.write(" table:line_note ".toByteArray())
-        bytes.write("cols:body,charPos,lineId,marker,noteIndex".toByteArray())
+        bytes.write("cols:body,charPos,hasMarker,lineId,noteIndex".toByteArray())
         bytes.write(0x00)
         fun text(s: String) { bytes.write(3); bytes.write(s.toByteArray()); bytes.write(0x1F) }
         fun int(n: Int) { bytes.write(2); bytes.write(n.toString().toByteArray()); bytes.write(0x1F) }
-        text("ב"); int(3); int(1); bytes.write(0); bytes.write(0x1F); int(0); bytes.write(0xFF)
-        text("א"); int(7); int(2); text("1"); int(0); bytes.write(0xFF)
+        text("ב"); int(3); int(0); int(1); int(0); bytes.write(0xFF)
+        text("א"); int(7); int(1); int(2); int(0); bytes.write(0xFF)
         val expected = MessageDigest.getInstance("SHA-256").digest(bytes.toByteArray()).joinToString("") { "%02x".format(it) }
         assertEquals(mapOf("line_note" to expected), actual)
     }
@@ -271,7 +271,7 @@ class SchemaSevenPatchTest {
                 st.execute("INSERT INTO line VALUES (10, 1, 30), (11, 1, 5), (12, 2, 7)")
                 if (staleNote) {
                     st.execute(SCHEMA_7_TABLE_DDL.getValue("line_note"))
-                    st.execute("INSERT INTO line_note VALUES (12, 0, 0, NULL, 'stale')")
+                    st.execute("INSERT INTO line_note VALUES (12, 0, 0, 0, 'stale')")
                 }
             }
         }
@@ -289,14 +289,14 @@ class SchemaSevenPatchTest {
                 st.execute("INSERT INTO line_divine_name VALUES (10, 0, 4, 1, 1), (12, 2, 6, 5, 3)")
             }
         }
-        insertNotes(p, listOf(listOf(10, 0, 2, "1", "גוף <i>פנימי</i>"), listOf(10, 1, 6, null, "נספח"), listOf(11, 0, 1, "*", "ב")))
+        insertNotes(p, listOf(listOf(10, 0, 2, 1, "גוף <i>פנימי</i>"), listOf(10, 1, 6, 0, "נספח"), listOf(11, 0, 1, 1, "ב")))
         insertNoteNames(p, listOf(listOf(10, 0, 4, 9, 1, 1)))
         return p
     }
 
     private fun insertNotes(db: Path, rows: List<List<Any?>>) {
         connect(db).use { conn ->
-            conn.prepareStatement("INSERT INTO line_note (lineId, noteIndex, charPos, marker, body) VALUES (?, ?, ?, ?, ?)").use { ps ->
+            conn.prepareStatement("INSERT INTO line_note (lineId, noteIndex, charPos, hasMarker, body) VALUES (?, ?, ?, ?, ?)").use { ps ->
                 for (row in rows) {
                     row.forEachIndexed { i, v -> ps.setObject(i + 1, v) }
                     ps.executeUpdate()
@@ -347,12 +347,12 @@ class SchemaSevenPatchTest {
         val SCHEMA_7_TABLES_IN_ORDER =
             listOf("book_banner", "book_protection", "line_divine_name", "line_note", "line_note_divine_name")
 
-        // Same rows in the Dart golden test; NULL marker, nested <i>, newline and quotes on purpose.
+        // Same rows in the Dart golden test; a note without a marker, nested <i>, newline and quotes on purpose.
         val GOLDEN_NOTES: List<List<Any?>> = listOf(
-            listOf(2, 0, 5, "1", "הערה <i>פנימית</i> א"),
-            listOf(1, 1, 12, null, "נספח בסוף השורה"),
-            listOf(1, 0, 3, "*", "גוף \"ב\"\nשורה שנייה"),
-            listOf(2, 1, 9, "<b>2</b>", "<b>ב</b> &amp; ג"),
+            listOf(2, 0, 5, 1, "הערה <i>פנימית</i> א"),
+            listOf(1, 1, 12, 0, "נספח בסוף השורה"),
+            listOf(1, 0, 3, 1, "גוף \"ב\"\nשורה שנייה"),
+            listOf(2, 1, 9, 1, "<b>ב</b> &amp; ג"),
         )
 
         // (lineId, noteIndex, charStart, charEnd, kind, source), on the notes above.
@@ -364,8 +364,8 @@ class SchemaSevenPatchTest {
         )
 
         // Shared with otzaria_library_updater: the Dart hasher must give the same hex.
-        const val GOLDEN_LINE_NOTE_FULL = "b01db649c8a87765a89d0667849cad5389f9cc5b64137486e06d1bb631b6c487"
-        const val GOLDEN_LINE_NOTE_EMPTY = "027c225d40b02cfc2025d0c279668dcd341af7ab68c725b3b187fac0dbdce8a8"
+        const val GOLDEN_LINE_NOTE_FULL = "8c5772a1b7560b4c29abafe619d7e3ba35882aed9d1e933eb8ce1f2c0ea00284"
+        const val GOLDEN_LINE_NOTE_EMPTY = "1424aefc886962c989c6ba346334c848597e391523ab4a2562b35f4621be946f"
         const val GOLDEN_LINE_NOTE_DIVINE_NAME_FULL = "5c2aded4a4b3fa5a4146308c2bc07cbfe0926766ddcb2e6c4b13785db1b893cf"
         const val GOLDEN_LINE_NOTE_DIVINE_NAME_EMPTY = "4c7710872d55a8575723dac795a2de02e09085ec0643712cc4aa41014d5320aa"
         const val GOLDEN_BOOK_CONTENT_HASH = "eb5db532be575315bed061263dc4fce8edf21bc4edf27556f8aa689a3c29eb43"

@@ -81,7 +81,7 @@ private class LineNotePass(
         },
     )
     private val existing = prepare("SELECT 1 FROM line_note WHERE lineId = ? LIMIT 1")
-    private val insertNote = prepare("INSERT INTO line_note (lineId, noteIndex, charPos, marker, body) VALUES (?, ?, ?, ?, ?)")
+    private val insertNote = prepare("INSERT INTO line_note (lineId, noteIndex, charPos, hasMarker, body) VALUES (?, ?, ?, ?, ?)")
     private val updateContent = prepare(
         if (split) "UPDATE line_content SET content = ? WHERE id = ?" else "UPDATE line SET content = ? WHERE id = ?",
     )
@@ -129,6 +129,13 @@ private class LineNotePass(
             if (orphanMarkers++ < SAMPLE) logger.w { "line_note: line $id has a marker sup without a note; left inline" }
             return
         }
+        // hasMarker drops the marker text: readers rebuild it from the line, so both rules must give it back exactly.
+        check(InlineNotes.consumerMarkerRanges(stripped) == InlineNotes.markerRanges(stripped)) {
+            "line $id: the readers' marker rule does not find the same marker sups"
+        }
+        check(InlineNotes.markers(stripped) == found.mapNotNull { it.marker }) {
+            "line $id: the marker sups left in the line do not reproduce the notes' markers"
+        }
         existing.setLong(1, id)
         check(existing.executeQuery().use { !it.next() }) { "line $id still carries note bodies but already has line_note rows" }
 
@@ -147,7 +154,7 @@ private class LineNotePass(
             insertNote.setLong(1, id)
             insertNote.setInt(2, index)
             insertNote.setInt(3, charPos[index])
-            insertNote.setString(4, note.marker)
+            insertNote.setInt(4, if (note.marker != null) 1 else 0)
             insertNote.setString(5, note.body)
             insertNote.addBatch()
         }

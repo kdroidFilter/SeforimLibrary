@@ -134,4 +134,25 @@ class InlineNotesTest {
         )
         assertEquals("א", InlineNotes.stripMarkersAndBodies("א<i class=\"footnote\">x <i>y</i> בלי סוף"))
     }
+
+    @Test
+    fun `markers are each marker sup's raw inner HTML, in order`() {
+        val stored = "<SUP CLASS = \"footnote-marker\"></SUP>א<sup class=\"footnote-marker\"> <b>2</b>&amp;</sup>" +
+            "<sup>3</sup><sup class=\"footnote-marker\" dir=\"rtl\">1<i class=\"footnote\"></i></sup>"
+        assertEquals(listOf("", " <b>2</b>&amp;", "1<i class=\"footnote\"></i>"), InlineNotes.markers(stored))
+        assertEquals(InlineNotes.markerRanges(stored), InlineNotes.consumerMarkerRanges(stored))
+        assertEquals(emptyList(), InlineNotes.markers("<sup>1</sup> footnote"))
+    }
+
+    @Test
+    fun `the readers' marker rule follows Dart RegExp`() {
+        fun count(line: String) = InlineNotes.consumerMarkerRanges(line).size
+        assertEquals(1, count("<sup class=\"note footnote-marker\">1</sup>"))
+        assertEquals(1, count("<SUP Class=\"FOOTNOTE-MARKER\">1</SUP>"))
+        assertEquals(1, count("<sup class=\"footnote-markeré\">1</sup>"), "ASCII \\b")
+        assertEquals(0, count("<sup class=\"footnote-markers\">1</sup>"))
+        assertEquals(0, count("<sup class=\"footnote-mar\u212Aer\">1</sup>"), "ASCII case folding")
+        assertEquals(0, count("<sup class=\"footnote-marker\">1</sup>\u3000<i class=\"a footnote\">x</i>"), "JavaScript \\s")
+        assertEquals(1, count("<sup class=\"footnote-marker\">1</sup>\u0085<i class=\"footnote\">x</i>"))
+    }
 }

@@ -50,12 +50,12 @@ class LineNoteRehydrationTest {
                     st.executeQuery("SELECT content FROM line WHERE id = ${100 + i}").use { rs -> rs.next(); rs.getString(1) }
                 }
                 val notes = conn.createStatement().use { st ->
-                    st.executeQuery("SELECT charPos, body, marker FROM line_note WHERE lineId = ${100 + i} ORDER BY noteIndex").use { rs ->
-                        buildList { while (rs.next()) add(NoteAt(rs.getInt(1), rs.getString(2), rs.getString(3) != null)) }
+                    st.executeQuery("SELECT charPos, body, hasMarker FROM line_note WHERE lineId = ${100 + i} ORDER BY noteIndex").use { rs ->
+                        buildList { while (rs.next()) add(NoteAt(rs.getInt(1), rs.getString(2), LineNoteRehydration.hasMarker(rs.getInt(3)))) }
                     }
                 }
                 if (original.startsWith("<sup class=\"footnote-marker\"></sup>")) {
-                    assertEquals(listOf(true, false), notes.map { it.hasMarker }, "empty SQL marker is anchored")
+                    assertEquals(listOf(true, false), notes.map { it.hasMarker }, "an empty marker is anchored")
                     assertEquals(listOf(0, 0), notes.map { it.charPos }, "adjacent bodies share a position")
                 }
                 if (original.startsWith("<p><b><sup class=\"footnote-marker\"></sup>")) {

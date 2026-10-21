@@ -103,7 +103,7 @@ class CompressLineContentCliTest {
         )
         val db = schemaSixDb("note-keys.db")
         connect(db).use { conn ->
-            conn.prepareStatement("INSERT INTO line_note (lineId, noteIndex, charPos, marker, body) VALUES (?, ?, 0, NULL, ?)").use { ps ->
+            conn.prepareStatement("INSERT INTO line_note (lineId, noteIndex, charPos, hasMarker, body) VALUES (?, ?, 0, 0, ?)").use { ps ->
                 for ((lineId, noteIndex) in keys) {
                     ps.setLong(1, lineId); ps.setLong(2, noteIndex); ps.setString(3, "גוף $lineId $noteIndex"); ps.executeUpdate()
                 }
@@ -473,7 +473,7 @@ class CompressLineContentCliTest {
             splitLineContent(conn)
             if (withNotes) {
                 conn.prepareStatement(
-                    "INSERT INTO line_note (lineId, noteIndex, charPos, marker, body) VALUES (?, ?, 0, NULL, ?)",
+                    "INSERT INTO line_note (lineId, noteIndex, charPos, hasMarker, body) VALUES (?, ?, 0, 0, ?)",
                 ).use { ps ->
                     for ((key, body) in notes) {
                         ps.setLong(1, key.first); ps.setLong(2, key.second)

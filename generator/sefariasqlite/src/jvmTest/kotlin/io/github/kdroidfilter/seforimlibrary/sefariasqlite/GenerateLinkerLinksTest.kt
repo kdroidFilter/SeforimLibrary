@@ -334,10 +334,10 @@ class GenerateLinkerLinksTest {
             }
             repo.close()
             DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
-                c.prepareStatement("INSERT INTO line_note (lineId, noteIndex, charPos, marker, body) VALUES (20, ?, ?, ?, ?)").use { ps ->
+                c.prepareStatement("INSERT INTO line_note (lineId, noteIndex, charPos, hasMarker, body) VALUES (20, ?, ?, ?, ?)").use { ps ->
                     notes.forEachIndexed { i, (charPos, body) ->
                         ps.setInt(1, i); ps.setInt(2, charPos)
-                        ps.setString(3, if (i in anchoredNotes) "" else null)
+                        ps.setInt(3, if (i in anchoredNotes) 1 else 0)
                         ps.setString(4, body); ps.executeUpdate()
                     }
                 }

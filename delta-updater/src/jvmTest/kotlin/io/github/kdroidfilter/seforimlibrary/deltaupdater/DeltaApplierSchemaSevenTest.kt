@@ -81,7 +81,7 @@ class DeltaApplierSchemaSevenTest {
                 if (schemaSeven) {
                     SCHEMA_7_TABLE_DDL.values.forEach { st.execute(it) }
                     st.execute("INSERT INTO book_banner VALUES (1, 'באדיבות\nהמו\"ל')")
-                    st.execute("INSERT INTO line_note VALUES (1, 0, 3, '1', 'גוף'), (2, 0, 7, NULL, 'נספח')")
+                    st.execute("INSERT INTO line_note VALUES (1, 0, 3, 1, 'גוף'), (2, 0, 7, 0, 'נספח')")
                     st.execute("INSERT INTO line_note_divine_name VALUES (1, 0, 0, 3, 1, 1)")
                 }
             }

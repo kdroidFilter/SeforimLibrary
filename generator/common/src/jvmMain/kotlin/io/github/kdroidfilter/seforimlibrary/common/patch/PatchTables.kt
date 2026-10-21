@@ -192,7 +192,7 @@ val SCHEMA_7_TABLE_DDL: Map<String, String> = linkedMapOf(
             lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
             noteIndex INTEGER NOT NULL,
             charPos INTEGER NOT NULL,
-            marker TEXT,
+            hasMarker INTEGER NOT NULL,
             body TEXT NOT NULL,
             PRIMARY KEY (lineId, noteIndex)
         ) WITHOUT ROWID

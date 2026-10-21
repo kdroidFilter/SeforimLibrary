@@ -66,8 +66,8 @@ class LineDivineNameIndexTest {
         val path = db(listOf("טקסט בלי שם", "שורה"))
         DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use { conn ->
             conn.createStatement().use { st ->
-                st.execute("INSERT INTO line_note VALUES (100, 0, 4, NULL, '<b>א</b>&nbsp;ה'' אלהינו'), (100, 1, 4, '1', 'שמע ישראל יהוה')")
-                st.execute("INSERT INTO line_note VALUES (101, 0, 0, NULL, 'בלי שם')")
+                st.execute("INSERT INTO line_note VALUES (100, 0, 4, 0, '<b>א</b>&nbsp;ה'' אלהינו'), (100, 1, 4, 1, 'שמע ישראל יהוה')")
+                st.execute("INSERT INTO line_note VALUES (101, 0, 0, 0, 'בלי שם')")
                 st.execute("INSERT INTO line_note_divine_name VALUES (101, 0, 0, 1, 5, 3)")
             }
             val report = rebuildLineDivineNameIndex(conn, logger, overrides = null, requireTanach = false)

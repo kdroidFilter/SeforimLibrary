@@ -7,6 +7,7 @@ import co.touchlab.kermit.Severity
 import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
 import io.github.kdroidfilter.seforimlibrary.common.ids.DiskBackedLinkIdAllocator
 import io.github.kdroidfilter.seforimlibrary.common.linker.LinkerInputView
+import io.github.kdroidfilter.seforimlibrary.common.notes.LineNoteRehydration
 import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
 import io.github.kdroidfilter.seforimlibrary.core.models.Link
 import io.github.kdroidfilter.seforimlibrary.core.models.LinkAnchor
@@ -237,7 +238,7 @@ fun main(args: Array<String>) = runBlocking {
         sourceLineDb.createStatement().use { it.execute("PRAGMA query_only = ON") }
         val sourceLineStatement = sourceLineDb.prepareStatement(sourceLineSql)
         val noteStatement = if (hasLineNotes) {
-            sourceLineDb.prepareStatement("SELECT charPos, body, marker FROM line_note WHERE lineId = ? ORDER BY noteIndex")
+            sourceLineDb.prepareStatement("SELECT charPos, body, hasMarker FROM line_note WHERE lineId = ? ORDER BY noteIndex")
         } else null
         var cachedSourceBookId = Long.MIN_VALUE
         var cachedSourceLineIndex = Int.MIN_VALUE
@@ -263,7 +264,7 @@ fun main(args: Array<String>) = runBlocking {
                     val notes = noteStatement.executeQuery().use { rs ->
                         buildList {
                             while (rs.next()) {
-                                if (rs.getString(3) != null) anchoredNotes += size
+                                if (LineNoteRehydration.hasMarker(rs.getInt(3))) anchoredNotes += size
                                 add(rs.getInt(1) to (rs.getString(2) ?: ""))
                             }
                         }

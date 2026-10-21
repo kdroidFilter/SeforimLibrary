@@ -50,7 +50,7 @@ class LineNoteIndexTest {
                 listOf<Any?>(100, 1, 5, null, "זחט"),
                 listOf<Any?>(102, 0, 6, "*", "ה"),
             ),
-            query(db, "SELECT lineId, noteIndex, charPos, marker, body FROM line_note ORDER BY lineId, noteIndex"),
+            notesWithMarkers(db),
         )
     }
 
@@ -76,9 +76,9 @@ class LineNoteIndexTest {
         connect(db).use { rebuildLineNoteIndex(it, logger) }
         val content = query(db, "SELECT content FROM line").single().single() as String
         val sups = Regex("<sup class=\"footnote-marker\">(.*?)</sup>").findAll(content).map { it.groupValues[1] }.toList()
-        val markers = query(db, "SELECT marker FROM line_note WHERE marker IS NOT NULL ORDER BY noteIndex").map { it.single() }
         assertEquals(listOf("א", "ב"), sups)
-        assertEquals(sups, markers)
+        assertEquals(sups, InlineNotes.markers(content))
+        assertEquals(listOf(1, 0, 1), query(db, "SELECT hasMarker FROM line_note ORDER BY noteIndex").map { it.single() })
     }
 
     @Test
@@ -146,7 +146,7 @@ class LineNoteIndexTest {
         assertEquals(0, report.orphanMarkerLines, "a no-break space keeps the marker adjacent")
         assertEquals(
             listOf(listOf<Any?>(100, 0, 2, "1", "גוף"), listOf<Any?>(102, 0, 2, "1", "ב")),
-            query(db, "SELECT lineId, noteIndex, charPos, marker, body FROM line_note ORDER BY lineId"),
+            notesWithMarkers(db),
         )
     }
 
@@ -171,7 +171,7 @@ class LineNoteIndexTest {
         val stripped = "א<sup class=\"footnote-marker\">1</sup>ב <sup>2</sup> ג"
         assertEquals(listOf(listOf<Any?>(stripped, countVisibleChars(stripped))), query(db, "SELECT content, charCount FROM line WHERE id = 100"))
         assertEquals(countVisibleChars("א<sup>1</sup>ב <sup>2</sup> ג"), countVisibleChars(stripped))
-        assertEquals(listOf(listOf<Any?>("1", "גוף")), query(db, "SELECT marker, body FROM line_note"))
+        assertEquals(listOf(listOf<Any?>("1", "גוף")), notesWithMarkers(db).map { it.drop(3) })
         assertEquals(listOf(listOf<Any?>(1, null)), query(db, "SELECT charStart, charEnd FROM link_anchor"))
     }
 
@@ -195,6 +195,22 @@ class LineNoteIndexTest {
         assertEquals(1, report.versionRowsMaterialized)
         assertEquals("אב<sup class=\"footnote-marker\">1</sup>הויכ", query(db, "SELECT content FROM line_content WHERE id = 100").single().single())
         assertEquals(listOf(listOf<Any?>(noted), listOf<Any?>("שונה")), query(db, "SELECT content FROM version_line ORDER BY lineId"))
+    }
+
+    @Test
+    fun `a sup the readers take for a marker but the generator does not fails the run`() {
+        val lines = listOf(
+            "א<sup class=\"footnote-marker\">1</sup><i class=\"footnote\">ג</i> ב<sup class=\"note footnote-marker\">5</sup>",
+            // The readers take the italic left after the marker for its body and skip the marker.
+            "א<sup class=\"footnote-marker\">1</sup><i class=\"footnote\">ג</i><i class=\"a footnote\">x</i>",
+        )
+        for (line in lines) {
+            val db = db(listOf(line))
+            val error = assertFailsWith<IllegalStateException> { connect(db).use { rebuildLineNoteIndex(it, logger) } }
+            assertTrue("readers' marker rule" in error.message.orEmpty(), line)
+            assertTrue(query(db, "SELECT * FROM line_note").isEmpty())
+            assertEquals(line, query(db, "SELECT content FROM line").single().single())
+        }
     }
 
     @Test
@@ -233,6 +249,17 @@ class LineNoteIndexTest {
     }
 
     private fun connect(p: Path): Connection = DriverManager.getConnection("jdbc:sqlite:${p.toAbsolutePath()}")
+
+    /** line_note as (lineId, noteIndex, charPos, marker, body): a hasMarker row takes the next marker sup of its line. */
+    private fun notesWithMarkers(p: Path): List<List<Any?>> {
+        val text = query(p, "SELECT id, content FROM line").associate { (it[0] as Int) to (it[1] as String) }
+        val left = HashMap<Int, ArrayDeque<String>>()
+        return query(p, "SELECT lineId, noteIndex, charPos, hasMarker, body FROM line_note ORDER BY lineId, noteIndex").map { row ->
+            val lineId = row[0] as Int
+            val markers = left.getOrPut(lineId) { ArrayDeque(InlineNotes.markers(text.getValue(lineId))) }
+            listOf(lineId, row[1], row[2], if (row[3] == 1) markers.removeFirst() else null, row[4])
+        }.also { check(left.values.all { it.isEmpty() }) { "a marker sup without a note" } }
+    }
 
     private fun query(p: Path, sql: String): List<List<Any?>> = connect(p).use { conn ->
         conn.createStatement().use { st ->

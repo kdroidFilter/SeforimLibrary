@@ -649,16 +649,17 @@ CREATE TABLE IF NOT EXISTS line_divine_name (
 
 -- Schema 7. Inline footnote bodies moved out of the line text by buildLineNoteIndex.
 -- noteIndex is the reading order in the line; charPos is the visible offset in the
--- stored line where the body stood; marker is the inner HTML of the
--- <sup class="footnote-marker"> left in place before the note, NULL when the note
--- had none. The k-th marker sup of the line belongs to the k-th row with a marker.
+-- stored line where the body stood; hasMarker is 1 when a <sup class="footnote-marker">
+-- was left in place before the note, 0 when the note had none. The k-th marker sup of
+-- the line belongs to the k-th row with hasMarker = 1, and its inner HTML is the
+-- note's marker (verified by buildLineNoteIndex).
 -- link_anchor offsets keep counting each body at its charPos (see link_anchor).
 -- In a DB with zstd_dict, body is a zstd frame (BLOB) like line_content.content.
 CREATE TABLE IF NOT EXISTS line_note (
     lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
     noteIndex INTEGER NOT NULL,
     charPos INTEGER NOT NULL,
-    marker TEXT,
+    hasMarker INTEGER NOT NULL,
     body TEXT NOT NULL,
     PRIMARY KEY (lineId, noteIndex)
 ) WITHOUT ROWID;
