@@ -18,10 +18,8 @@ import kotlin.system.exitProcess
  * Builds `line_divine_name` (see `LineDivineNameIndex.kt`) with the curated verse list
  * from otzaria-library `ForDB/divine_name_overrides.csv`.
  *
- * The list is optional. Without it — or when any row of it is not understood — every
- * Tanach base-book line is limited to the HVYH rule, because only the list can
- * suppress the profane verses there (Pesel Micha, the golden calf, the judges…).
- * Every other book keeps all deterministic rules: the list never applied to them.
+ * The list is required: only it can suppress the profane Tanach verses (Pesel Micha,
+ * the golden calf, the judges…), so a missing file or any row it cannot read fails the build.
  *
  * System properties: `seforimDb`; `divineNameOverridesCsv` (a local CSV instead of
  * ForDB); `reportDir` (dry run: the DB is opened read-only, nothing is written to it).
@@ -63,42 +61,40 @@ fun main(args: Array<String>) {
     }
 }
 
-/** CSV records of the list: the local override file, else the optional ForDB file, else null. */
-internal fun loadDivineNameOverrideRecords(logger: Logger): List<List<String>>? {
+/** CSV records of the list: the local override file, else the required ForDB file. */
+internal fun loadDivineNameOverrideRecords(
+    logger: Logger,
+    forDbFile: (String) -> List<String> = { downloadRequiredForDbFile(it, logger) },
+): List<List<String>> {
     val local = System.getProperty("divineNameOverridesCsv")?.takeIf { it.isNotBlank() }
     val text = if (local != null) {
         logger.i { "Reading the divine-name override list from $local" }
+        check(Files.isRegularFile(Paths.get(local))) { "${DivineNameOverrides.FILE_NAME} not found at $local" }
         Files.readString(Paths.get(local)).removePrefix("﻿")
     } else {
-        downloadOptionalForDbFile(DivineNameOverrides.FILE_NAME, logger)?.let(::forDbText) ?: return null
+        forDbText(forDbFile(DivineNameOverrides.FILE_NAME))
     }
     return parseForDbCsvRecords(text)
 }
 
-/** The usable list, or null (absent or not fully understood) with every problem logged. */
-internal fun loadDivineNameOverrides(logger: Logger): DivineNameOverrides? {
-    val records = loadDivineNameOverrideRecords(logger)
-    if (records == null) {
-        logger.w { "${DivineNameOverrides.FILE_NAME} is absent: Tanach base lines get HVYH only" }
-        return null
+/** The list; fails, naming every problem, when it is absent or any row is not understood. */
+internal fun loadDivineNameOverrides(
+    logger: Logger,
+    forDbFile: (String) -> List<String> = { downloadRequiredForDbFile(it, logger) },
+): DivineNameOverrides {
+    val parsed = DivineNameOverrides.parse(loadDivineNameOverrideRecords(logger, forDbFile))
+    parsed.problems.forEach { problem -> logger.e { "${DivineNameOverrides.FILE_NAME}: $problem" } }
+    return checkNotNull(parsed.overrides) {
+        "${DivineNameOverrides.FILE_NAME} has ${parsed.problems.size} problem(s): ${parsed.problems.joinToString("; ")}"
     }
-    val parsed = DivineNameOverrides.parse(records)
-    parsed.problems.forEach { problem -> logger.w { problem } }
-    if (parsed.overrides == null) {
-        logger.w { "${DivineNameOverrides.FILE_NAME} has ${parsed.problems.size} problem(s): ignored whole, Tanach base lines get HVYH only" }
-    }
-    return parsed.overrides
 }
 
 /**
- * The ForDB gate: warnings only. Reports rows the build would not understand (which
- * would make it ignore the whole list) and refs that match no verse in [conn].
+ * The ForDB gate: fails like the build on a missing file or a row it cannot read;
+ * refs that match no verse in [conn] are warnings only.
  */
 internal fun validateDivineNameOverrides(conn: Connection, logger: Logger): Int {
-    val records = loadDivineNameOverrideRecords(logger) ?: return 0
-    val parsed = DivineNameOverrides.parse(records)
-    parsed.problems.forEach { problem -> logger.w { "ForDB ${DivineNameOverrides.FILE_NAME}: $problem" } }
-    val overrides = parsed.overrides ?: return 0
+    val overrides = loadDivineNameOverrides(logger)
     unmatchedOverrideRefs(conn, overrides).forEach { ref ->
         logger.w { "ForDB ${DivineNameOverrides.FILE_NAME}: $ref matches no verse in the DB" }
     }

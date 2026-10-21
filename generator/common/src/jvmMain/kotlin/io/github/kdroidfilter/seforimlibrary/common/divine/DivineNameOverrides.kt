@@ -27,8 +27,8 @@ data class DivineOverride(
  * for the exact verse and kind wins over a PROFANE range (Gen 19 is profane except
  * 19:18 ADNUT). Applies to Tanach base-book lines only.
  *
- * Without a usable list the build treats every Tanach base line as HVYH-only
- * (see rebuildLineDivineNameIndex); this class never has a built-in default.
+ * The build requires the list (BuildLineDivineNames); rebuildLineDivineNameIndex without one
+ * treats every Tanach base line as HVYH-only. This class never has a built-in default.
  */
 class DivineNameOverrides(val entries: List<DivineOverride>) {
     private val byBook: Map<String, List<DivineOverride>> = entries.groupBy { it.from.book }

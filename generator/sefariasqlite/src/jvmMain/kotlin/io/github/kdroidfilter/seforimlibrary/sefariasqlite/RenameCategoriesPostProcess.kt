@@ -1016,7 +1016,11 @@ internal fun resolveSeforimDbPath(args: Array<String>): Path =
  * process. Throws if the file is absent or any pointer/archive digest check fails.
  */
 internal fun downloadRequiredForDbFile(fileName: String, logger: Logger): List<String> =
-    forDbReleaseFiles(logger).getValue(fileName)
+    requiredForDbFile(forDbReleaseFiles(logger), fileName)
+
+/** [fileName] among the archive's ForDB files; an absent file fails by name. */
+internal fun requiredForDbFile(files: Map<String, List<String>>, fileName: String): List<String> =
+    files[fileName] ?: error("ForDB release archive is missing required file $fileName")
 
 /**
  * Same, for a file that an older pinned archive may predate: absent returns null

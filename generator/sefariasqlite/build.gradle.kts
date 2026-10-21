@@ -378,7 +378,7 @@ tasks.register<JavaExec>("seedBookNotices") {
 }
 
 // Verified sacred divine names — line_divine_name, with the curated verse list from
-// the optional ForDB divine_name_overrides.csv (-PdivineNameOverridesCsv=<local file>
+// the required ForDB divine_name_overrides.csv (-PdivineNameOverridesCsv=<local file>
 // takes precedence). Reads the final line text, so it follows every content writer.
 // Usage:
 //   ./gradlew :sefariasqlite:buildLineDivineNameIndex -PseforimDb=/path/to/seforim.db
