@@ -73,6 +73,27 @@ class CompressLineContentCliTest {
     }
 
     @Test
+    fun `a run interrupted inside line_note resumes to the frames of an uninterrupted run`() {
+        val fresh = schemaSixDb("notes-fresh.db", withNotes = true)
+            .also { db -> connect(db).use { compressLineContent(it, threads = 2) } }
+        val resumed = schemaSixDb("notes-resume.db", withNotes = true)
+        connect(resumed).use { conn ->
+            compressLineContent(conn, threads = 1)
+            // As if the run stopped after the first note: the others are still TEXT.
+            conn.prepareStatement("UPDATE line_note SET body = ? WHERE lineId = ? AND noteIndex = ?").use { ps ->
+                for ((key, body) in notes - (1L to 0L)) {
+                    ps.setString(1, body); ps.setLong(2, key.first); ps.setLong(3, key.second); ps.executeUpdate()
+                }
+            }
+            assertEquals(notes.size - 1L, compressLineContent(conn, chunkRows = 1, threads = 2).noteRowsCompressed)
+        }
+        val expected = connect(fresh).use { noteBlobs(it) }
+        val actual = connect(resumed).use { noteBlobs(it) }
+        assertEquals(expected.keys, actual.keys)
+        expected.forEach { (key, frame) -> assertContentEquals(frame, actual.getValue(key), "$key") }
+    }
+
+    @Test
     fun `line_note keys at the int64 edges are compressed and validated chunk by chunk`() {
         val keys = listOf(
             Long.MIN_VALUE to Long.MIN_VALUE,

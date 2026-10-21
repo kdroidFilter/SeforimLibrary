@@ -22,7 +22,7 @@ import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 
 /**
- * Compresses the line text of a finished schema-6 `seforim.db`: every
+ * Compresses the line text of a finished schema-6 or schema-7 `seforim.db`: every
  * `line_content.content`, every non-NULL `version_line.content` and (schema 7) every
  * `line_note.body` becomes one zstd frame (BLOB) made with
  * [LineContentCompression.bundledDictionary], which is stored in `zstd_dict`.
@@ -242,7 +242,9 @@ private fun compressColumn(
     var textBytes = 0L
     var frameBytes = 0L
     while (nextKey != null) {
-        val chunk = readChunk(conn, selectSql, nextKey).map { (key, text) -> key to checkNotNull(text) }
+        val chunk = readChunk(conn, selectSql, nextKey).map { (key, text) ->
+            key to checkNotNull(text) { "row ${keyText(key)} is NULL" }
+        }
         if (chunk.isEmpty()) break
         val frames = encode(chunk)
         conn.autoCommit = false

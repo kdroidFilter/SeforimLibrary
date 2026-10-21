@@ -1902,7 +1902,7 @@ jobs:
             start buildstate build/seforim.db.buildstate.zst
 
       # ─── Compress line text (zstd + bundled dictionary) ───────────────────
-      # One frame per line_content / version_line row. Runs after Phase-2, the
+      # One frame per line_content / version_line row and line_note body. Runs after Phase-2, the
       # last reader of plain text, and before compaction reclaims the freed space.
       # Byte-deterministic for a given input regardless of -Pthreads. A
       # source_commit from before this step stays uncompressed; readers handle both.
