@@ -549,6 +549,8 @@ jobs:
 
       - name: Download the released database
         id: database
+        env:
+          SEARCH_ENGINE_VERSION: ${{ steps.engine.outputs.version }}
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$WORK/release.json"
@@ -640,6 +642,8 @@ jobs:
             echo "::error::$DB_ASSET keeps line text compressed (zstd_dict) but the application ref has no LineContentCodec"
             exit 1
           fi
+          # An engine that skips compressed line_note bodies would index every book without its notes.
+          python3 -I .github/scripts/check_note_body_engine.py "$WORK/books/seforim.db" "$SEARCH_ENGINE_VERSION"
 
       # The bundled Talmud Bavli volumes are NEVER indexed — IndexingRepository
       # .isIndexableBook excludes them outright (their text is already in the

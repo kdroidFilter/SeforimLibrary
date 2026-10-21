@@ -45,6 +45,7 @@ RELEASE = WORKFLOWS / "manual-generate-release.yml"
 SPLIT = SCRIPTS / "split_release_asset.sh"
 BOUNDED = SCRIPTS / "bounded_docker_run.sh"
 EXTRACT = SCRIPTS / "extract_app_build_steps.py"
+NOTE_ENGINE = SCRIPTS / "check_note_body_engine.py"
 
 # manual-generate-release.yml composes the tag as v<dbVersion>-<utcTimestamp>
 # ("Compute release tag"); the snapshot and hand-off releases it also publishes
@@ -646,6 +647,51 @@ exit 0
         self.assertIn('DB_ASSET=$(jq -r "$FULL_DB_ASSET_JQ | .name // empty" "$WORK/release.json")', run)
         self.assertIn('-p "$DB_ASSET" -O "$WORK/seforim.db.zst"', run)
         self.assertIn("seforimDbZstSha256: $seforimDbZstSha256", run)
+
+    def note_engine_check(self, version, body=None, table=True):
+        """The gate script on a DB with one line_note row of [body] (None: the table is empty)."""
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "seforim.db"
+            conn = sqlite3.connect(db)
+            if table:
+                conn.execute("CREATE TABLE line_note (lineId INTEGER, noteIndex INTEGER, body TEXT NOT NULL)")
+                if body is not None:
+                    conn.execute("INSERT INTO line_note VALUES (1, 0, ?)", (body,))
+            conn.commit()
+            conn.close()
+            run = subprocess.run(
+                [sys.executable, "-I", str(NOTE_ENGINE), str(db), version],
+                capture_output=True, text=True,
+            )
+            return run.returncode, run.stdout + run.stderr
+
+    def test_compressed_note_bodies_are_never_indexed_by_an_engine_that_skips_them(self):
+        frame = b"\x28\xb5\x2f\xfd" + b"frame"
+        for version, body, table, expected in [
+            ("5.0.0", None, False, 0),
+            ("5.0.0", None, True, 0),
+            ("5.0.0", "plain", True, 0),
+            ("5.0.0", frame, True, 1),
+            ("4.9.9", frame, True, 1),
+            ("5.0.1-dev", frame, True, 1),
+            ("", frame, True, 1),
+            ("5.0.1", frame, True, 0),
+            ("5.1.0", frame, True, 0),
+            ("6.0.0", frame, True, 0),
+        ]:
+            rc, out = self.note_engine_check(version, body, table)
+            self.assertEqual(rc, expected, (version, body, table, out))
+            if expected:
+                self.assertIn("::error::", out)
+        step = [s for s in steps_of(self.index) if s.get("name") == "Download the released database"][0]
+        self.assertEqual(step["env"]["SEARCH_ENGINE_VERSION"], "${{ steps.engine.outputs.version }}")
+        run = step["run"]
+        expand = run.index('zstd -d -c --long=31 --memory=2048MB "$WORK/seforim.db.zst" > "$WORK/books/seforim.db"')
+        check = run.index(
+            'python3 -I .github/scripts/check_note_body_engine.py "$WORK/books/seforim.db" "$SEARCH_ENGINE_VERSION"'
+        )
+        self.assertLess(expand, check)
 
     def test_the_provenance_pins_the_engine_that_built_the_index(self):
         run = body(self.index)
