@@ -64,6 +64,8 @@ fun rebuildLineDivineNameIndex(
             st.execute(SCHEMA_7_TABLE_DDL.getValue("line_note_divine_name"))
             st.execute("DELETE FROM line_note_divine_name")
         }
+        requirePackedShape(conn, "line_divine_name", listOf("lineId", "charStart", "span"))
+        requirePackedShape(conn, "line_note_divine_name", listOf("lineId", "noteIndex", "charStart", "span"))
         val lineReport = conn.prepareStatement(
             "INSERT INTO line_divine_name (lineId, charStart, span) VALUES (?, ?, ?)",
         ).use { insert ->
@@ -125,6 +127,18 @@ fun rebuildLineDivineNameIndex(
 }
 
 internal val CREATE_LINE_DIVINE_NAME: String = SCHEMA_7_TABLE_DDL.getValue("line_divine_name")
+
+/** CREATE IF NOT EXISTS keeps an older table: refuse a pre-pack (charEnd/kind/source) shape by name. */
+private fun requirePackedShape(conn: Connection, table: String, columns: List<String>) {
+    val actual = conn.prepareStatement("SELECT name FROM pragma_table_info(?) ORDER BY cid").use { ps ->
+        ps.setString(1, table)
+        ps.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.getString(1)) } }
+    }
+    check(actual == columns) {
+        "$table has columns $actual, expected $columns (pre-pack shape?): drop line_divine_name and " +
+            "line_note_divine_name, then rebuild"
+    }
+}
 
 internal data class CorpusLine(val id: Long, val bookId: Long, val heRef: String?, val content: String, val verse: VerseRef?)
 

@@ -114,6 +114,29 @@ class LineDivineNameIndexTest {
     }
 
     @Test
+    fun `a pre-pack table shape is refused by name and keeps its rows`() {
+        val path = db(listOf("x"))
+        DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use { conn ->
+            conn.createStatement().use { st ->
+                st.execute("DROP TABLE line_divine_name")
+                st.execute(
+                    "CREATE TABLE line_divine_name (lineId INTEGER NOT NULL, charStart INTEGER NOT NULL, " +
+                        "charEnd INTEGER NOT NULL, kind INTEGER NOT NULL, source INTEGER NOT NULL, " +
+                        "PRIMARY KEY (lineId, charStart)) WITHOUT ROWID",
+                )
+                st.execute("INSERT INTO line_divine_name VALUES (100, 0, 1, 1, 1)")
+            }
+            val failure = assertFailsWith<IllegalStateException> {
+                rebuildLineDivineNameIndex(conn, logger, overrides = null, requireTanach = false)
+            }
+            assertTrue("pre-pack" in failure.message.orEmpty(), failure.message)
+            conn.createStatement().use { st ->
+                st.executeQuery("SELECT count(*) FROM line_divine_name").use { rs -> assertEquals(1, rs.getInt(1)) }
+            }
+        }
+    }
+
+    @Test
     fun `the report opens the DB read-only and leaves it byte-identical`() {
         val path = db(listOf("ה' אלהינו"))
         val before = Files.readAllBytes(path)
