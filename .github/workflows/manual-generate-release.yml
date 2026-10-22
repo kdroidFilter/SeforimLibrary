@@ -667,6 +667,9 @@ jobs:
       #     buildstate.zst, lines_snapshot.db.zst) = ~15.2 GiB. 16G left only
       #     79 MiB short of that on 2026-09-10 and DbPublish refused the
       #     replace; 20G restores ~4.8 GiB of headroom as the DB keeps growing.
+      #     2026-10-22: the first schema-7 build (DB ~8.5 GiB) filled 20G at the
+      #     Phase-2 pair commit (DB + VACUUM INTO candidate + 1.2 GiB buildstate
+      #     twice) and died with SQLITE_FULL; 26G leaves ~4 GiB of headroom.
       #   • Preflight ABORTS before any work if another Runner.Worker is active
       #     or MemAvailable < 30 GiB — never share the box, never start tight. A
       #     clean abort + rerun beats a mid-build OOM, which is the real "fall".
@@ -701,22 +704,23 @@ jobs:
             exit 1
           fi
 
-          # Peak need is ~29 GiB (12 GiB Phase-2 heap + ~15.2 GiB tmpfs at the
-          # atomic publish + Gradle + base). Demand a near-idle box up front
+          # Peak need is ~45 GiB at the Phase-2 pair commit (13 GiB heap + ~9 GiB
+          # in-memory DB + ~21 GiB tmpfs + Gradle). Was ~29 GiB (12 GiB heap +
+          # ~15.2 GiB tmpfs at the atomic publish + Gradle + base). Demand a near-idle box up front
           # rather than risk a late OOM mid-build. The old 24 GiB gate was
           # calibrated against a single ~7 GiB DB copy and understated the
           # publish, which holds two. Other generator forks are capped at 13 GiB
           # (8 GiB OOMed on 2026-10-19; 13 + ~11 tmpfs + 3 daemon fits this gate).
           AVAIL_KB=$(awk '/MemAvailable/{print $2}' /proc/meminfo)
           echo "MemAvailable: $((AVAIL_KB/1024/1024)) GiB"
-          if [ "$AVAIL_KB" -lt $((30*1024*1024)) ]; then
-            echo "::error::Only $((AVAIL_KB/1024/1024)) GiB available (<30 GiB). Aborting before work to avoid an OOM."
+          if [ "$AVAIL_KB" -lt $((44*1024*1024)) ]; then
+            echo "::error::Only $((AVAIL_KB/1024/1024)) GiB available (<44 GiB). Aborting before work to avoid an OOM."
             exit 1
           fi
 
           # Mount. uid/gid = the runner user so the build can write without sudo.
           mkdir -p "$BUILD"
-          sudo mount -t tmpfs -o size=20G,nr_inodes=1m,uid="$(id -u)",gid="$(id -g)",mode=0755 tmpfs "$BUILD"
+          sudo mount -t tmpfs -o size=26G,nr_inodes=1m,uid="$(id -u)",gid="$(id -g)",mode=0755 tmpfs "$BUILD"
           echo "tmpfs mounted on build/:"
           findmnt "$BUILD" || df -h "$BUILD"
 
@@ -1924,7 +1928,7 @@ jobs:
       # its ANALYZE, the last writers.
       # Disk: VACUUM INTO writes the compact copy (~one DB, ~7 GiB) to
       # $RUNNER_TEMP on the workspace disk (~850 GB free), then the original is
-      # deleted before the copy moves back, so the 20 GiB tmpfs never holds two
+      # deleted before the copy moves back, so the tmpfs never holds two
       # DBs. A no-op when the freelist is empty.
       - name: Compact Seforim Database (VACUUM INTO)
         run: |
