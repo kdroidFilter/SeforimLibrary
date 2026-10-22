@@ -326,6 +326,17 @@ class ManualReleaseWorkflowContractTest(unittest.TestCase):
             r"(?:fun|class|object|val|const val|typealias|interface)\s+(?:[A-Za-z_.]+\.)?([A-Za-z_]\w*)",
             re.M,
         )
+        # Common APIs must predate supported recovery payloads or be explicitly overlaid
+        # (the allocator above). A same-package-only scan missed LineNoteRehydration and
+        # left historical payloads unable to compile. Review new common imports explicitly.
+        common_imports = set(re.findall(
+            r"^import (io\.github\.kdroidfilter\.seforimlibrary\.common\.[\w.]+)$", importer, re.M,
+        ))
+        self.assertEqual(common_imports, {
+            "io.github.kdroidfilter.seforimlibrary.common.countVisibleChars",
+            "io.github.kdroidfilter.seforimlibrary.common.ids.DiskBackedLinkIdAllocator",
+            "io.github.kdroidfilter.seforimlibrary.common.linker.LinkerInputView",
+        })
         own = set(declaration.findall(importer))  # its own "main" and helpers
         used = {}
         for source in package.glob("*.kt"):

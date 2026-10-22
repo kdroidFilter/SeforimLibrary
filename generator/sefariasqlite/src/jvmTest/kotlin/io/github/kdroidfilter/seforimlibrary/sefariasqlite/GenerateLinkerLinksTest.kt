@@ -14,6 +14,7 @@ import io.github.kdroidfilter.seforimlibrary.core.models.Line
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerializationException
+import java.sql.Connection
 import java.sql.DriverManager
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -303,6 +304,7 @@ class GenerateLinkerLinksTest {
         targets: List<RefEntry> = listOf(RefEntry("Genesis 1:1", "TgtBook 1:1", "Tanakh/Genesis", 1)),
         notes: List<Pair<Int, String>> = emptyList(),
         anchoredNotes: Set<Int> = emptySet(),
+        prepareDb: (Connection) -> Unit = {},
     ): LinkerRun {
         val dir = Files.createTempDirectory("linkerMainFixture")
         val artifacts = Files.createDirectory(dir.resolve("artifacts"))
@@ -342,6 +344,7 @@ class GenerateLinkerLinksTest {
                     }
                 }
             }
+            DriverManager.getConnection("jdbc:sqlite:$db").use(prepareDb)
             if (splitLineContent) {
                 // The schema-6 shape SplitLineContentCli leaves behind.
                 DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
@@ -430,6 +433,54 @@ class GenerateLinkerLinksTest {
         // A record hashed on the stored text alone is stale once the line has notes.
         val stale = runLinkerMain(record(4, 15, base = 0, hashedContent = stored) + "\n", strict = null, storedSource = stored, notes = notes)
         assertEquals(0L, stale.links)
+    }
+
+    @Test
+    fun historicalPayloadsWithoutPositionedNotesStillImportLinks() {
+        for (legacyTable in listOf(false, true)) {
+            val run = runLinkerMain(record(4, 15, base = 0), strict = "true", prepareDb = { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute("DROP TABLE line_note")
+                    if (legacyTable) statement.execute(
+                        "CREATE TABLE line_note (lineId INTEGER, noteIndex INTEGER, marker TEXT, body TEXT)",
+                    )
+                }
+            })
+            assertEquals(null, run.failure, "legacyTable=$legacyTable")
+            assertEquals(1L, run.links)
+            assertEquals(listOf(4 to 15), run.anchorRanges)
+        }
+    }
+
+    @Test
+    fun populatedLegacyNotesFailBeforeReplacingExistingLinks() {
+        val run = runLinkerMain(record(4, 15, base = 0), strict = "true", prepareDb = { connection ->
+            connection.createStatement().use { statement ->
+                statement.execute("DROP TABLE line_note")
+                statement.execute("CREATE TABLE line_note (lineId INTEGER, noteIndex INTEGER, marker TEXT, body TEXT)")
+                statement.execute("INSERT INTO line_note VALUES (20, 0, '1', 'legacy note')")
+                statement.execute(
+                    "INSERT INTO link (id, sourceBookId, targetBookId, sourceLineId, targetLineId, " +
+                        "targetLineIndex, targetBookOrderIndex, connectionTypeId) " +
+                        "SELECT 50, 2, 1, 20, 10, 0, 0, id FROM connection_type WHERE name = 'LINKER'",
+                )
+                statement.execute("INSERT INTO link_anchor (linkId, side, charStart, charEnd) VALUES (50, 0, 7, 8)")
+            }
+        })
+        assertTrue(run.failure is IllegalStateException, "unexpected failure: ${run.failure}")
+        assertTrue(run.failure.message.orEmpty().contains("missing charPos, hasMarker"))
+        assertEquals(1L, run.links, "the existing LINKER row must survive preflight rejection")
+        assertEquals(listOf(7 to 8), run.anchorRanges, "the existing anchor must survive unchanged")
+    }
+
+    @Test
+    fun recoveryMarkerParsingMatchesTheSharedStrictIntegerContract() {
+        for (value in listOf(0, 1, 0L, 1L, null, -1, 2, 0.0, 1.0, "0", "1", false, true, 1.toShort())) {
+            val shared = runCatching { LineNoteRehydration.hasMarker(value) }
+            val recovery = runCatching { linkerNoteHasMarker(value) }
+            assertEquals(shared.getOrNull(), recovery.getOrNull(), "value=$value")
+            assertEquals(shared.exceptionOrNull()?.message, recovery.exceptionOrNull()?.message, "value=$value")
+        }
     }
 
     @Test

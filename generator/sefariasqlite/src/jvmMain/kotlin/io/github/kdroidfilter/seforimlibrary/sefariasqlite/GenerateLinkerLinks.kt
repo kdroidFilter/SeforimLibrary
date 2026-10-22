@@ -7,7 +7,6 @@ import co.touchlab.kermit.Severity
 import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
 import io.github.kdroidfilter.seforimlibrary.common.ids.DiskBackedLinkIdAllocator
 import io.github.kdroidfilter.seforimlibrary.common.linker.LinkerInputView
-import io.github.kdroidfilter.seforimlibrary.common.notes.LineNoteRehydration
 import io.github.kdroidfilter.seforimlibrary.core.models.ConnectionType
 import io.github.kdroidfilter.seforimlibrary.core.models.Link
 import io.github.kdroidfilter.seforimlibrary.core.models.LinkAnchor
@@ -70,6 +69,15 @@ fun main(args: Array<String>) = runBlocking {
     // The lineage gate below is opt-in, so its flag is parsed before any destructive work:
     // an unrecognized value must fail the build, never disable the gate in silence.
     val linkerStrict = parseStrictFlag("linkerStrict", prop("linkerStrict", null))
+
+    // Probe the payload before opening the repository or changing the persisted id allocator.
+    // Historical recovery builds can have an empty pre-extraction line_note table whose
+    // schema predates charPos/hasMarker. Ignore only an empty table; populated legacy notes
+    // cannot be placed safely without coordinates and must fail before LINKER is replaced.
+    val hasLineNotes = DriverManager.getConnection("jdbc:sqlite:$dbPath").use { connection ->
+        connection.createStatement().use { it.execute("PRAGMA query_only = ON") }
+        linkerHasPositionedNotes(connection)
+    }
 
     val driver = JdbcSqliteDriver(url = "jdbc:sqlite:$dbPath")
     val repository = SeforimRepository(dbPath, driver)
@@ -226,10 +234,6 @@ fun main(args: Array<String>) = runBlocking {
             WHERE l.bookId = ? AND l.lineIndex = ?
             """.trimIndent()
         }
-        var hasLineNotes = false
-        driver.executeQuery(null,
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='line_note')",
-            { c -> if (c.next().value) hasLineNotes = c.getLong(0) == 1L; QueryResult.Value(Unit) }, 0)
         // [content] is what the linker read.
         data class SourceLine(val id: Long, val content: String, val contextRef: String)
         // One persistent read-only connection: outside a transaction the driver opens a new
@@ -264,7 +268,7 @@ fun main(args: Array<String>) = runBlocking {
                     val notes = noteStatement.executeQuery().use { rs ->
                         buildList {
                             while (rs.next()) {
-                                if (LineNoteRehydration.hasMarker(rs.getObject(3))) anchoredNotes += size
+                                if (linkerNoteHasMarker(rs.getObject(3))) anchoredNotes += size
                                 add(rs.getInt(1) to (rs.getString(2) ?: ""))
                             }
                         }
@@ -666,6 +670,40 @@ private fun bracketEntity(content: String, start: Int, limit: Int): Pair<Char, I
         }
     } ?: return null
     return decoded to end + 1
+}
+
+/**
+ * Whether notes can be reconstructed on a recovery payload. An absent or empty historical
+ * table needs no reconstruction. Refuse populated older shapes before any LINKER deletion:
+ * neither a marker string nor note order provides the missing visible-char coordinates.
+ */
+internal fun linkerHasPositionedNotes(connection: Connection): Boolean {
+    val columns = connection.createStatement().use { statement ->
+        statement.executeQuery("PRAGMA table_info('line_note')").use { rows ->
+            buildSet { while (rows.next()) add(rows.getString("name")) }
+        }
+    }
+    if (columns.isEmpty()) return false
+    val missing = setOf("lineId", "noteIndex", "charPos", "body", "hasMarker") - columns
+    if (missing.isEmpty()) return true
+    val populated = connection.createStatement().use { statement ->
+        statement.executeQuery("SELECT EXISTS(SELECT 1 FROM line_note)").use { rows ->
+            rows.next()
+            rows.getInt(1) == 1
+        }
+    }
+    check(!populated) {
+        "Phase-2 cannot reconstruct populated legacy line_note: missing ${missing.sorted().joinToString()}; " +
+            "rebuild from a source_commit with positioned notes instead of recovering"
+    }
+    return false
+}
+
+/** Same strict stored INTEGER contract as LineNoteRehydration, without a recovery-only dependency. */
+internal fun linkerNoteHasMarker(stored: Any?): Boolean = when {
+    (stored is Int || stored is Long) && (stored as Number).toLong() == 0L -> false
+    (stored is Int || stored is Long) && (stored as Number).toLong() == 1L -> true
+    else -> error("line_note.hasMarker is ${stored?.let { "${it::class.simpleName} $it" }}, not INTEGER 0 or 1")
 }
 
 /**
