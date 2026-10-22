@@ -32,9 +32,12 @@ class SefariaAuthorTitlesIntegrationTest {
         return root
     }
 
-    private fun read(root: Path): BookPayload = runBlocking {
+    private fun read(
+        root: Path,
+        canonical: SefariaAuthorCanonicalNames = SefariaAuthorCanonicalNames.EMPTY,
+    ): BookPayload = runBlocking {
         val titles = SefariaAuthorTitles.load(root, json, logger)
-        val reader = SefariaBookPayloadReader(json, logger, titles)
+        val reader = SefariaBookPayloadReader(json, logger, titles, canonicalAuthorName = canonical::canonical)
         val schemaDir = root.resolve("schemas")
         val lookup = reader.buildSchemaLookup(schemaDir)
         reader.readBooksInParallel(root.resolve("json"), schemaDir, lookup).single()
@@ -65,6 +68,27 @@ class SefariaAuthorTitlesIntegrationTest {
         assertEquals(without.lines.size, with.lines.size)
         assertEquals(without.lines.drop(2), with.lines.drop(2))
         assertEquals(without.refEntries, with.refEntries)
+    }
+
+    @Test
+    fun `the author line carries the canonical name the author table gets`() {
+        // ForDB/sefaria_author_changes.csv used to reach only the `author`
+        // table, so line 2 of the body kept Sefaria's spelling (issue #96).
+        val canonical = SefariaAuthorCanonicalNames.parse(
+            listOf("שם בספריא,שם קנוני", "הרב אברהם יצחק הכהן קוק,רבי אברהם יצחק הכהן קוק"),
+        )
+        val payload = read(layout(withAuthorsFile = true), canonical)
+        assertEquals(listOf("רבי אברהם יצחק הכהן קוק"), payload.authors)
+        assertEquals("רבי אברהם יצחק הכהן קוק", payload.lines[1])
+        // Mapping the name again, as the importer does, changes nothing.
+        assertEquals(payload.authors, payload.authors.map(canonical::canonical))
+        // Same line count and refs as without the mapping.
+        val unmapped = read(layout(withAuthorsFile = true))
+        assertEquals(unmapped.lines.drop(2), payload.lines.drop(2))
+        assertEquals(unmapped.refEntries, payload.refEntries)
+        // A blacklist entry written under the canonical name still matches.
+        assertTrue("רבי אברהם יצחק הכהן קוק" in payload.authorMatchKeys)
+        assertTrue("הראי\"ה" in payload.authorMatchKeys)
     }
 
     @Test

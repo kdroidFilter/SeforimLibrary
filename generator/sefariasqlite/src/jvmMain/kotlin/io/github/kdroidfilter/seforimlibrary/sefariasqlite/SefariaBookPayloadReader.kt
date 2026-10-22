@@ -38,6 +38,9 @@ internal class SefariaBookPayloadReader(
     // מיפוי מוצהר של ספרים שמיובאים מקובץ גרסה ולא מ-merged.json.
     // ריק כברירת מחדל, כך שכל ספר שאינו במיפוי נקרא בדיוק כמו קודם.
     private val preferredVersions: SefariaPreferredVersions = SefariaPreferredVersions.Empty,
+    // ForDB/sefaria_author_changes.csv, applied to the author line in the body
+    // so it reads exactly as the `author` table does. Identity by default.
+    private val canonicalAuthorName: (String) -> String = { it },
 ) {
     // Set by the read entry points before any book is walked (see readBaseTexts).
     @Volatile
@@ -243,11 +246,13 @@ internal class SefariaBookPayloadReader(
                     he to author.jsonObject["slug"]?.stringOrNull()
                 }
             }.orEmpty()
-            val authors = authorEntries.map { (he, slug) -> authorTitles.displayName(slug, he) }
+            val authors = authorEntries
+                .map { (he, slug) -> canonicalAuthorName(authorTitles.displayName(slug, he)) }
+                .distinct()
             // Keep every form for blacklist matching — see BookPayload.authorMatchKeys.
-            val authorMatchKeys = authorEntries.flatMap { (he, slug) ->
+            val authorMatchKeys = (authorEntries.flatMap { (he, slug) ->
                 listOf(he) + authorTitles.allNameForms(slug)
-            }.distinct()
+            } + authors).distinct()
 
             val sameTractateHeTitle = sameTractateHeTitle(schemaJson, schemaObj, schemaDir, schemaLookup)
             val (lines, refs, headings, cleanShifts, lineKeyHashOverrides, simanTopicLines) = SefariaSameTractateRefs.apply(
