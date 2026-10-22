@@ -123,8 +123,9 @@ build. They are schema-7 contract tables like `line_divine_name` and `line_note`
 (DELTA_UPDATE_WORKFLOW.md §1.5).
 
 `banner` holds each text that some book uses, verbatim, under the `id` of its CSV row, and
-`book_banner` maps a book to it. That id is fixed by hand in the CSV, so a wording change is one
-`banner` row in a delta and a new book one `book_banner` row. `{title}` stays in the stored text;
+`book_banner` maps a book to it. That id is fixed by hand in the CSV, and rows that carry the same
+text share it, so a wording change is one `banner` row in a delta and a new book one `book_banner`
+row. One id with two texts fails the build. `{title}` stays in the stored text;
 the app expands it with `book.title`, percent-encoded (UTF-8, space = `%20`, `A-Za-z0-9.-*_` kept)
 inside a `[label](target)` link target and raw elsewhere.
 

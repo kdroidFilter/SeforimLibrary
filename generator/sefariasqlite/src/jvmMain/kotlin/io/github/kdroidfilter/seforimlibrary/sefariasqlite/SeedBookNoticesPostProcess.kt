@@ -24,7 +24,10 @@ private val PROTECTION_HEADER = listOf("sourceName", "bookName", "level")
  */
 internal data class BookNoticeRow<T>(val sourceName: String, val bookName: String, val value: T)
 
-/** A banner text and its stable `banner.id`, set by hand in the CSV and never reused. */
+/**
+ * A banner text and its stable `banner.id`, set by hand in the CSV and never reused for another
+ * text. Rows that carry the same text share its id, so the text is stored once.
+ */
 internal data class BannerText(val id: Long, val text: String)
 
 internal data class BookNoticeRows(
@@ -96,8 +99,11 @@ internal fun parseBookBanners(text: String): List<BookNoticeRow<BannerText>> {
         require(fields[3].isNotBlank()) { "$where has an empty text" }
         BannerText(fields[0].toLong(), fields[3])
     }
-    val repeated = rows.groupBy { it.value.id }.filterValues { it.size > 1 }.keys
-    require(repeated.isEmpty()) { "$BOOK_BANNERS_FILE repeats id(s) ${repeated.sorted().joinToString()}" }
+    val conflicting = rows.groupBy { it.value.id }
+        .filterValues { group -> group.distinctBy { it.value.text }.size > 1 }.keys
+    require(conflicting.isEmpty()) {
+        "$BOOK_BANNERS_FILE gives id(s) ${conflicting.sorted().joinToString()} more than one text"
+    }
     return rows
 }
 

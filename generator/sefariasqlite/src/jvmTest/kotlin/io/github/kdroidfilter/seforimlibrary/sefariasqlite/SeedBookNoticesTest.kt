@@ -93,10 +93,10 @@ class SeedBookNoticesTest {
         for (id in listOf("", "0", "-1", " 1", "01", "1.0", "x")) {
             assertFailsWith<IllegalArgumentException>(id) { parseBookBanners("id,sourceName,bookName,text\n\"$id\",S,,x\n") }
         }
-        val repeated = assertFailsWith<IllegalArgumentException> {
+        val conflicting = assertFailsWith<IllegalArgumentException> {
             parseBookBanners("id,sourceName,bookName,text\n7,S,,x\n7,S,ב,y\n")
         }
-        assertContains(repeated.message.orEmpty(), "repeats id(s) 7")
+        assertContains(conflicting.message.orEmpty(), "gives id(s) 7 more than one text")
         assertEquals(emptyList(), parseBookBanners(""))
     }
 
@@ -133,6 +133,23 @@ class SeedBookNoticesTest {
             assertEquals(
                 listOf(listOf<Any?>(3, 1), listOf<Any?>(4, 2)),
                 rows(it, "SELECT bookId, level FROM book_protection ORDER BY bookId"),
+            )
+        }
+    }
+
+    @Test
+    fun `books that share a text share one banner row`() {
+        val shared = parseBookBanners(
+            "id,sourceName,bookName,text\n" +
+                "\"8\",\"Wiki\",\"ספר א\",\"כל הזכויות\nשמורות\"\n" +
+                "\"8\",\"Wiki\",\"ספר ב\",\"כל הזכויות\nשמורות\"\n",
+        )
+        db().use {
+            applyBookNotices(it, BookNoticeRows(shared, emptyList()), logger)
+            assertEquals(listOf(listOf<Any?>(8, "כל הזכויות\nשמורות")), rows(it, "SELECT id, text FROM banner"))
+            assertEquals(
+                listOf(listOf<Any?>(1, 8), listOf<Any?>(2, 8)),
+                rows(it, "SELECT bookId, bannerId FROM book_banner ORDER BY bookId"),
             )
         }
     }
