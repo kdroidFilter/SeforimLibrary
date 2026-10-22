@@ -101,6 +101,8 @@ class GenerationArchiveCliTest {
                 "all_metadata.json" to "[]\n",
                 "sefaria_metadata_changes.csv" to "categoryPath,title,author,heShortDesc,heDesc,heDescNew\n",
                 "sefaria_category_changes.csv" to "categoryPath,heShortDesc,heDesc,heShortDescNew,heDescNew\n",
+                "book_banners.csv" to "id,sourceName,bookName,text\n",
+                "book_protection.csv" to "sourceName,bookName,level\n",
             ) + assets
             ZipOutputStream(Files.newOutputStream(archive)).use { zip ->
                 for ((name, text) in files) {

@@ -533,7 +533,7 @@ class PatchColumnAdditionTest {
         DriverManager.getConnection("jdbc:sqlite:${target.toAbsolutePath()}").use { conn ->
             conn.createStatement().use { it.execute("PRAGMA foreign_keys = ON") }
             PatchApplier().apply(conn, patch)
-            assertEquals(logicalHash(next), LogicalContentHasher().compute(conn))
+            assertEquals(logicalHash(next), LogicalContentHasher.forSchemaVersion(CURRENT_DB_SCHEMA_VERSION).compute(conn))
             afterApply(conn)
         }
     }
@@ -550,5 +550,5 @@ class PatchColumnAdditionTest {
     private fun logicalHash(path: Path): String =
         DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use(::hash)
 
-    private fun hash(conn: Connection): String = LogicalContentHasher().compute(conn)
+    private fun hash(conn: Connection): String = LogicalContentHasher.forSchemaVersion(CURRENT_DB_SCHEMA_VERSION).compute(conn)
 }

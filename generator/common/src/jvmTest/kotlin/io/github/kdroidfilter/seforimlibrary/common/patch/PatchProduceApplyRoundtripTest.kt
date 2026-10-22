@@ -99,10 +99,10 @@ class PatchProduceApplyRoundtripTest {
 
         // Verify target now logically equals B.
         val targetHash = DriverManager.getConnection("jdbc:sqlite:${targetPath.toAbsolutePath()}").use {
-            LogicalContentHasher().compute(it)
+            LogicalContentHasher.forSchemaVersion(CURRENT_DB_SCHEMA_VERSION).compute(it)
         }
         val bHash = DriverManager.getConnection("jdbc:sqlite:${pathB.toAbsolutePath()}").use {
-            LogicalContentHasher().compute(it)
+            LogicalContentHasher.forSchemaVersion(CURRENT_DB_SCHEMA_VERSION).compute(it)
         }
         assertEquals(bHash, targetHash, "applied patch must reproduce target logical hash")
     }

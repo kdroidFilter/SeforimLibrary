@@ -14,6 +14,7 @@ import io.github.kdroidfilter.seforimlibrary.core.models.Line
 import io.github.kdroidfilter.seforimlibrary.dao.repository.SeforimRepository
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerializationException
+import java.sql.Connection
 import java.sql.DriverManager
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -303,6 +304,7 @@ class GenerateLinkerLinksTest {
         targets: List<RefEntry> = listOf(RefEntry("Genesis 1:1", "TgtBook 1:1", "Tanakh/Genesis", 1)),
         notes: List<Pair<Int, String>> = emptyList(),
         anchoredNotes: Set<Int> = emptySet(),
+        prepareDb: (Connection) -> Unit = {},
     ): LinkerRun {
         val dir = Files.createTempDirectory("linkerMainFixture")
         val artifacts = Files.createDirectory(dir.resolve("artifacts"))
@@ -334,14 +336,15 @@ class GenerateLinkerLinksTest {
             }
             repo.close()
             DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
-                c.prepareStatement("INSERT INTO line_note (lineId, noteIndex, charPos, marker, body) VALUES (20, ?, ?, ?, ?)").use { ps ->
+                c.prepareStatement("INSERT INTO line_note (lineId, noteIndex, charPos, hasMarker, body) VALUES (20, ?, ?, ?, ?)").use { ps ->
                     notes.forEachIndexed { i, (charPos, body) ->
                         ps.setInt(1, i); ps.setInt(2, charPos)
-                        ps.setString(3, if (i in anchoredNotes) "" else null)
+                        ps.setInt(3, if (i in anchoredNotes) 1 else 0)
                         ps.setString(4, body); ps.executeUpdate()
                     }
                 }
             }
+            DriverManager.getConnection("jdbc:sqlite:$db").use(prepareDb)
             if (splitLineContent) {
                 // The schema-6 shape SplitLineContentCli leaves behind.
                 DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
@@ -411,19 +414,21 @@ class GenerateLinkerLinksTest {
     }
 
     @Test
-    fun theLinkerReadsTheLineWithItsNotesAndAnAnchorOnANoteIsNotWritten() {
+    fun theLinkerReadsTheLineWithItsNotesAndAnAnchorInANoteKeepsItsPlace() {
         val stored = "see Genesis 1:1 and again"
         val notes = listOf(15 to "Genesis 1:1")
         val read = "see Genesis 1:1<i class=\"footnote\">Genesis 1:1</i> and again"
-        assertEquals(read, rehydrateLinkerLine(stored, notes).first)
+        assertEquals(read, rehydrateLinkerLine(stored, notes))
         val inNote = read.indexOf(">Genesis") + 1
         val body = record(4, 15, base = 0, hashedContent = read) + "\n" +
+            record(12, inNote + 7, base = 0, hashedContent = read) + "\n" +
             record(inNote, inNote + 11, base = 0, hashedContent = read) + "\n"
         for (split in listOf(false, true)) {
             val run = runLinkerMain(body, strict = "true", splitLineContent = split, storedSource = stored, notes = notes)
             assertEquals(null, run.failure)
             assertEquals(1L, run.links, "the citation in the note still links its line")
-            assertEquals(listOf(4 to 15), run.anchorRanges, "only the citation outside the note gets an anchor")
+            // Full-line offsets: the body's visible chars follow the stored "see Genesis 1:1".
+            assertEquals(listOf(4 to 15, 12 to 22, 15 to 26), run.anchorRanges, "in the note and across its start too")
         }
         // A record hashed on the stored text alone is stale once the line has notes.
         val stale = runLinkerMain(record(4, 15, base = 0, hashedContent = stored) + "\n", strict = null, storedSource = stored, notes = notes)
@@ -431,13 +436,61 @@ class GenerateLinkerLinksTest {
     }
 
     @Test
-    fun anAnchorAfterANoteMapsBackToTheStoredLine() {
+    fun historicalPayloadsWithoutPositionedNotesStillImportLinks() {
+        for (legacyTable in listOf(false, true)) {
+            val run = runLinkerMain(record(4, 15, base = 0), strict = "true", prepareDb = { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute("DROP TABLE line_note")
+                    if (legacyTable) statement.execute(
+                        "CREATE TABLE line_note (lineId INTEGER, noteIndex INTEGER, marker TEXT, body TEXT)",
+                    )
+                }
+            })
+            assertEquals(null, run.failure, "legacyTable=$legacyTable")
+            assertEquals(1L, run.links)
+            assertEquals(listOf(4 to 15), run.anchorRanges)
+        }
+    }
+
+    @Test
+    fun populatedLegacyNotesFailBeforeReplacingExistingLinks() {
+        val run = runLinkerMain(record(4, 15, base = 0), strict = "true", prepareDb = { connection ->
+            connection.createStatement().use { statement ->
+                statement.execute("DROP TABLE line_note")
+                statement.execute("CREATE TABLE line_note (lineId INTEGER, noteIndex INTEGER, marker TEXT, body TEXT)")
+                statement.execute("INSERT INTO line_note VALUES (20, 0, '1', 'legacy note')")
+                statement.execute(
+                    "INSERT INTO link (id, sourceBookId, targetBookId, sourceLineId, targetLineId, " +
+                        "targetLineIndex, targetBookOrderIndex, connectionTypeId) " +
+                        "SELECT 50, 2, 1, 20, 10, 0, 0, id FROM connection_type WHERE name = 'LINKER'",
+                )
+                statement.execute("INSERT INTO link_anchor (linkId, side, charStart, charEnd) VALUES (50, 0, 7, 8)")
+            }
+        })
+        assertTrue(run.failure is IllegalStateException, "unexpected failure: ${run.failure}")
+        assertTrue(run.failure.message.orEmpty().contains("missing charPos, hasMarker"))
+        assertEquals(1L, run.links, "the existing LINKER row must survive preflight rejection")
+        assertEquals(listOf(7 to 8), run.anchorRanges, "the existing anchor must survive unchanged")
+    }
+
+    @Test
+    fun recoveryMarkerParsingMatchesTheSharedStrictIntegerContract() {
+        for (value in listOf(0, 1, 0L, 1L, null, -1, 2, 0.0, 1.0, "0", "1", false, true, 1.toShort())) {
+            val shared = runCatching { LineNoteRehydration.hasMarker(value) }
+            val recovery = runCatching { linkerNoteHasMarker(value) }
+            assertEquals(shared.getOrNull(), recovery.getOrNull(), "value=$value")
+            assertEquals(shared.exceptionOrNull()?.message, recovery.exceptionOrNull()?.message, "value=$value")
+        }
+    }
+
+    @Test
+    fun anAnchorAfterANoteCountsTheNoteBody() {
         val stored = "x Genesis 1:1"
         val notes = listOf(1 to "הערה")
-        val read = rehydrateLinkerLine(stored, notes).first
+        val read = rehydrateLinkerLine(stored, notes)
         val start = read.indexOf("Genesis")
         val run = runLinkerMain(record(start, start + 11, base = 0, hashedContent = read) + "\n", strict = "true", storedSource = stored, notes = notes)
-        assertEquals(listOf(2 to 13), run.anchorRanges)
+        assertEquals(listOf(6 to 17), run.anchorRanges)
     }
 
     @Test
@@ -471,12 +524,7 @@ class GenerateLinkerLinksTest {
             val shared = LineNoteRehydration.rehydrate(stored, notes.mapIndexed { i, note ->
                 LineNoteRehydration.NoteAt(note.first, note.second, i in anchored)
             })
-            val (text, bodies) = rehydrateLinkerLine(stored, notes, anchored)
-            assertEquals(shared.text, text)
-            assertEquals(shared.bodies, bodies)
-            for (start in 0..text.length) for (end in start..text.length) {
-                assertEquals(shared.storedRange(start, end), linkerStoredRange(bodies, start, end))
-            }
+            assertEquals(shared, rehydrateLinkerLine(stored, notes, anchored))
         }
     }
 
@@ -496,8 +544,8 @@ class GenerateLinkerLinksTest {
                 )
                 assertEquals(null, run.failure)
                 assertEquals(1L, run.links)
-                // Anchors use visible offsets in stored text: the empty sup contributes none.
-                assertEquals(listOf(1 to 12), run.anchorRanges)
+                // Full-line offsets: both bodies (11 visible chars) come first; the empty sup adds none.
+                assertEquals(listOf(12 to 23), run.anchorRanges)
             }
             if (prefix.isNotEmpty()) {
                 val misplaced = bodies + stored

@@ -207,8 +207,8 @@ class CiWorkflowTest(unittest.TestCase):
 
     def test_contract_fixture_steps_say_what_they_checked(self):
         body = "\n".join(self.run_bodies(self.contract))
-        self.assertIn('echo "fixtures: 6 present"', body)
-        self.assertIn('echo "fixtures: 3 pairs byte-identical"', body)
+        self.assertIn('echo "fixtures: 8 present"', body)
+        self.assertIn('echo "fixtures: 4 pairs byte-identical"', body)
 
     def test_pull_requests_run_the_local_orchestration_contract_suites(self):
         # Those suites used to run in exactly one place: the release workflow's
@@ -461,8 +461,8 @@ class CiWorkflowTest(unittest.TestCase):
                 uses = [job.get("uses") for job in doc["jobs"].values()]
                 self.assertEqual(uses, ["./.github/workflows/delta-real-diff-test.yml"])
 
-    def frames_check(self, mutate=None):
-        """Run the frames step for real on two fixture DBs; [mutate] edits v2."""
+    def frames_check(self, mutate=None, notes=False):
+        """Run the frames step for real on two fixture DBs; [mutate] edits v2; [notes] adds schema-7 line_note."""
         doc = yaml.safe_load(DELTA.read_text(encoding="utf-8"))
         body = named_step(doc, self.FRAMES_STEP)["run"]
         for tool in ("bash", "sqlite3", "sha256sum"):
@@ -480,6 +480,9 @@ class CiWorkflowTest(unittest.TestCase):
                 conn.execute("INSERT INTO zstd_dict VALUES (32768, ?)", (b"dict",))
                 conn.executemany("INSERT INTO line_content VALUES (?, ?)", [(1, frame), (2, frame)])
                 conn.executemany("INSERT INTO version_line VALUES (1, ?, ?)", [(1, None), (2, frame)])
+                if notes:
+                    conn.execute("CREATE TABLE line_note (lineId INTEGER, noteIndex INTEGER, body TEXT NOT NULL)")
+                    conn.executemany("INSERT INTO line_note VALUES (?, 0, ?)", [(1, frame), (2, frame)])
                 if mutate and name == "seforim.db":
                     mutate(conn)
                 conn.commit()
@@ -511,6 +514,13 @@ class CiWorkflowTest(unittest.TestCase):
                 self.assertIn(message, bad.stdout)
         uncompressed = self.frames_check(lambda conn: conn.execute("DROP TABLE zstd_dict"))
         self.assertNotEqual(uncompressed.returncode, 0, "a DB without zstd_dict passed")
+
+    def test_delta_frames_step_covers_schema_7_note_bodies(self):
+        ok = self.frames_check(notes=True)
+        self.assertEqual(ok.returncode, 0, ok.stderr + ok.stdout)
+        bad = self.frames_check(lambda conn: conn.execute("UPDATE line_note SET body = 'text' WHERE lineId = 2"), notes=True)
+        self.assertNotEqual(bad.returncode, 0, "a plain note body passed")
+        self.assertIn("1 line_note bodies that are not zstd frames", bad.stdout)
 
     # ─── every hosted job in the repository ────────────────────────────────
 

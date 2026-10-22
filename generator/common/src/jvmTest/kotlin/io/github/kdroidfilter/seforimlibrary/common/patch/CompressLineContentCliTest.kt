@@ -40,6 +40,107 @@ class CompressLineContentCliTest {
         Triple(1L, 2L, "גרסה אחרת"),
         Triple(1L, 3L, "שורה ריקה בבסיס"),
     )
+    // (lineId, noteIndex) -> body; the first is line 1's text, so its frame must be line 1's.
+    private val notes = mapOf(
+        (1L to 0L) to "בראשית ברא אלהים את השמים ואת הארץ",
+        (1L to 1L) to "גוף <i>הערה</i>\nשורה שנייה",
+        (4L to 0L) to "",
+    )
+
+    @Test
+    fun `line_note bodies become frames of the same codec and decode to the same bytes`() {
+        val db = schemaSixDb("notes.db", withNotes = true)
+
+        val report = connect(db).use { compressLineContent(it, chunkRows = 2, threads = 3) }
+
+        assertEquals(notes.size.toLong(), report.noteRowsCompressed)
+        assertEquals(lines.size + 2L + notes.size, report.framesValidated)
+        connect(db).use { conn ->
+            val bodies = noteBlobs(conn)
+            LineContentCompression.Decompressor().use { d -> assertEquals(notes, bodies.mapValues { d.text(it.value) }) }
+            assertContentEquals(
+                blobs(conn, "SELECT id, content FROM line_content WHERE id = 1").getValue(1L),
+                bodies.getValue(1L to 0L),
+                "a body is compressed exactly like line text",
+            )
+            assertTrue(compressLineContent(conn, threads = 2).alreadyCompressed)
+            stampSchemaVersion(conn, dbVersion = 31, dbSchemaVersion = 6)
+            conn.createStatement().use { it.execute("UPDATE line_note SET body = 'plain' WHERE lineId = 4") }
+            val error = assertFailsWith<IllegalStateException> { validateCompressed(conn) }
+            assertTrue("1 line_note rows are not zstd frames" in error.message.orEmpty(), error.message)
+            assertFailsWith<IllegalStateException> { stampSchemaVersion(conn, dbVersion = 31, dbSchemaVersion = 6) }
+        }
+    }
+
+    @Test
+    fun `a run interrupted inside line_note resumes to the frames of an uninterrupted run`() {
+        val fresh = schemaSixDb("notes-fresh.db", withNotes = true)
+            .also { db -> connect(db).use { compressLineContent(it, threads = 2) } }
+        val resumed = schemaSixDb("notes-resume.db", withNotes = true)
+        connect(resumed).use { conn ->
+            compressLineContent(conn, threads = 1)
+            // As if the run stopped after the first note: the others are still TEXT.
+            conn.prepareStatement("UPDATE line_note SET body = ? WHERE lineId = ? AND noteIndex = ?").use { ps ->
+                for ((key, body) in notes - (1L to 0L)) {
+                    ps.setString(1, body); ps.setLong(2, key.first); ps.setLong(3, key.second); ps.executeUpdate()
+                }
+            }
+            assertEquals(notes.size - 1L, compressLineContent(conn, chunkRows = 1, threads = 2).noteRowsCompressed)
+        }
+        val expected = connect(fresh).use { noteBlobs(it) }
+        val actual = connect(resumed).use { noteBlobs(it) }
+        assertEquals(expected.keys, actual.keys)
+        expected.forEach { (key, frame) -> assertContentEquals(frame, actual.getValue(key), "$key") }
+    }
+
+    @Test
+    fun `line_note keys at the int64 edges are compressed and validated chunk by chunk`() {
+        val keys = listOf(
+            Long.MIN_VALUE to Long.MIN_VALUE,
+            5L to Long.MAX_VALUE,
+            6L to Long.MIN_VALUE,
+            Long.MAX_VALUE to Long.MAX_VALUE,
+        )
+        val db = schemaSixDb("note-keys.db")
+        connect(db).use { conn ->
+            conn.prepareStatement("INSERT INTO line_note (lineId, noteIndex, charPos, hasMarker, body) VALUES (?, ?, 0, 0, ?)").use { ps ->
+                for ((lineId, noteIndex) in keys) {
+                    ps.setLong(1, lineId); ps.setLong(2, noteIndex); ps.setString(3, "גוף $lineId $noteIndex"); ps.executeUpdate()
+                }
+            }
+            assertEquals(keys.size.toLong(), compressLineContent(conn, chunkRows = 1, threads = 2).noteRowsCompressed)
+            assertEquals(lines.size + 2L + keys.size, validateCompressed(conn, threads = 2, chunkRows = 1))
+            LineContentCompression.Decompressor().use { d ->
+                assertEquals(keys.associateWith { (l, n) -> "גוף $l $n" }, noteBlobs(conn).mapValues { d.text(it.value) })
+            }
+            conn.createStatement().use {
+                it.execute("UPDATE line_note SET body = X'28B52FFD' WHERE lineId = ${Long.MAX_VALUE}")
+            }
+            val error = assertFailsWith<IllegalStateException> { validateCompressed(conn, threads = 2, chunkRows = 1) }
+            assertTrue("line_note row (${Long.MAX_VALUE}, ${Long.MAX_VALUE})" in error.message.orEmpty(), error.message)
+        }
+    }
+
+    @Test
+    fun `a 7 to 7 delta between compressed DBs carries only the changed note frame and reproduces the hash`() {
+        val prev = schemaSixDb("prev7.db", withNotes = true).also { db -> connect(db).use { compressLineContent(it) } }
+        val next = schemaSixDb("next7.db", withNotes = true, changeNote = true)
+            .also { db -> connect(db).use { compressLineContent(it) } }
+        val patch = tmp.root.toPath().resolve("p7.db")
+
+        val produced = PatchDbProducer().produce(
+            prev, next, patch, fromVersion = 31, toVersion = 32, fromSchemaVersion = 7, toSchemaVersion = 7,
+        )
+
+        assertEquals(1, produced.upsertCounts.getValue("line_note"), "only the changed note")
+        assertEquals(0, produced.upsertCounts["line_content"] ?: 0, "unchanged lines keep their frames")
+        val target = tmp.root.toPath().resolve("t7.db").also { Files.copy(prev, it) }
+        val expected = connect(next).use { LogicalContentHasher.forSchemaVersion(7).compute(it) }
+        connect(target).use { PatchApplier().apply(it, patch, expectedToContentHash = expected, expectedToSchemaVersion = 7) }
+        connect(target).use { conn ->
+            LineContentCompression.Decompressor().use { d -> assertEquals("שונה", d.text(noteBlobs(conn).getValue(1L to 1L))) }
+        }
+    }
 
     @Test
     fun `every text becomes a frame that decodes to the same bytes and NULL stays NULL`() {
@@ -342,7 +443,12 @@ class CompressLineContentCliTest {
     private fun LineContentCompression.Decompressor.text(frame: ByteArray): String =
         String(decompress(frame), Charsets.UTF_8)
 
-    private fun schemaSixDb(name: String, changeLine2: Boolean = false): Path {
+    private fun schemaSixDb(
+        name: String,
+        changeLine2: Boolean = false,
+        withNotes: Boolean = false,
+        changeNote: Boolean = false,
+    ): Path {
         val db = tmp.root.toPath().resolve(name)
         JdbcSqliteDriver("jdbc:sqlite:${db.toAbsolutePath()}").use { SeforimDb.Schema.create(it) }
         connect(db).use { conn ->
@@ -365,9 +471,32 @@ class CompressLineContentCliTest {
                 }
             }
             splitLineContent(conn)
+            if (withNotes) {
+                conn.prepareStatement(
+                    "INSERT INTO line_note (lineId, noteIndex, charPos, hasMarker, body) VALUES (?, ?, 0, 0, ?)",
+                ).use { ps ->
+                    for ((key, body) in notes) {
+                        ps.setLong(1, key.first); ps.setLong(2, key.second)
+                        ps.setString(3, if (changeNote && key == (1L to 1L)) "שונה" else body)
+                        ps.executeUpdate()
+                    }
+                }
+            }
         }
         return db
     }
+
+    private fun noteBlobs(conn: Connection): Map<Pair<Long, Long>, ByteArray> =
+        conn.createStatement().use { st ->
+            st.executeQuery("SELECT lineId, noteIndex, body FROM line_note").use { rs ->
+                buildMap {
+                    while (rs.next()) {
+                        assertFalse(rs.getObject(3) is String, "note ${rs.getLong(1)}/${rs.getLong(2)} is still TEXT")
+                        put(rs.getLong(1) to rs.getLong(2), rs.getBytes(3))
+                    }
+                }
+            }
+        }
 
     private fun corruptAfterCompress(line: Long, frame: ByteArray): IllegalStateException {
         val db = schemaSixDb("corrupt-$line.db")

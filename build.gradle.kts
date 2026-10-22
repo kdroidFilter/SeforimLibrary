@@ -162,8 +162,8 @@ listOf(
     }
 }
 
-// line_note moves footnote bodies out of line text and shifts the visible-char offsets
-// of link_anchor, so it follows every line writer and precedes every stage that reads
+// line_note moves footnote bodies out of line text (link_anchor keeps counting them),
+// so it follows every line writer and precedes every stage that reads
 // the text or stores offsets into it (each of those orders itself after it below).
 project(":generator-common").tasks.matching { it.name == "buildLineNoteIndex" }.configureEach {
     mustRunAfter(":otzariasqlite:appendOtzaria")

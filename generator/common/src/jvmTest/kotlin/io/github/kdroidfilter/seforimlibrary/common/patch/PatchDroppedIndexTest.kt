@@ -42,7 +42,7 @@ class PatchDroppedIndexTest {
         val target = applyTo(prev, patch)
         DriverManager.getConnection("jdbc:sqlite:${target.toAbsolutePath()}").use { conn ->
             assertEquals(listOf("idx_category_order"), indexNames(conn, "category"))
-            assertEquals(logicalHash(next), LogicalContentHasher().compute(conn))
+            assertEquals(logicalHash(next), LogicalContentHasher.forSchemaVersion(CURRENT_DB_SCHEMA_VERSION).compute(conn))
         }
         // A client that never had the index (full download) applies it as a no-op.
         applyTo(next, patch)
@@ -102,7 +102,7 @@ class PatchDroppedIndexTest {
 
     private fun logicalHash(path: Path): String =
         DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use {
-            LogicalContentHasher().compute(it)
+            LogicalContentHasher.forSchemaVersion(CURRENT_DB_SCHEMA_VERSION).compute(it)
         }
 
     private companion object {

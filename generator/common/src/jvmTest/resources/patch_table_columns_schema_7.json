@@ -39,11 +39,12 @@
     "line_alt_toc": ["altTocEntryId", "lineId", "structureId"],
     "default_commentator": ["bookId", "commentatorBookId", "position"],
     "default_targum": ["bookId", "position", "targumBookId"],
-    "book_banner": ["bookId", "text"],
+    "banner": ["id", "text"],
+    "book_banner": ["bannerId", "bookId"],
     "book_protection": ["bookId", "level"],
-    "line_divine_name": ["charEnd", "charStart", "kind", "lineId", "source"],
-    "line_note": ["body", "charPos", "lineId", "marker", "noteIndex"],
-    "line_note_divine_name": ["charEnd", "charStart", "kind", "lineId", "noteIndex", "source"],
+    "line_divine_name": ["charStart", "lineId", "span"],
+    "line_note": ["body", "charPos", "hasMarker", "lineId", "noteIndex"],
+    "line_note_divine_name": ["charStart", "lineId", "noteIndex", "span"],
     "schema_meta": ["key", "value"]
   }
 }

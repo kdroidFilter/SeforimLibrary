@@ -96,6 +96,22 @@ object InlineNotes {
 
     internal fun markerRanges(line: String): List<IntRange> = MARKER.findAll(line).map { it.range }.toList()
 
+    /** Inner HTML of every footnote-marker sup in [line], in order: `line_note.hasMarker` rows take them by rank. */
+    fun markers(line: String): List<String> =
+        if (!line.contains("footnote-marker")) emptyList() else MARKER.findAll(line).map { it.groupValues[1] }.toList()
+
+    /**
+     * The sups the readers (app `_strippedMarkers`, search engine `stripped_markers`) take as markers of
+     * moved-out bodies, with their Dart RegExp semantics: ASCII case folding and word boundaries, JavaScript `\s`.
+     */
+    internal fun consumerMarkerRanges(line: String): List<IntRange> =
+        if (!line.contains("footnote-marker", ignoreCase = true)) {
+            emptyList()
+        } else {
+            CONSUMER_MARKER.findAll(line).filter { CONSUMER_BODY_START.matchAt(line, it.range.last + 1) == null }
+                .map { it.range }.toList()
+        }
+
     /** Plain text use (TOC titles, dropped translator notes): every body and every marker sup removed; an unclosed body runs to the end. */
     fun stripMarkersAndBodies(line: String): String {
         if (!line.contains("footnote")) return line
@@ -123,6 +139,22 @@ object InlineNotes {
     }
 
     private val NBSP_ENTITIES = listOf("&nbsp;", "&#160;", "&#xa0;")
+
+    private fun asciiAnyCase(word: String): String =
+        word.map { if (it in 'a'..'z') "[$it${it.uppercaseChar()}]" else it.toString() }.joinToString("")
+
+    private const val JS_SPACE = "[\\t\\n\\u000B\\f\\r \\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]"
+
+    // Dart's \b: an ASCII word character on one side only (Java's \b also joins combining marks to a word).
+    private const val ASCII_B = "(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))"
+
+    private val CONSUMER_MARKER = Regex(
+        "<${asciiAnyCase("sup")}$ASCII_B[^>]*$ASCII_B${asciiAnyCase("footnote-marker")}$ASCII_B[^>]*>.*?</${asciiAnyCase("sup")}>",
+        RegexOption.DOT_MATCHES_ALL,
+    )
+    private val CONSUMER_BODY_START = Regex(
+        "$JS_SPACE*<${asciiAnyCase("i")}$ASCII_B[^>]*$ASCII_B${asciiAnyCase("class")}$JS_SPACE*=$JS_SPACE*\"[^\"]*$ASCII_B${asciiAnyCase("footnote")}$ASCII_B",
+    )
 
     private fun matchingClose(line: String, openAt: Int): MatchResult? {
         var depth = 0

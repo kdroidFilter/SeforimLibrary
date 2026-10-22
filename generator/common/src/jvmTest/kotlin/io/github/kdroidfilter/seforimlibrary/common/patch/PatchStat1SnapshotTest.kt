@@ -176,7 +176,7 @@ class PatchStat1SnapshotTest {
 
     private fun logicalHash(path: Path): String =
         DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use {
-            LogicalContentHasher().compute(it)
+            LogicalContentHasher.forSchemaVersion(CURRENT_DB_SCHEMA_VERSION).compute(it)
         }
 
     private companion object {

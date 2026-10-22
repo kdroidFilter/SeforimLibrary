@@ -1,6 +1,8 @@
 package io.github.kdroidfilter.seforimlibrary.common.db
 
 import com.github.luben.zstd.Zstd
+import io.github.kdroidfilter.seforimlibrary.common.notes.InlineNotes
+import io.github.kdroidfilter.seforimlibrary.common.notes.LineNoteRehydration
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.security.MessageDigest
@@ -15,7 +17,9 @@ import java.sql.Connection
  *  2. every line by `lineIndex`: `'L'`, lineIndex (i64), UTF-8 length (i32), the UTF-8 text —
  *     the decoded text when `line_content` holds a zstd frame, so compression never changes it;
  *  3. every `line_note` of the book by (lineIndex, noteIndex): `'N'`, lineIndex (i64),
- *     noteIndex (i64), charPos (i64), marker (0, or 1 + i32 length + UTF-8), body (i32 length + UTF-8).
+ *     noteIndex (i64), charPos (i64), marker (0, or 1 + i32 length + UTF-8), body (i32 length + UTF-8,
+ *     decoded like the line text). A row with `hasMarker` = 1 takes the inner HTML of the next
+ *     marker sup of its line ([InlineNotes.markers]); a line's sups and such rows must pair up exactly.
  * The value is the first 8 digest bytes as a signed big-endian i64; 0 is reserved for
  * "unknown" and maps to 1. Row ids, heRef, tocEntryId and charCount are not inputs.
  */
@@ -70,7 +74,7 @@ object BookContentHash {
     private class Hasher(conn: Connection, split: Boolean) : AutoCloseable {
         private val lines = conn.prepareStatement(
             "SELECT l.lineIndex, typeof(${LineContentShape.contentExpr(split)}), " +
-                "CAST(${LineContentShape.contentExpr(split)} AS BLOB) FROM line l " +
+                "CAST(${LineContentShape.contentExpr(split)} AS BLOB), l.id FROM line l " +
                 "${LineContentShape.contentJoin(split)} WHERE l.bookId = ? ORDER BY l.lineIndex, l.id",
         )
         // Absent before schema 7; a book then simply has no note rows.
@@ -78,9 +82,15 @@ object BookContentHash {
             null
         } else {
             conn.prepareStatement(
-                "SELECT l.lineIndex, n.noteIndex, n.charPos, CAST(n.marker AS BLOB), CAST(n.body AS BLOB) " +
+                "SELECT l.lineIndex, n.noteIndex, n.charPos, n.hasMarker, typeof(n.body), CAST(n.body AS BLOB), l.id " +
                     "FROM line l JOIN line_note n ON n.lineId = l.id WHERE l.bookId = ? " +
                     "ORDER BY l.lineIndex, l.id, n.noteIndex",
+            )
+        }
+        private val markedLines = notes?.let {
+            conn.prepareStatement(
+                "SELECT n.lineId, sum(n.hasMarker) FROM line l JOIN line_note n ON n.lineId = l.id " +
+                    "WHERE l.bookId = ? GROUP BY n.lineId",
             )
         }
         private val dictionaries = LineContentCompression.storedDictionaries(conn)
@@ -96,11 +106,24 @@ object BookContentHash {
                 buffer.reset()
             }
             out.write(FORMAT_TAG.toByteArray(Charsets.UTF_8))
+            // Lines with notes, by id: how many of their notes have a marker.
+            val anchored = HashMap<Long, Long>()
+            markedLines?.setLong(1, bookId)
+            markedLines?.executeQuery()?.use { rs -> while (rs.next()) anchored[rs.getLong(1)] = rs.getLong(2) }
+            val markers = HashMap<Long, ArrayDeque<ByteArray>>()
             lines.setLong(1, bookId)
             lines.executeQuery().use { rs ->
                 while (rs.next()) {
                     val text = rs.getBytes(3) ?: ByteArray(0)
                     val utf8 = if (rs.getString(2) == "blob") decode(text) else text
+                    val lineId = rs.getLong(4)
+                    anchored[lineId]?.let { expected ->
+                        val found = InlineNotes.markers(utf8.toString(Charsets.UTF_8))
+                        check(found.size.toLong() == expected) {
+                            "line $lineId: $expected line_note rows with a marker, ${found.size} marker sups in its text"
+                        }
+                        markers[lineId] = ArrayDeque(found.map { it.toByteArray(Charsets.UTF_8) })
+                    }
                     out.writeByte('L'.code)
                     out.writeLong(rs.getLong(1))
                     out.writeInt(utf8.size)
@@ -116,15 +139,16 @@ object BookContentHash {
                         out.writeLong(rs.getLong(1))
                         out.writeLong(rs.getLong(2))
                         out.writeLong(rs.getLong(3))
-                        val marker = rs.getBytes(4)
-                        if (marker == null) {
+                        if (!LineNoteRehydration.hasMarker(rs.getObject(4))) {
                             out.writeByte(0)
                         } else {
+                            val marker = markers.getValue(rs.getLong(7)).removeFirst()
                             out.writeByte(1)
                             out.writeInt(marker.size)
                             out.write(marker)
                         }
-                        val body = rs.getBytes(5) ?: ByteArray(0)
+                        val stored = rs.getBytes(6) ?: ByteArray(0)
+                        val body = if (rs.getString(5) == "blob") decode(stored) else stored
                         out.writeInt(body.size)
                         out.write(body)
                         flush()
@@ -150,6 +174,7 @@ object BookContentHash {
         override fun close() {
             lines.close()
             notes?.close()
+            markedLines?.close()
             decompressors.values.forEach { it.close() }
         }
     }

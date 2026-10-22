@@ -6,6 +6,7 @@ import java.nio.file.Path
 import java.sql.DriverManager
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class DumpLinesTest {
 
@@ -25,12 +26,12 @@ class DumpLinesTest {
                 c.createStatement().use { st ->
                     st.execute(
                         "CREATE TABLE line_note (lineId INTEGER NOT NULL, noteIndex INTEGER NOT NULL, " +
-                            "charPos INTEGER NOT NULL, marker TEXT, body TEXT NOT NULL, PRIMARY KEY (lineId, noteIndex))",
+                            "charPos INTEGER NOT NULL, hasMarker INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (lineId, noteIndex))",
                     )
                     st.execute(
-                        "INSERT INTO line_note SELECT id, 0, 2, '1', 'ראה בראשית א א' FROM line WHERE lineIndex = 0",
+                        "INSERT INTO line_note SELECT id, 0, 2, 1, 'ראה בראשית א א' FROM line WHERE lineIndex = 0",
                     )
-                    st.execute("INSERT INTO line_note SELECT id, 1, 4, NULL, 'סוף' FROM line WHERE lineIndex = 0")
+                    st.execute("INSERT INTO line_note SELECT id, 1, 4, 0, 'סוף' FROM line WHERE lineIndex = 0")
                 }
             }
             assertEquals(
@@ -45,7 +46,29 @@ class DumpLinesTest {
     }
 
     @Test
-    fun `an empty SQL marker remains anchored and adjacent bodies keep note order`() {
+    fun `a hasMarker that is not INTEGER 0 or 1 fails the read`() {
+        val db = Files.createTempFile("line-note-flag", ".db")
+        try {
+            for (value in listOf("'x'", "0.5", "X'01'", "2")) {
+                DriverManager.getConnection("jdbc:sqlite:$db").use { c ->
+                    c.createStatement().use { st ->
+                        st.execute("DROP TABLE IF EXISTS line_note")
+                        st.execute(
+                            "CREATE TABLE line_note (lineId INTEGER NOT NULL, noteIndex INTEGER NOT NULL, " +
+                                "charPos INTEGER NOT NULL, hasMarker INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (lineId, noteIndex))",
+                        )
+                        st.execute("INSERT INTO line_note VALUES (1, 0, 0, $value, 'גוף')")
+                    }
+                    assertFailsWith<IllegalStateException>(value) { loadLineNotes(c) }
+                }
+            }
+        } finally {
+            Files.deleteIfExists(db)
+        }
+    }
+
+    @Test
+    fun `an empty marker remains anchored and adjacent bodies keep note order`() {
         val marker = "<sup class=\"footnote-marker\"></sup>"
         val books = listOf(TestBook(1, "src", "Book", listOf("<p><b>$marker סוף</b></p>")))
         for (split in listOf(false, true)) {
@@ -53,10 +76,10 @@ class DumpLinesTest {
                 c.createStatement().use { st ->
                     st.execute(
                         "CREATE TABLE line_note (lineId INTEGER NOT NULL, noteIndex INTEGER NOT NULL, " +
-                            "charPos INTEGER NOT NULL, marker TEXT, body TEXT NOT NULL, PRIMARY KEY (lineId, noteIndex))",
+                            "charPos INTEGER NOT NULL, hasMarker INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (lineId, noteIndex))",
                     )
-                    st.execute("INSERT INTO line_note SELECT id, 0, 0, '', 'ראשונה' FROM line")
-                    st.execute("INSERT INTO line_note SELECT id, 1, 0, NULL, 'שנייה' FROM line")
+                    st.execute("INSERT INTO line_note SELECT id, 0, 0, 1, 'ראשונה' FROM line")
+                    st.execute("INSERT INTO line_note SELECT id, 1, 0, 0, 'שנייה' FROM line")
                 }
                 assertEquals(listOf(true, false), loadLineNotes(c).values.single().map { it.hasMarker })
             }

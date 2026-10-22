@@ -204,7 +204,7 @@ fun main(args: Array<String>) {
                             strippedLines = 0
                         }
                         val stored = notes[rs.getLong(7)]
-                            ?.let { LineNoteRehydration.rehydrate(rs.getString(4) ?: "", it).text }
+                            ?.let { LineNoteRehydration.rehydrate(rs.getString(4) ?: "", it) }
                             ?: (rs.getString(4) ?: "")
                         val content = LinkerInputView.linkerContent(mode, stored)
                         if (content.length != stored.length) strippedLines++
@@ -275,10 +275,10 @@ internal fun loadLineNotes(src: Connection): Map<Long, List<LineNoteRehydration.
     if (!exists) return emptyMap()
     val out = HashMap<Long, MutableList<LineNoteRehydration.NoteAt>>()
     src.createStatement().use { s ->
-        s.executeQuery("SELECT lineId, charPos, body, marker FROM line_note ORDER BY lineId, noteIndex").use { rs ->
+        s.executeQuery("SELECT lineId, charPos, body, hasMarker FROM line_note ORDER BY lineId, noteIndex").use { rs ->
             while (rs.next()) {
                 out.getOrPut(rs.getLong(1)) { ArrayList() } +=
-                    LineNoteRehydration.NoteAt(rs.getInt(2), rs.getString(3), rs.getString(4) != null)
+                    LineNoteRehydration.NoteAt(rs.getInt(2), rs.getString(3), LineNoteRehydration.hasMarker(rs.getObject(4)))
             }
         }
     }

@@ -116,10 +116,17 @@ version older than the oldest delta are routed to the full bundle.
 
 ## Banners and protection
 
-`book_banner` / `book_protection` come from the optional ForDB files `book_banners.csv` /
-`book_protection.csv` (`seedBookNotices`). Both tables always exist in a new build (empty
-when the file is absent). They are schema-7 contract tables like `line_divine_name` and
-`line_note` (DELTA_UPDATE_WORKFLOW.md §1.5).
+`banner` + `book_banner` / `book_protection` come from the required ForDB files `book_banners.csv` /
+`book_protection.csv` (`seedBookNotices`); an archive without either fails the build, since
+silently dropping protection is worse than a failed release. The tables always exist in a new
+build. They are schema-7 contract tables like `line_divine_name` and `line_note`
+(DELTA_UPDATE_WORKFLOW.md §1.5).
+
+`banner` holds each text that some book uses, verbatim, under the `id` of its CSV row, and
+`book_banner` maps a book to it. That id is fixed by hand in the CSV, so a wording change is one
+`banner` row in a delta and a new book one `book_banner` row. `{title}` stays in the stored text;
+the app expands it with `book.title`, percent-encoded (UTF-8, space = `%20`, `A-Za-z0-9.-*_` kept)
+inside a `[label](target)` link target and raw elsewhere.
 
 ## Private books
 

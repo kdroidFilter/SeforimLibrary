@@ -1670,6 +1670,14 @@ jobs:
             generator/sefariasqlite/src/jvmMain/kotlin/io/github/kdroidfilter/seforimlibrary/sefariasqlite/GenerateLinkerLinks.kt
             generator/sefariasqlite/src/jvmMain/kotlin/io/github/kdroidfilter/seforimlibrary/sefariasqlite/SefariaRangeRefs.kt
           )
+          # The pinned Phase-2 writes LINKER anchors on the full line (note bodies in place).
+          # A payload whose buildLineNoteIndex still remaps link_anchor to the stored line
+          # (a52cd6f1 up to the full-line anchor fix) would mix both coordinate systems.
+          notes=generator/common/src/jvmMain/kotlin/io/github/kdroidfilter/seforimlibrary/common/notes/LineNoteIndex.kt
+          if [ -f "$notes" ] && grep -Fq 'fun remapAnchors(' "$notes"; then
+            echo "::error::source_commit ${{ inputs.source_commit }} remaps link_anchor in buildLineNoteIndex; the pinned Phase-2 needs full-line anchors — rebuild from a source_commit with the fix instead of recovering"
+            exit 1
+          fi
           for file in "${files[@]}"; do
             test -f ".pipeline-control/$file"
             install -m 0644 ".pipeline-control/$file" "$file"
@@ -1894,7 +1902,7 @@ jobs:
             start buildstate build/seforim.db.buildstate.zst
 
       # ─── Compress line text (zstd + bundled dictionary) ───────────────────
-      # One frame per line_content / version_line row. Runs after Phase-2, the
+      # One frame per line_content / version_line row and line_note body. Runs after Phase-2, the
       # last reader of plain text, and before compaction reclaims the freed space.
       # Byte-deterministic for a given input regardless of -Pthreads. A
       # source_commit from before this step stays uncompressed; readers handle both.

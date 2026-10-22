@@ -5,6 +5,7 @@ import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
 import io.github.kdroidfilter.seforimlibrary.common.db.LineContentCompression
 import io.github.kdroidfilter.seforimlibrary.common.db.LineContentShape
 import io.github.kdroidfilter.seforimlibrary.common.patch.SCHEMA_7_TABLE_DDL
+import io.github.kdroidfilter.seforimlibrary.common.visibleUnits
 import java.sql.Connection
 
 data class LineNoteIndexReport(
@@ -19,13 +20,6 @@ data class LineNoteIndexReport(
     val unclosedLines: Long,
     /** Lines left untouched: a marker sup not followed by a note would break the k-th marker rule. */
     val orphanMarkerLines: Long,
-    val anchorsRemapped: Long,
-    /** Range anchors with one end inside a removed body, cut back to the body's edge. */
-    val anchorsClipped: Long,
-    /** Point anchors inside a removed body, and ranges left empty by it. */
-    val anchorsDroppedInBody: Long,
-    /** Anchors whose shifted position collides with another anchor of the same link and side. */
-    val anchorsDroppedOnCollision: Long,
     /** NULL version_line rows of changed lines given the old text (split shape only), so they keep it. */
     val versionRowsMaterialized: Long,
 )
@@ -34,10 +28,12 @@ data class LineNoteIndexReport(
  * Moves the inline footnote bodies of every base `line` into `line_note`, in one transaction.
  * `charPos` is the visible offset in the stripped line where the body stood.
  *
- * Per changed line: the bodies leave the text (marker sups stay), `charCount` is recounted,
- * and its `link_anchor` rows are shifted by the visible length of the bodies removed before
- * them. Line ids are kept. `version_line` is left as it was. A line that already has
- * `line_note` rows fails the run, so a second run over a built DB changes nothing.
+ * Per changed line: the bodies leave the text (marker sups stay) and `charCount` is recounted.
+ * Line ids are kept. `version_line` and `link_anchor` are left as they were: anchor offsets keep
+ * addressing the full line, i.e. the stored line with each body's visible chars at its `charPos`
+ * (in noteIndex order), which is also what [LineNoteRehydration] gives back. A line for which
+ * either reading differs from the original fails the run, as does a line that already has
+ * `line_note` rows, so a second run over a built DB changes nothing.
  */
 fun rebuildLineNoteIndex(conn: Connection, logger: Logger, batchSize: Int = 2_000): LineNoteIndexReport {
     check(conn.autoCommit) { "rebuildLineNoteIndex requires an unowned JDBC connection" }
@@ -70,10 +66,6 @@ private class LineNotePass(
     private var unanchored = 0L
     private var unclosed = 0L
     private var orphanMarkers = 0L
-    private var remapped = 0L
-    private var clipped = 0L
-    private var droppedInBody = 0L
-    private var droppedOnCollision = 0L
     private var materialized = 0L
     private var batches = 0
     private val opened = ArrayList<java.sql.PreparedStatement>()
@@ -89,7 +81,7 @@ private class LineNotePass(
         },
     )
     private val existing = prepare("SELECT 1 FROM line_note WHERE lineId = ? LIMIT 1")
-    private val insertNote = prepare("INSERT INTO line_note (lineId, noteIndex, charPos, marker, body) VALUES (?, ?, ?, ?, ?)")
+    private val insertNote = prepare("INSERT INTO line_note (lineId, noteIndex, charPos, hasMarker, body) VALUES (?, ?, ?, ?, ?)")
     private val updateContent = prepare(
         if (split) "UPDATE line_content SET content = ? WHERE id = ?" else "UPDATE line SET content = ? WHERE id = ?",
     )
@@ -97,24 +89,7 @@ private class LineNotePass(
     private val materializeVersions by lazy {
         prepare("UPDATE version_line SET content = ? WHERE lineId = ? AND content IS NULL")
     }
-    private val selectAnchors by lazy {
-        prepare(
-            "SELECT a.linkId, a.side, a.charStart, a.charEnd, a.label FROM link l " +
-                "JOIN link_anchor a ON a.linkId = l.id AND a.side = 0 WHERE l.sourceLineId = ? " +
-                "UNION ALL SELECT a.linkId, a.side, a.charStart, a.charEnd, a.label FROM link l " +
-                "JOIN link_anchor a ON a.linkId = l.id AND a.side = 1 WHERE l.targetLineId = ?",
-        )
-    }
-    private val deleteAnchor by lazy { prepare("DELETE FROM link_anchor WHERE linkId = ? AND side = ? AND charStart = ?") }
-    private val insertAnchor by lazy {
-        prepare("INSERT OR IGNORE INTO link_anchor (linkId, side, charStart, charEnd, label) VALUES (?, ?, ?, ?, ?)")
-    }
-    private val hasAnchors = tableExists("link_anchor") && tableExists("link")
     private val hasNullableVersions = split && tableExists("version_line")
-
-    private class Anchor(
-        val linkId: Long, val side: Int, val start: Int, val end: Int?, val label: String?, val clipped: Boolean = false,
-    )
 
     fun run(): LineNoteIndexReport {
         var lastId = Long.MIN_VALUE
@@ -130,8 +105,7 @@ private class LineNotePass(
             if (++batches % 50 == 0) logger.i { "line_note: $scanned lines with notes scanned, $changed changed" }
         }
         val report = LineNoteIndexReport(
-            scanned, withoutNote, changed, notes, unanchored, unclosed, orphanMarkers,
-            remapped, clipped, droppedInBody, droppedOnCollision, materialized,
+            scanned, withoutNote, changed, notes, unanchored, unclosed, orphanMarkers, materialized,
         )
         logger.i { "line_note: $report" }
         return report
@@ -155,20 +129,34 @@ private class LineNotePass(
             if (orphanMarkers++ < SAMPLE) logger.w { "line_note: line $id has a marker sup without a note; left inline" }
             return
         }
+        // hasMarker drops the marker text: readers rebuild it from the line, so both rules must give it back exactly.
+        check(InlineNotes.consumerMarkerRanges(stripped) == InlineNotes.markerRanges(stripped)) {
+            "line $id: the readers' marker rule does not find the same marker sups"
+        }
+        check(InlineNotes.markers(stripped) == found.mapNotNull { it.marker }) {
+            "line $id: the marker sups left in the line do not reproduce the notes' markers"
+        }
         existing.setLong(1, id)
         check(existing.executeQuery().use { !it.next() }) { "line $id still carries note bodies but already has line_note rows" }
 
-        val removed = found.map { countVisibleChars(content, it.start) to countVisibleChars(content, it.end) }
+        val charPos = ArrayList<Int>(found.size)
         var removedBefore = 0
+        for (note in found) {
+            val start = countVisibleChars(content, note.start)
+            charPos += start - removedBefore
+            removedBefore += countVisibleChars(content, note.end) - start
+        }
+        val moved = found.mapIndexed { index, note -> LineNoteRehydration.NoteAt(charPos[index], note.body, note.marker != null) }
+        check(keepsOffsets(content, stripped, moved)) {
+            "line $id: without its note bodies the line would not map link_anchor offsets back exactly"
+        }
         found.forEachIndexed { index, note ->
-            val (start, end) = removed[index]
             insertNote.setLong(1, id)
             insertNote.setInt(2, index)
-            insertNote.setInt(3, start - removedBefore)
-            insertNote.setString(4, note.marker)
+            insertNote.setInt(3, charPos[index])
+            insertNote.setInt(4, if (note.marker != null) 1 else 0)
             insertNote.setString(5, note.body)
             insertNote.addBatch()
-            removedBefore += end - start
         }
         insertNote.executeBatch()
         notes += found.size
@@ -185,71 +173,23 @@ private class LineNotePass(
         updateCharCount.setInt(1, countVisibleChars(stripped))
         updateCharCount.setLong(2, id)
         updateCharCount.executeUpdate()
-        if (hasAnchors) remapAnchors(id, removed)
         changed++
     }
 
-    /** [removed]: visible [start, end) of each removed body, in order. */
-    private fun remapAnchors(lineId: Long, removed: List<Pair<Int, Int>>) {
-        selectAnchors.setLong(1, lineId)
-        selectAnchors.setLong(2, lineId)
-        val anchors = selectAnchors.executeQuery().use { rs ->
-            buildList {
-                while (rs.next()) {
-                    add(Anchor(rs.getLong(1), rs.getInt(2), rs.getInt(3), rs.getObject(4)?.let { rs.getInt(4) }, rs.getString(5)))
-                }
-            }
+    /** The original's visible chars equal both the stored line with the bodies spliced in and its rehydration. */
+    private fun keepsOffsets(content: String, stripped: String, notes: List<LineNoteRehydration.NoteAt>): Boolean {
+        val original = visibleUnits(content)
+        val stored = visibleUnits(stripped)
+        val spliced = ArrayList<String>(original.size)
+        var cursor = 0
+        for (note in notes) {
+            if (note.charPos > stored.size) return false
+            spliced.addAll(stored.subList(cursor, note.charPos))
+            cursor = note.charPos
+            spliced.addAll(visibleUnits(note.body))
         }
-        val moves = ArrayList<Pair<Anchor, Anchor?>>()
-        for (a in anchors) {
-            val start = shift(a.start, removed)
-            val new = if (a.end == null) {
-                start.takeUnless { start.inside }?.let { Anchor(a.linkId, a.side, it.value, null, a.label) }
-            } else {
-                val end = shift(a.end, removed)
-                if (end.value <= start.value) null
-                else Anchor(a.linkId, a.side, start.value, end.value, a.label, clipped = start.inside || end.inside)
-            }
-            when {
-                new == null -> moves += a to null
-                new.start != a.start || new.end != a.end -> moves += a to new
-            }
-        }
-        if (moves.isEmpty()) return
-        for ((old, _) in moves) {
-            deleteAnchor.setLong(1, old.linkId)
-            deleteAnchor.setInt(2, old.side)
-            deleteAnchor.setInt(3, old.start)
-            deleteAnchor.executeUpdate()
-        }
-        for ((_, new) in moves) {
-            if (new == null) { droppedInBody++; continue }
-            insertAnchor.setLong(1, new.linkId)
-            insertAnchor.setInt(2, new.side)
-            insertAnchor.setInt(3, new.start)
-            if (new.end == null) insertAnchor.setNull(4, java.sql.Types.INTEGER) else insertAnchor.setInt(4, new.end)
-            insertAnchor.setString(5, new.label)
-            if (insertAnchor.executeUpdate() == 1) {
-                remapped++
-                if (new.clipped) clipped++
-            } else {
-                droppedOnCollision++
-            }
-        }
-    }
-
-    /** [value]: position after the removal; one strictly inside a removed body moves to that body's start. */
-    private class Shifted(val value: Int, val inside: Boolean)
-
-    private fun shift(x: Int, removed: List<Pair<Int, Int>>): Shifted {
-        var delta = 0
-        for ((start, end) in removed) {
-            when {
-                x >= end -> delta += end - start
-                x > start -> return Shifted(start - delta, inside = true)
-            }
-        }
-        return Shifted(x - delta, inside = false)
+        spliced.addAll(stored.subList(cursor, stored.size))
+        return spliced == original && visibleUnits(LineNoteRehydration.rehydrate(stripped, notes)) == original
     }
 
     override fun close() {

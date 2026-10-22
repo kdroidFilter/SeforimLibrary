@@ -44,7 +44,8 @@ import java.sql.DriverManager
  * SOURCE virtual view by the repository's allow-list, so no reverse-view wiring is needed.
  *
  * From schema 7 a source line is read with its `line_note` bodies put back at their charPos,
- * the text dumpLines handed the linker; an anchor that falls on a note body is not written.
+ * the text dumpLines handed the linker. Its visible offsets are the full line's, the
+ * `link_anchor` coordinates, so an anchor in a note body is written like any other.
  *
  * Usage:
  *   ./gradlew :sefariasqlite:generateLinkerLinks \
@@ -68,6 +69,15 @@ fun main(args: Array<String>) = runBlocking {
     // The lineage gate below is opt-in, so its flag is parsed before any destructive work:
     // an unrecognized value must fail the build, never disable the gate in silence.
     val linkerStrict = parseStrictFlag("linkerStrict", prop("linkerStrict", null))
+
+    // Probe the payload before opening the repository or changing the persisted id allocator.
+    // Historical recovery builds can have an empty pre-extraction line_note table whose
+    // schema predates charPos/hasMarker. Ignore only an empty table; populated legacy notes
+    // cannot be placed safely without coordinates and must fail before LINKER is replaced.
+    val hasLineNotes = DriverManager.getConnection("jdbc:sqlite:$dbPath").use { connection ->
+        connection.createStatement().use { it.execute("PRAGMA query_only = ON") }
+        linkerHasPositionedNotes(connection)
+    }
 
     val driver = JdbcSqliteDriver(url = "jdbc:sqlite:$dbPath")
     val repository = SeforimRepository(dbPath, driver)
@@ -224,25 +234,15 @@ fun main(args: Array<String>) = runBlocking {
             WHERE l.bookId = ? AND l.lineIndex = ?
             """.trimIndent()
         }
-        var hasLineNotes = false
-        driver.executeQuery(null,
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='line_note')",
-            { c -> if (c.next().value) hasLineNotes = c.getLong(0) == 1L; QueryResult.Value(Unit) }, 0)
-        // [content] is what the linker read; [stored] and [noteBodies] map its offsets back.
-        data class SourceLine(
-            val id: Long,
-            val content: String,
-            val contextRef: String,
-            val stored: String = content,
-            val noteBodies: List<IntRange> = emptyList(),
-        )
+        // [content] is what the linker read.
+        data class SourceLine(val id: Long, val content: String, val contextRef: String)
         // One persistent read-only connection: outside a transaction the driver opens a new
         // connection per statement, re-loading the schema and sqlite_stat1/stat4 every lookup.
         val sourceLineDb = DriverManager.getConnection("jdbc:sqlite:$dbPath").also { sourceLineConnection = it }
         sourceLineDb.createStatement().use { it.execute("PRAGMA query_only = ON") }
         val sourceLineStatement = sourceLineDb.prepareStatement(sourceLineSql)
         val noteStatement = if (hasLineNotes) {
-            sourceLineDb.prepareStatement("SELECT charPos, body, marker FROM line_note WHERE lineId = ? ORDER BY noteIndex")
+            sourceLineDb.prepareStatement("SELECT charPos, body, hasMarker FROM line_note WHERE lineId = ? ORDER BY noteIndex")
         } else null
         var cachedSourceBookId = Long.MIN_VALUE
         var cachedSourceLineIndex = Int.MIN_VALUE
@@ -268,15 +268,12 @@ fun main(args: Array<String>) = runBlocking {
                     val notes = noteStatement.executeQuery().use { rs ->
                         buildList {
                             while (rs.next()) {
-                                if (rs.getString(3) != null) anchoredNotes += size
+                                if (linkerNoteHasMarker(rs.getObject(3))) anchoredNotes += size
                                 add(rs.getInt(1) to (rs.getString(2) ?: ""))
                             }
                         }
                     }
-                    if (notes.isNotEmpty()) {
-                        val (text, bodies) = rehydrateLinkerLine(line.content, notes, anchoredNotes)
-                        found = line.copy(content = text, stored = line.content, noteBodies = bodies)
-                    }
+                    if (notes.isNotEmpty()) found = line.copy(content = rehydrateLinkerLine(line.content, notes, anchoredNotes))
                 }
                 cachedSourceBookId = bookId
                 cachedSourceLineIndex = lineIndex
@@ -310,7 +307,6 @@ fun main(args: Array<String>) = runBlocking {
         var links = 0L; var anchors = 0L; var unresolvedTarget = 0; var ambiguousTarget = 0
         var targetIdentityMismatch = 0; var unmappedSource = 0; var staleSource = 0; var staleContext = 0
         var headingSource = 0
-        var anchorsInNotes = 0
         var missingSourceHash = 0
         var recordsParsed = 0L
 
@@ -398,17 +394,11 @@ fun main(args: Array<String>) = runBlocking {
                     ))
                     // A separate clickable anchor for EACH citation occurrence (same line may cite
                     // the same ref twice at different offsets → one link, two anchors).
+                    val cs = countVisibleChars(content, start)
                     val anchorLimit = maxOf(end, minOf(content.length, nextCitationStart?.let { it + shift } ?: content.length))
-                    val anchorEnd = closeDanglingBrackets(content, start, end, anchorLimit)
-                    val storedRange = linkerStoredRange(srcLine.noteBodies, start, anchorEnd)
-                    if (storedRange == null) {
-                        anchorsInNotes++
-                    } else {
-                        val cs = countVisibleChars(srcLine.stored, storedRange.first)
-                        val ce = countVisibleChars(srcLine.stored, storedRange.second)
-                        if (ce > cs) {
-                            anchorBatch.add(LinkAnchor(linkId = linkId, side = 0, charStart = cs, charEnd = ce))
-                        }
+                    val ce = countVisibleChars(content, closeDanglingBrackets(content, start, end, anchorLimit))
+                    if (ce > cs) {
+                        anchorBatch.add(LinkAnchor(linkId = linkId, side = 0, charStart = cs, charEnd = ce))
                     }
 
                     // Multi-line citation scope (whole amud/section or dashed range) →
@@ -460,7 +450,7 @@ fun main(args: Array<String>) = runBlocking {
         }
         logger.i {
             "LINKER: $links links, $anchors anchors, ${rangeEndByLink.size} target ranges " +
-                "(heading source: $headingSource, anchors on note bodies: $anchorsInNotes, " +
+                "(heading source: $headingSource, " +
                 "unresolved target: $unresolvedTarget, " +
                 "ambiguous target: $ambiguousTarget, target identity mismatch: $targetIdentityMismatch, " +
                 "unmapped source: $unmappedSource, stale source: $staleSource, stale context: $staleContext)"
@@ -541,7 +531,7 @@ internal fun linkerOffsetShift(sourceName: String, content: String, sourceHash: 
  * ambiguous or non-matching suffixes are left outside the anchor.
  *
  * [limit] is an exclusive boundary, e.g. the next citation's start or a rehydrated note's
- * start. Keep this step BEFORE #73's linkerStoredRange mapping to the stored line.
+ * start. Keep this step BEFORE the mapping through countVisibleChars.
  * The walk is linear in the citation and its adjacent suffix, with O(bracket depth) memory.
  */
 internal fun closeDanglingBrackets(content: String, start: Int, end: Int, limit: Int = content.length): Int {
@@ -683,6 +673,40 @@ private fun bracketEntity(content: String, start: Int, limit: Int): Pair<Char, I
 }
 
 /**
+ * Whether notes can be reconstructed on a recovery payload. An absent or empty historical
+ * table needs no reconstruction. Refuse populated older shapes before any LINKER deletion:
+ * neither a marker string nor note order provides the missing visible-char coordinates.
+ */
+internal fun linkerHasPositionedNotes(connection: Connection): Boolean {
+    val columns = connection.createStatement().use { statement ->
+        statement.executeQuery("PRAGMA table_info('line_note')").use { rows ->
+            buildSet { while (rows.next()) add(rows.getString("name")) }
+        }
+    }
+    if (columns.isEmpty()) return false
+    val missing = setOf("lineId", "noteIndex", "charPos", "body", "hasMarker") - columns
+    if (missing.isEmpty()) return true
+    val populated = connection.createStatement().use { statement ->
+        statement.executeQuery("SELECT EXISTS(SELECT 1 FROM line_note)").use { rows ->
+            rows.next()
+            rows.getInt(1) == 1
+        }
+    }
+    check(!populated) {
+        "Phase-2 cannot reconstruct populated legacy line_note: missing ${missing.sorted().joinToString()}; " +
+            "rebuild from a source_commit with positioned notes instead of recovering"
+    }
+    return false
+}
+
+/** Same strict stored INTEGER contract as LineNoteRehydration, without a recovery-only dependency. */
+internal fun linkerNoteHasMarker(stored: Any?): Boolean = when {
+    (stored is Int || stored is Long) && (stored as Number).toLong() == 0L -> false
+    (stored is Int || stored is Long) && (stored as Number).toLong() == 1L -> true
+    else -> error("line_note.hasMarker is ${stored?.let { "${it::class.simpleName} $it" }}, not INTEGER 0 or 1")
+}
+
+/**
  * Copy of LineNoteRehydration.rehydrate (kept in step by a test): the recovery overlay compiles
  * this file against an older generator-common. [notes]: (charPos, body) in noteIndex order.
  */
@@ -690,9 +714,8 @@ internal fun rehydrateLinkerLine(
     stored: String,
     notes: List<Pair<Int, String>>,
     anchoredNotes: Set<Int> = emptySet(),
-): Pair<String, List<IntRange>> {
+): String {
     val out = StringBuilder()
-    val bodies = ArrayList<IntRange>(notes.size)
     val sups = LINKER_SUP.findAll(stored).map { it.range }.toList()
     val markers = if (anchoredNotes.isEmpty()) emptyList() else LINKER_MARKER.findAll(stored).map { it.range }.toList()
     var anchoredSeen = 0
@@ -738,13 +761,10 @@ internal fun rehydrateLinkerLine(
         }
         at = maxOf(at, cursor)
         out.append(stored, cursor, at)
-        val start = out.length
         out.append("<i class=\"footnote\">").append(body).append("</i>")
-        bodies += start until out.length
         cursor = at
     }
-    out.append(stored, cursor, stored.length)
-    return out.toString() to bodies
+    return out.append(stored, cursor, stored.length).toString()
 }
 
 private val LINKER_SUP = Regex("""<sup\b[^>]*>.*?</sup>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
@@ -767,17 +787,6 @@ private fun linkerOnlyTagsBetween(html: String, from: Int, end: Int): Boolean {
         at = close + 1
     }
     return at == end
-}
-
-/** Raw [start, end) of the rehydrated line in the stored one, or null when it touches a note body. */
-internal fun linkerStoredRange(noteBodies: List<IntRange>, start: Int, end: Int): Pair<Int, Int>? {
-    var shift = 0
-    for (body in noteBodies) {
-        val bodyEnd = body.last + 1
-        if (start < bodyEnd && end > body.first) return null
-        if (bodyEnd <= start) shift += bodyEnd - body.first
-    }
-    return (start - shift) to (end - shift)
 }
 
 /** SHA-1(UTF-8(content)) truncated to 16 hex chars. MUST equal linker_artifact.content_hash. */

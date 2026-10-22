@@ -43,14 +43,13 @@ class BookContentHashTest {
     @Test
     fun `any change in a line or a note of the book changes only its value`() {
         val edits = listOf(
-            "UPDATE line SET content = 'שורה ראשונה.' WHERE id = 10",
+            "UPDATE line SET content = replace(content, 'ראשונה', 'ראשונה.') WHERE id = 10",
             "UPDATE line SET lineIndex = 5 WHERE id = 11",
             "DELETE FROM line WHERE id = 11",
             "INSERT INTO line (id, bookId, lineIndex, content) VALUES (13, 1, 2, '')",
             "UPDATE line_note SET body = 'גוף אחר' WHERE lineId = 10 AND noteIndex = 0",
             "UPDATE line_note SET charPos = 3 WHERE lineId = 10 AND noteIndex = 0",
-            "UPDATE line_note SET marker = NULL WHERE lineId = 10 AND noteIndex = 0",
-            "UPDATE line_note SET marker = '' WHERE lineId = 10 AND noteIndex = 0",
+            "UPDATE line SET content = replace(content, '>1</sup>', '></sup>') WHERE id = 10",
             "DELETE FROM line_note WHERE lineId = 10 AND noteIndex = 1",
         )
         val base = connect(freshDb()).use { hashes(it) }
@@ -61,6 +60,30 @@ class BookContentHashTest {
             }
             assertNotEquals(base.getValue(1), changed.getValue(1), edit)
             assertEquals(base - 1, changed - 1, edit)
+        }
+    }
+
+    @Test
+    fun `a note's marker is read back from its line, and unpaired sups or flags fail`() {
+        val unpaired = listOf(
+            "UPDATE line_note SET hasMarker = 0 WHERE lineId = 10 AND noteIndex = 0",
+            "UPDATE line_note SET hasMarker = 1 WHERE lineId = 10 AND noteIndex = 1",
+            "UPDATE line SET content = 'שורה בלי סימן' WHERE id = 10",
+            "UPDATE line SET content = content || '<sup class=\"footnote-marker\">2</sup>' WHERE id = 10",
+        )
+        for (edit in unpaired) {
+            connect(freshDb()).use { conn ->
+                conn.createStatement().use { it.execute(edit) }
+                val error = assertFailsWith<IllegalStateException>(edit) { BookContentHash.compute(conn, 1) }
+                assertTrue("line 10" in error.message.orEmpty(), edit)
+            }
+        }
+        // Values JDBC getInt would coerce to 0 or 1: the read is strict.
+        for (value in listOf("2", "'x'", "0.5", "1.9", "X'01'", "4294967297")) {
+            connect(freshDb()).use { conn ->
+                conn.createStatement().use { it.execute("UPDATE line_note SET hasMarker = $value WHERE lineId = 10 AND noteIndex = 1") }
+                assertFailsWith<IllegalStateException>(value) { BookContentHash.compute(conn, 1) }
+            }
         }
     }
 
@@ -123,12 +146,12 @@ class BookContentHashTest {
                 )
                 st.execute(
                     "INSERT INTO line (id, bookId, lineIndex, content, heRef) VALUES " +
-                        "(10, 1, 0, '<h1>שורה</h1> ראשונה', 'א א'), (11, 1, 1, 'שנייה <b>מודגשת</b>', 'א ב'), " +
+                        "(10, 1, 0, '<h1>שורה</h1><sup class=\"footnote-marker\">1</sup> ראשונה', 'א א'), (11, 1, 1, 'שנייה <b>מודגשת</b>', 'א ב'), " +
                         "(12, 2, 0, 'שורה ראשונה', 'ב א')",
                 )
                 st.execute(
-                    "INSERT INTO line_note (lineId, noteIndex, charPos, marker, body) VALUES " +
-                        "(10, 0, 4, '1', 'גוף <i>הערה</i>'), (10, 1, 9, NULL, 'נספח')",
+                    "INSERT INTO line_note (lineId, noteIndex, charPos, hasMarker, body) VALUES " +
+                        "(10, 0, 4, 1, 'גוף <i>הערה</i>'), (10, 1, 9, 0, 'נספח')",
                 )
             }
         }
@@ -138,8 +161,8 @@ class BookContentHashTest {
     private fun connect(p: Path): Connection = DriverManager.getConnection("jdbc:sqlite:${p.toAbsolutePath()}")
 
     private companion object {
-        // Computed outside Kotlin from the format in BookContentHash's KDoc.
-        const val GOLDEN_BOOK_1 = -3371204337321344343L
+        // Computed outside Kotlin from the format in BookContentHash's KDoc (note 0's marker is "1").
+        const val GOLDEN_BOOK_1 = -8217543383369417224L
         const val GOLDEN_EMPTY_BOOK = 6680358728597189694L
     }
 }

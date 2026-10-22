@@ -51,7 +51,9 @@ on:
           - 'ARM64'
           - 'server-2'
       inputs_from:
-        description: 'Which snapshot both builds see'
+        # 'released' needs a ForDB archive with the schema-7 notice and override files
+        # (divine_name_overrides.csv is required): use 'latest' until v33 is out.
+        description: 'Which snapshot both builds see (use latest until v33 is released)'
         required: true
         default: 'released'
         type: choice
@@ -514,6 +516,12 @@ jobs:
               + (SELECT COUNT(*) FROM version_line WHERE content IS NOT NULL
                 AND (typeof(content) <> 'blob' OR substr(content, 1, 4) <> x'28B52FFD'))")
             test "$PLAIN" = "0" || { echo "::error::$db has $PLAIN line rows that are not zstd frames"; exit 1; }
+            # Schema 7 keeps note bodies as frames too.
+            if [ -n "$(sqlite3 "$db" "SELECT 1 FROM sqlite_master WHERE type='table' AND name='line_note'")" ]; then
+              NOTES=$(sqlite3 "$db" "SELECT COUNT(*) FROM line_note
+                WHERE typeof(body) <> 'blob' OR substr(body, 1, 4) <> x'28B52FFD'")
+              test "$NOTES" = "0" || { echo "::error::$db has $NOTES line_note bodies that are not zstd frames"; exit 1; }
+            fi
             FRAMES=$(sqlite3 "$db" "SELECT COUNT(*) FROM line_content")
             test "$FRAMES" -gt 0 || { echo "::error::$db has no line_content rows"; exit 1; }
             echo "✓ $db: $FRAMES line_content frames, dictionary $(sqlite3 "$db" "SELECT id FROM zstd_dict")"

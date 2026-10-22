@@ -40,17 +40,24 @@ class LineDivineNameIndexTest {
 
     private fun rows(path: Path): List<List<Int>> = DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use { conn ->
         conn.createStatement().use { st ->
-            st.executeQuery("SELECT lineId, charStart, charEnd, kind, source FROM line_divine_name ORDER BY lineId, charStart").use { rs ->
-                buildList { while (rs.next()) add((1..5).map { rs.getInt(it) }) }
+            st.executeQuery("SELECT lineId, charStart, span FROM line_divine_name ORDER BY lineId, charStart").use { rs ->
+                buildList { while (rs.next()) add(listOf(rs.getInt(1)) + decoded(rs.getInt(2), rs.getLong(3))) }
             }
         }
     }
+
+    private fun span(start: Int, end: Int, kind: Int, source: Int): Int =
+        DivineSpanCode.encode(start, end, DivineKind.entries.single { it.code == kind }, DivineSource.entries.single { it.code == source })
+
+    /** (charStart, charEnd, kind, source) of a stored row. */
+    private fun decoded(charStart: Int, span: Long): List<Int> =
+        DivineSpanCode.decode(charStart, span).let { listOf(charStart, it.charEnd, it.kind.code, it.source.code) }
 
     @Test
     fun `rebuild writes visible-char spans and replaces the previous rows`() {
         val path = db(listOf("<b>א</b>&nbsp;ה' אלהינו", "ויגביהוהו", "שמע ישראל יהוה"))
         DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use { conn ->
-            conn.createStatement().use { it.execute("INSERT INTO line_divine_name VALUES (101, 0, 1, 5, 3)") }
+            conn.createStatement().use { it.execute("INSERT INTO line_divine_name VALUES (101, 0, ${span(0, 1, 5, 3)})") }
             val report = rebuildLineDivineNameIndex(conn, logger, overrides = null, requireTanach = false)
             assertEquals(2L, report.total)
             assertEquals(1L, report.appHvyh)
@@ -66,9 +73,9 @@ class LineDivineNameIndexTest {
         val path = db(listOf("טקסט בלי שם", "שורה"))
         DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use { conn ->
             conn.createStatement().use { st ->
-                st.execute("INSERT INTO line_note VALUES (100, 0, 4, NULL, '<b>א</b>&nbsp;ה'' אלהינו'), (100, 1, 4, '1', 'שמע ישראל יהוה')")
-                st.execute("INSERT INTO line_note VALUES (101, 0, 0, NULL, 'בלי שם')")
-                st.execute("INSERT INTO line_note_divine_name VALUES (101, 0, 0, 1, 5, 3)")
+                st.execute("INSERT INTO line_note VALUES (100, 0, 4, 0, '<b>א</b>&nbsp;ה'' אלהינו'), (100, 1, 4, 1, 'שמע ישראל יהוה')")
+                st.execute("INSERT INTO line_note VALUES (101, 0, 0, 0, 'בלי שם')")
+                st.execute("INSERT INTO line_note_divine_name VALUES (101, 0, 0, ${span(0, 1, 5, 3)})")
             }
             val report = rebuildLineDivineNameIndex(conn, logger, overrides = null, requireTanach = false)
             assertEquals(0L, report.total)
@@ -81,7 +88,7 @@ class LineDivineNameIndexTest {
                     st.execute("PRAGMA foreign_keys = ON")
                     if (sql.isNotEmpty()) st.execute(sql)
                     st.executeQuery("SELECT * FROM line_note_divine_name ORDER BY lineId, noteIndex, charStart").use { rs ->
-                        buildList { while (rs.next()) add((1..6).map { rs.getInt(it) }) }
+                        buildList { while (rs.next()) add(listOf(rs.getInt(1), rs.getInt(2)) + decoded(rs.getInt(3), rs.getLong(4))) }
                     }
                 }
             }
@@ -100,10 +107,33 @@ class LineDivineNameIndexTest {
     fun `a library without every tanach book is refused and the old table survives`() {
         val path = db(listOf("ה' אלהינו"))
         DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use { conn ->
-            conn.createStatement().use { it.execute("INSERT INTO line_divine_name VALUES (100, 0, 1, 1, 1)") }
+            conn.createStatement().use { it.execute("INSERT INTO line_divine_name VALUES (100, 0, ${span(0, 1, 1, 1)})") }
             assertFailsWith<IllegalStateException> { rebuildLineDivineNameIndex(conn, logger, overrides = null) }
         }
         assertEquals(listOf(listOf(100, 0, 1, 1, 1)), rows(path))
+    }
+
+    @Test
+    fun `a pre-pack table shape is refused by name and keeps its rows`() {
+        val path = db(listOf("x"))
+        DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use { conn ->
+            conn.createStatement().use { st ->
+                st.execute("DROP TABLE line_divine_name")
+                st.execute(
+                    "CREATE TABLE line_divine_name (lineId INTEGER NOT NULL, charStart INTEGER NOT NULL, " +
+                        "charEnd INTEGER NOT NULL, kind INTEGER NOT NULL, source INTEGER NOT NULL, " +
+                        "PRIMARY KEY (lineId, charStart)) WITHOUT ROWID",
+                )
+                st.execute("INSERT INTO line_divine_name VALUES (100, 0, 1, 1, 1)")
+            }
+            val failure = assertFailsWith<IllegalStateException> {
+                rebuildLineDivineNameIndex(conn, logger, overrides = null, requireTanach = false)
+            }
+            assertTrue("pre-pack" in failure.message.orEmpty(), failure.message)
+            conn.createStatement().use { st ->
+                st.executeQuery("SELECT count(*) FROM line_divine_name").use { rs -> assertEquals(1, rs.getInt(1)) }
+            }
+        }
     }
 
     @Test

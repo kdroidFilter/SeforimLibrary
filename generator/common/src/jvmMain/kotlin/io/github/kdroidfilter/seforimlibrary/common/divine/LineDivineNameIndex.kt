@@ -64,17 +64,17 @@ fun rebuildLineDivineNameIndex(
             st.execute(SCHEMA_7_TABLE_DDL.getValue("line_note_divine_name"))
             st.execute("DELETE FROM line_note_divine_name")
         }
+        requirePackedShape(conn, "line_divine_name", listOf("lineId", "charStart", "span"))
+        requirePackedShape(conn, "line_note_divine_name", listOf("lineId", "noteIndex", "charStart", "span"))
         val lineReport = conn.prepareStatement(
-            "INSERT INTO line_divine_name (lineId, charStart, charEnd, kind, source) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO line_divine_name (lineId, charStart, span) VALUES (?, ?, ?)",
         ).use { insert ->
             var pending = 0
             val report = scanCorpus(conn, overrides, logger, requireTanach) { line, result ->
                 for (span in result.spans) {
                     insert.setLong(1, line.id)
                     insert.setInt(2, span.charStart)
-                    insert.setInt(3, span.charEnd)
-                    insert.setInt(4, span.kind.code)
-                    insert.setInt(5, span.source.code)
+                    insert.setInt(3, DivineSpanCode.encode(span.charStart, span.charEnd, span.kind, span.source))
                     insert.addBatch()
                     if (++pending >= 10_000) { insert.executeBatch(); pending = 0 }
                 }
@@ -83,7 +83,7 @@ fun rebuildLineDivineNameIndex(
             report
         }
         val noteReport = conn.prepareStatement(
-            "INSERT INTO line_note_divine_name (lineId, noteIndex, charStart, charEnd, kind, source) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO line_note_divine_name (lineId, noteIndex, charStart, span) VALUES (?, ?, ?, ?)",
         ).use { insert ->
             var pending = 0
             val report = scanNoteBodies(conn, logger, requireTanach) { lineId, noteIndex, result ->
@@ -91,9 +91,7 @@ fun rebuildLineDivineNameIndex(
                     insert.setLong(1, lineId)
                     insert.setInt(2, noteIndex)
                     insert.setInt(3, span.charStart)
-                    insert.setInt(4, span.charEnd)
-                    insert.setInt(5, span.kind.code)
-                    insert.setInt(6, span.source.code)
+                    insert.setInt(4, DivineSpanCode.encode(span.charStart, span.charEnd, span.kind, span.source))
                     insert.addBatch()
                     if (++pending >= 10_000) { insert.executeBatch(); pending = 0 }
                 }
@@ -129,6 +127,18 @@ fun rebuildLineDivineNameIndex(
 }
 
 internal val CREATE_LINE_DIVINE_NAME: String = SCHEMA_7_TABLE_DDL.getValue("line_divine_name")
+
+/** CREATE IF NOT EXISTS keeps an older table: refuse a pre-pack (charEnd/kind/source) shape by name. */
+private fun requirePackedShape(conn: Connection, table: String, columns: List<String>) {
+    val actual = conn.prepareStatement("SELECT name FROM pragma_table_info(?) ORDER BY cid").use { ps ->
+        ps.setString(1, table)
+        ps.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.getString(1)) } }
+    }
+    check(actual == columns) {
+        "$table has columns $actual, expected $columns (pre-pack shape?): drop line_divine_name and " +
+            "line_note_divine_name, then rebuild"
+    }
+}
 
 internal data class CorpusLine(val id: Long, val bookId: Long, val heRef: String?, val content: String, val verse: VerseRef?)
 

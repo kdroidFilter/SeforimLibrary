@@ -68,6 +68,7 @@
 --     default_targum.bookId           -> book(id)                ON DELETE CASCADE
 --     default_targum.targumBookId     -> book(id)                ON DELETE CASCADE
 --     book_banner.bookId              -> book(id)                ON DELETE CASCADE
+--     book_banner.bannerId            -> banner(id)
 --     book_protection.bookId          -> book(id)                ON DELETE CASCADE
 --     line_divine_name.lineId         -> line(id)                ON DELETE CASCADE
 --     line_note.lineId                -> line(id)                ON DELETE CASCADE
@@ -409,7 +410,9 @@ CREATE INDEX IF NOT EXISTS idx_link_type_target_line ON link(connectionTypeId, t
 -- Word-level anchor of a link inside a line's text.
 -- Coordinates are VISIBLE-char offsets (HTML tags skipped, each entity = one
 -- char — the same convention as line.charCount / countVisibleChars), counted
--- from the start of the anchored line's content.
+-- from the start of the anchored line's content. From schema 7 that is the full
+-- line: the stored text with each line_note body's visible chars at its charPos,
+-- in noteIndex order, so an anchor may lie in or across a note body.
 --   side      0 = the anchor sits in the SOURCE line's text (the stored
 --              base→dependant direction puts the base text on the source
 --              side, so commentary markers are side 0). 1 is reserved for
@@ -622,10 +625,16 @@ CREATE TABLE IF NOT EXISTS default_targum (
 CREATE INDEX IF NOT EXISTS idx_default_targum_book ON default_targum(bookId);
 CREATE INDEX IF NOT EXISTS idx_default_targum_target ON default_targum(targumBookId);
 
--- Schema 7. Per-book publisher banner and protection level (sparse).
+-- Schema 7. Per-book publisher banner and protection level (sparse). banner holds the
+-- texts of ForDB book_banners.csv by its id; the reader expands {title} with book.title.
+CREATE TABLE IF NOT EXISTS banner (
+    id INTEGER PRIMARY KEY NOT NULL,
+    text TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS book_banner (
     bookId INTEGER PRIMARY KEY NOT NULL REFERENCES book(id) ON DELETE CASCADE,
-    text TEXT NOT NULL
+    bannerId INTEGER NOT NULL REFERENCES banner(id)
 );
 
 CREATE TABLE IF NOT EXISTS book_protection (
@@ -634,40 +643,40 @@ CREATE TABLE IF NOT EXISTS book_protection (
 );
 
 -- Schema 7. Verified sacred divine names of each line, in the visible-char
--- coordinates of link_anchor, for the app's display substitution (kind/source
--- codes in DivineNameModel.kt). Built by buildLineDivineNameIndex.
+-- coordinates of the stored line (without note bodies), for the app's display substitution.
+-- Built by buildLineDivineNameIndex.
+-- span = (charEnd - charStart) << 7 | source << 4 | kind (DivineSpanCode in DivineNameModel.kt).
 CREATE TABLE IF NOT EXISTS line_divine_name (
     lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
     charStart INTEGER NOT NULL,
-    charEnd INTEGER NOT NULL,
-    kind INTEGER NOT NULL,
-    source INTEGER NOT NULL,
+    span INTEGER NOT NULL,
     PRIMARY KEY (lineId, charStart)
 ) WITHOUT ROWID;
 
 -- Schema 7. Inline footnote bodies moved out of the line text by buildLineNoteIndex.
 -- noteIndex is the reading order in the line; charPos is the visible offset in the
--- stored line where the body stood; marker is the inner HTML of the
--- <sup class="footnote-marker"> left in place before the note, NULL when the note
--- had none. The k-th marker sup of the line belongs to the k-th row with a marker.
+-- stored line where the body stood; hasMarker is 1 when a <sup class="footnote-marker">
+-- was left in place before the note, 0 when the note had none. The k-th marker sup of
+-- the line belongs to the k-th row with hasMarker = 1, and its inner HTML is the
+-- note's marker (verified by buildLineNoteIndex).
+-- link_anchor offsets keep counting each body at its charPos (see link_anchor).
+-- In a DB with zstd_dict, body is a zstd frame (BLOB) like line_content.content.
 CREATE TABLE IF NOT EXISTS line_note (
     lineId INTEGER NOT NULL REFERENCES line(id) ON DELETE CASCADE,
     noteIndex INTEGER NOT NULL,
     charPos INTEGER NOT NULL,
-    marker TEXT,
+    hasMarker INTEGER NOT NULL,
     body TEXT NOT NULL,
     PRIMARY KEY (lineId, noteIndex)
 ) WITHOUT ROWID;
 
 -- Schema 7. Verified divine names inside each note body, in visible-char offsets
--- within the body; same kind/source codes as line_divine_name.
+-- within the body; same span encoding as line_divine_name.
 CREATE TABLE IF NOT EXISTS line_note_divine_name (
     lineId INTEGER NOT NULL,
     noteIndex INTEGER NOT NULL,
     charStart INTEGER NOT NULL,
-    charEnd INTEGER NOT NULL,
-    kind INTEGER NOT NULL,
-    source INTEGER NOT NULL,
+    span INTEGER NOT NULL,
     PRIMARY KEY (lineId, noteIndex, charStart),
     FOREIGN KEY (lineId, noteIndex) REFERENCES line_note(lineId, noteIndex) ON DELETE CASCADE
 ) WITHOUT ROWID;

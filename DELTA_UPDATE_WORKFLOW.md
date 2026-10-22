@@ -256,10 +256,10 @@ the change is deliberate.
 
 ### 1.5 Schema 7: the 6 -> 7 delta
 
-Schema 7 adds `book_banner`, `book_protection`, `line_divine_name`, `line_note` and
+Schema 7 adds `banner`, `book_banner`, `book_protection`, `line_divine_name`, `line_note` and
 `line_note_divine_name` (`SCHEMA_7_TABLES` in `PatchTables.kt`), right before `schema_meta`
 in both the FK order and the hash order. 6 -> 7 is an ordinary delta, not a full rebase: the producer treats
-the five tables as promoted, so the patch's `migrations` carry, per table,
+the six tables as promoted, so the patch's `migrations` carry, per table,
 `DROP TABLE IF EXISTS` and the table's `CREATE TABLE` from the new DB, and every row of
 them is an upsert. The client checks the pre-apply hash in schema-6 order and the
 post-apply hash in schema-7 order. An app that reads schema 6 only gets the planner's
@@ -269,8 +269,9 @@ Schema 7 also adds `book.contentHash INTEGER NOT NULL DEFAULT 0` (`SCHEMA_7_COLU
 6 -> 7 patch carries an `ALTER TABLE "book" ADD COLUMN` migration and upserts every book.
 `stampSchemaVersion` computes it for every book (`BookContentHash.kt`) after every line and
 `line_note` writer: an opaque 64-bit fingerprint of the book's line text (decoded, so
-compression does not change it) and its notes. Same content gives the same value in every
-build, so a 7 -> 7 delta upserts only the books whose text changed. 0 means unknown.
+compression does not change it) and its notes (bodies decoded the same way). Same content
+gives the same value in every build, so a 7 -> 7 delta upserts only the books whose text
+changed. 0 means unknown.
 
 ---
 

@@ -55,7 +55,7 @@ class PatchLinkAndVersionTablesTest {
         DriverManager.getConnection("jdbc:sqlite:${target.toAbsolutePath()}").use { conn ->
             conn.createStatement().use { it.execute("PRAGMA foreign_keys = ON") }
             PatchApplier().apply(conn, patch)
-            assertEquals(logicalHash(next), LogicalContentHasher().compute(conn))
+            assertEquals(logicalHash(next), LogicalContentHasher.forSchemaVersion(CURRENT_DB_SCHEMA_VERSION).compute(conn))
         }
     }
 
@@ -133,6 +133,6 @@ class PatchLinkAndVersionTablesTest {
 
     private fun logicalHash(path: Path): String =
         DriverManager.getConnection("jdbc:sqlite:${path.toAbsolutePath()}").use {
-            LogicalContentHasher().compute(it)
+            LogicalContentHasher.forSchemaVersion(CURRENT_DB_SCHEMA_VERSION).compute(it)
         }
 }

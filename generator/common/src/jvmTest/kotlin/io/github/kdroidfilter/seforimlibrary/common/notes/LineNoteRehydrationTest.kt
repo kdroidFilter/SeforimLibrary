@@ -10,6 +10,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.sql.DriverManager
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class LineNoteRehydrationTest {
     @JvmField @Rule
@@ -50,26 +51,26 @@ class LineNoteRehydrationTest {
                     st.executeQuery("SELECT content FROM line WHERE id = ${100 + i}").use { rs -> rs.next(); rs.getString(1) }
                 }
                 val notes = conn.createStatement().use { st ->
-                    st.executeQuery("SELECT charPos, body, marker FROM line_note WHERE lineId = ${100 + i} ORDER BY noteIndex").use { rs ->
-                        buildList { while (rs.next()) add(NoteAt(rs.getInt(1), rs.getString(2), rs.getString(3) != null)) }
+                    st.executeQuery("SELECT charPos, body, hasMarker FROM line_note WHERE lineId = ${100 + i} ORDER BY noteIndex").use { rs ->
+                        buildList { while (rs.next()) add(NoteAt(rs.getInt(1), rs.getString(2), LineNoteRehydration.hasMarker(rs.getObject(3)))) }
                     }
                 }
                 if (original.startsWith("<sup class=\"footnote-marker\"></sup>")) {
-                    assertEquals(listOf(true, false), notes.map { it.hasMarker }, "empty SQL marker is anchored")
+                    assertEquals(listOf(true, false), notes.map { it.hasMarker }, "an empty marker is anchored")
                     assertEquals(listOf(0, 0), notes.map { it.charPos }, "adjacent bodies share a position")
                 }
                 if (original.startsWith("<p><b><sup class=\"footnote-marker\"></sup>")) {
                     assertEquals(List(notes.size) { 0 }, notes.map { it.charPos })
                     assertEquals(listOf(true) + List(notes.size - 1) { false }, notes.map { it.hasMarker })
                 }
-                assertEquals(original, LineNoteRehydration.rehydrate(stored, notes).text)
+                assertEquals(original, LineNoteRehydration.rehydrate(stored, notes))
             }
         }
     }
 
     @Test
     fun `a body crosses inline closings and stays before block boundaries`() {
-        fun back(stored: String, charPos: Int) = LineNoteRehydration.rehydrate(stored, listOf(NoteAt(charPos, "ה"))).text
+        fun back(stored: String, charPos: Int) = LineNoteRehydration.rehydrate(stored, listOf(NoteAt(charPos, "ה")))
         assertEquals("<b>מילה</b><i class=\"footnote\">ה</i> ועוד", back("<b>מילה</b> ועוד", 4))
         assertEquals("<sup>1</sup><i class=\"footnote\">ה</i><b>א</b>", back("<sup>1</sup><b>א</b>", 1))
         assertEquals("<b>סוף</b><i class=\"footnote\">ה</i><br>", back("<b>סוף</b><br>", 3))
@@ -95,49 +96,47 @@ class LineNoteRehydrationTest {
             "<sup class=\"footnote-marker\"></sup>" to 0,
         )) {
             val notes = listOf(NoteAt(marker.second, "ה", true), NoteAt(marker.second, "ה"))
-            assertEquals(marker.first + body + body, LineNoteRehydration.rehydrate(marker.first, notes).text)
+            assertEquals(marker.first + body + body, LineNoteRehydration.rehydrate(marker.first, notes))
             if (marker.second > 0) {
                 assertEquals(
                     marker.first + body,
-                    LineNoteRehydration.rehydrate(marker.first, listOf(NoteAt(marker.second, "ה"))).text,
+                    LineNoteRehydration.rehydrate(marker.first, listOf(NoteAt(marker.second, "ה"))),
                     "a raw position strictly inside any sup is outside it even without marker metadata",
                 )
             }
         }
         assertEquals(
             body + "<sup>1</sup>",
-            LineNoteRehydration.rehydrate("<sup>1</sup>", listOf(NoteAt(0, "ה"))).text,
+            LineNoteRehydration.rehydrate("<sup>1</sup>", listOf(NoteAt(0, "ה"))),
         )
         assertEquals(
             "<b>א<sup class=\"footnote-marker\"></sup></b>" + body,
             LineNoteRehydration.rehydrate(
                 "<b>א<sup class=\"footnote-marker\"></sup></b>", listOf(NoteAt(1, "ה", true)),
-            ).text,
+            ),
         )
         val marker = "<sup class=\"footnote-marker\"></sup>"
         val wrapped = "<p><b>${marker}המשך</b></p>"
         assertEquals(
             "<p><b>$marker$body${body}המשך</b></p>",
-            LineNoteRehydration.rehydrate(wrapped, listOf(NoteAt(0, "ה", true), NoteAt(0, "ה"))).text,
+            LineNoteRehydration.rehydrate(wrapped, listOf(NoteAt(0, "ה", true), NoteAt(0, "ה"))),
         )
-        assertEquals(body + wrapped, LineNoteRehydration.rehydrate(wrapped, listOf(NoteAt(0, "ה"))).text)
+        assertEquals(body + wrapped, LineNoteRehydration.rehydrate(wrapped, listOf(NoteAt(0, "ה"))))
         for (gap in listOf(" ", "&nbsp;", "א", "<broken")) {
             val stored = "<p>$gap${marker}המשך</p>"
             assertEquals(
                 body + stored,
-                LineNoteRehydration.rehydrate(stored, listOf(NoteAt(0, "ה", true))).text,
+                LineNoteRehydration.rehydrate(stored, listOf(NoteAt(0, "ה", true))),
                 "anchored metadata cannot skip visible text, entities, whitespace or incomplete tags",
             )
         }
     }
 
     @Test
-    fun `stored ranges skip the inserted bodies and refuse ranges that touch one`() {
-        val back = LineNoteRehydration.rehydrate("אב גד", listOf(NoteAt(2, "xx")))
-        val body = back.bodies.single()
-        assertEquals(2 until 2 + "<i class=\"footnote\">xx</i>".length, body)
-        assertEquals(0 to 2, back.storedRange(0, 2))
-        assertEquals(null, back.storedRange(1, body.first + 1))
-        assertEquals(2 to 5, back.storedRange(body.last + 1, back.text.length))
+    fun `hasMarker takes only an INTEGER 0 or 1`() {
+        assertEquals(listOf(false, true, false, true), listOf<Any>(0, 1, 0L, 1L).map { LineNoteRehydration.hasMarker(it) })
+        for (bad in listOf<Any?>(2, -1L, 4294967297L, "1", "x", 0.5, 1.0, byteArrayOf(1), null)) {
+            assertFailsWith<IllegalStateException>("$bad") { LineNoteRehydration.hasMarker(bad) }
+        }
     }
 }

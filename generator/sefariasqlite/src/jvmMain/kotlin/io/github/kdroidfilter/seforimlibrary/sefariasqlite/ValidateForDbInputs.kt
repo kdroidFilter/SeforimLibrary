@@ -204,7 +204,7 @@ fun main(args: Array<String>) {
             applyBookNotices(conn, bookNotices, logger, strict = false)
             conn.commit()
         }
-        // Warnings only: a row the build cannot read makes it ignore the whole list (Tanach → HVYH only).
+        // Fails like the build on a missing list or an unreadable row; unmatched refs only warn.
         val divineNameOverrides = DriverManager.getConnection("jdbc:sqlite:$tempDb").use {
             validateDivineNameOverrides(it, logger)
         }

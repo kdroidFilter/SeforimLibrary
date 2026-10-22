@@ -5,6 +5,7 @@ import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.common.countVisibleChars
 import io.github.kdroidfilter.seforimlibrary.common.patch.compressLineContent
 import io.github.kdroidfilter.seforimlibrary.common.patch.splitLineContent
+import io.github.kdroidfilter.seforimlibrary.common.visibleUnits
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import org.junit.Rule
 import org.junit.Test
@@ -49,7 +50,7 @@ class LineNoteIndexTest {
                 listOf<Any?>(100, 1, 5, null, "זחט"),
                 listOf<Any?>(102, 0, 6, "*", "ה"),
             ),
-            query(db, "SELECT lineId, noteIndex, charPos, marker, body FROM line_note ORDER BY lineId, noteIndex"),
+            notesWithMarkers(db),
         )
     }
 
@@ -75,22 +76,23 @@ class LineNoteIndexTest {
         connect(db).use { rebuildLineNoteIndex(it, logger) }
         val content = query(db, "SELECT content FROM line").single().single() as String
         val sups = Regex("<sup class=\"footnote-marker\">(.*?)</sup>").findAll(content).map { it.groupValues[1] }.toList()
-        val markers = query(db, "SELECT marker FROM line_note WHERE marker IS NOT NULL ORDER BY noteIndex").map { it.single() }
         assertEquals(listOf("א", "ב"), sups)
-        assertEquals(sups, markers)
+        assertEquals(sups, InlineNotes.markers(content))
+        assertEquals(listOf(1, 0, 1), query(db, "SELECT hasMarker FROM line_note ORDER BY noteIndex").map { it.single() })
     }
 
     @Test
-    fun `anchors after a removed body shift, anchors inside one are dropped`() {
+    fun `anchors keep addressing the full line, in a body or across one too`() {
         val db = db(listOf(noted, "יעד"))
-        connect(db).use { conn ->
+        val sql = "SELECT linkId, side, charStart, charEnd, label FROM link_anchor ORDER BY linkId, side, charStart"
+        val before = connect(db).use { conn ->
             conn.createStatement().use { st ->
                 st.execute("INSERT INTO connection_type(id, name) VALUES (1, 'COMMENTARY')")
                 st.execute(
                     "INSERT INTO link(id, sourceBookId, targetBookId, sourceLineId, targetLineId, targetLineIndex, " +
                         "targetBookOrderIndex, connectionTypeId) VALUES (1, 1, 1, 100, 101, 1, 0, 1), (2, 1, 1, 101, 100, 0, 0, 1)",
                 )
-                // side 0 of link 1 and side 1 of link 2 are on line 100; side 1 of link 1 is on line 101.
+                // Points and ranges before, inside, across and after the bodies at [3,5) and [7,10).
                 st.execute(
                     "INSERT INTO link_anchor(linkId, side, charStart, charEnd, label) VALUES " +
                         "(1, 0, 1, NULL, 'a'), (1, 0, 3, NULL, NULL), (1, 0, 4, NULL, NULL), (1, 0, 5, NULL, NULL), " +
@@ -98,26 +100,26 @@ class LineNoteIndexTest {
                         "(2, 1, 7, 10, NULL), (2, 1, 2, 11, NULL), (2, 1, 4, 8, NULL), (2, 0, 7, NULL, NULL)",
                 )
             }
-            val report = rebuildLineNoteIndex(conn, logger)
-            assertEquals(5, report.anchorsRemapped)
-            assertEquals(2, report.anchorsClipped, "ranges with one end in a body are cut back to its edge")
-            assertEquals(2, report.anchorsDroppedInBody, "a point inside a body, a range wholly inside one")
-            assertEquals(1, report.anchorsDroppedOnCollision, "5 shifts onto the untouched anchor at 3")
+            query(db, sql).also { assertEquals(1, rebuildLineNoteIndex(conn, logger).linesChanged) }
         }
-        assertEquals(
-            listOf(
-                listOf<Any?>(1, 0, 1, null, "a"),
-                listOf<Any?>(1, 0, 3, null, null),
-                listOf<Any?>(1, 0, 4, 7, null),
-                listOf<Any?>(1, 0, 5, 6, null),
-                listOf<Any?>(1, 0, 6, null, null),
-                listOf<Any?>(1, 1, 5, null, null),
-                listOf<Any?>(2, 0, 7, null, null),
-                listOf<Any?>(2, 1, 2, 6, null),
-                listOf<Any?>(2, 1, 3, 5, null),
-            ),
-            query(db, "SELECT linkId, side, charStart, charEnd, label FROM link_anchor ORDER BY linkId, side, charStart"),
-        )
+        assertEquals(before, query(db, sql))
+        // The stored line with each body spliced in at its charPos reads as the original did.
+        val full = visibleUnits(query(db, "SELECT content FROM line WHERE id = 100").single().single() as String).toMutableList()
+        query(db, "SELECT charPos, body FROM line_note WHERE lineId = 100 ORDER BY noteIndex DESC").forEach { (pos, body) ->
+            full.addAll(pos as Int, visibleUnits(body as String))
+        }
+        assertEquals(visibleUnits(noted), full)
+    }
+
+    @Test
+    fun `a line whose offsets would not map back fails the run and changes nothing`() {
+        // Stripped, "&b" would join the ";" after the body into one entity.
+        val line = "א&b<i class=\"footnote\">x</i>;ג"
+        val db = db(listOf(noted, line))
+        val error = assertFailsWith<IllegalStateException> { connect(db).use { rebuildLineNoteIndex(it, logger) } }
+        assertTrue("line 101" in error.message.orEmpty())
+        assertEquals(listOf(listOf<Any?>(noted), listOf<Any?>(line)), query(db, "SELECT content FROM line ORDER BY id"))
+        assertTrue(query(db, "SELECT * FROM line_note").isEmpty())
     }
 
     @Test
@@ -144,7 +146,7 @@ class LineNoteIndexTest {
         assertEquals(0, report.orphanMarkerLines, "a no-break space keeps the marker adjacent")
         assertEquals(
             listOf(listOf<Any?>(100, 0, 2, "1", "גוף"), listOf<Any?>(102, 0, 2, "1", "ב")),
-            query(db, "SELECT lineId, noteIndex, charPos, marker, body FROM line_note ORDER BY lineId"),
+            notesWithMarkers(db),
         )
     }
 
@@ -169,7 +171,7 @@ class LineNoteIndexTest {
         val stripped = "א<sup class=\"footnote-marker\">1</sup>ב <sup>2</sup> ג"
         assertEquals(listOf(listOf<Any?>(stripped, countVisibleChars(stripped))), query(db, "SELECT content, charCount FROM line WHERE id = 100"))
         assertEquals(countVisibleChars("א<sup>1</sup>ב <sup>2</sup> ג"), countVisibleChars(stripped))
-        assertEquals(listOf(listOf<Any?>("1", "גוף")), query(db, "SELECT marker, body FROM line_note"))
+        assertEquals(listOf(listOf<Any?>("1", "גוף")), notesWithMarkers(db).map { it.drop(3) })
         assertEquals(listOf(listOf<Any?>(1, null)), query(db, "SELECT charStart, charEnd FROM link_anchor"))
     }
 
@@ -193,6 +195,24 @@ class LineNoteIndexTest {
         assertEquals(1, report.versionRowsMaterialized)
         assertEquals("אב<sup class=\"footnote-marker\">1</sup>הויכ", query(db, "SELECT content FROM line_content WHERE id = 100").single().single())
         assertEquals(listOf(listOf<Any?>(noted), listOf<Any?>("שונה")), query(db, "SELECT content FROM version_line ORDER BY lineId"))
+    }
+
+    @Test
+    fun `a sup the readers take for a marker but the generator does not fails the run`() {
+        val lines = listOf(
+            "א<sup class=\"footnote-marker\">1</sup><i class=\"footnote\">ג</i> ב<sup class=\"note footnote-marker\">5</sup>",
+            // The readers take the italic left after the marker for its body and skip the marker.
+            "א<sup class=\"footnote-marker\">1</sup><i class=\"footnote\">ג</i><i class=\"a footnote\">x</i>",
+            // DAGESH after "sup": no sup for the generator's \b, a marker for the readers' Dart \b.
+            "א<sup\u05BC class=\"footnote-marker\">1</sup><i class=\"footnote\">ג</i>",
+        )
+        for (line in lines) {
+            val db = db(listOf(line))
+            val error = assertFailsWith<IllegalStateException> { connect(db).use { rebuildLineNoteIndex(it, logger) } }
+            assertTrue("readers' marker rule" in error.message.orEmpty(), line)
+            assertTrue(query(db, "SELECT * FROM line_note").isEmpty())
+            assertEquals(line, query(db, "SELECT content FROM line").single().single())
+        }
     }
 
     @Test
@@ -231,6 +251,17 @@ class LineNoteIndexTest {
     }
 
     private fun connect(p: Path): Connection = DriverManager.getConnection("jdbc:sqlite:${p.toAbsolutePath()}")
+
+    /** line_note as (lineId, noteIndex, charPos, marker, body): a hasMarker row takes the next marker sup of its line. */
+    private fun notesWithMarkers(p: Path): List<List<Any?>> {
+        val text = query(p, "SELECT id, content FROM line").associate { (it[0] as Int) to (it[1] as String) }
+        val left = HashMap<Int, ArrayDeque<String>>()
+        return query(p, "SELECT lineId, noteIndex, charPos, hasMarker, body FROM line_note ORDER BY lineId, noteIndex").map { row ->
+            val lineId = row[0] as Int
+            val markers = left.getOrPut(lineId) { ArrayDeque(InlineNotes.markers(text.getValue(lineId))) }
+            listOf(lineId, row[1], row[2], if (row[3] == 1) markers.removeFirst() else null, row[4])
+        }.also { check(left.values.all { it.isEmpty() }) { "a marker sup without a note" } }
+    }
 
     private fun query(p: Path, sql: String): List<List<Any?>> = connect(p).use { conn ->
         conn.createStatement().use { st ->

@@ -22,10 +22,10 @@ import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 
 /**
- * Compresses the line text of a finished schema-6 `seforim.db`: every
- * `line_content.content` and every non-NULL `version_line.content` becomes one zstd
- * frame (BLOB) made with [LineContentCompression.bundledDictionary], which is
- * stored in `zstd_dict`.
+ * Compresses the line text of a finished schema-6 or schema-7 `seforim.db`: every
+ * `line_content.content`, every non-NULL `version_line.content` and (schema 7) every
+ * `line_note.body` becomes one zstd frame (BLOB) made with
+ * [LineContentCompression.bundledDictionary], which is stored in `zstd_dict`.
  *
  * Runs after the last reader of plain text (Phase-2 `generateLinkerLinks`) and
  * before `compactSeforimDb`, which reclaims the space the shorter rows free.
@@ -61,15 +61,17 @@ internal const val COMPRESS_CHUNK_ROWS: Int = 20_000
 internal data class CompressLineContentReport(
     val lineRowsCompressed: Long,
     val versionRowsCompressed: Long,
+    val noteRowsCompressed: Long,
     val textBytes: Long,
     val frameBytes: Long,
     val framesValidated: Long,
 ) {
-    val alreadyCompressed: Boolean get() = lineRowsCompressed == 0L && versionRowsCompressed == 0L
+    val alreadyCompressed: Boolean
+        get() = lineRowsCompressed == 0L && versionRowsCompressed == 0L && noteRowsCompressed == 0L
 
     fun describe(): String =
         "line text compression ${if (alreadyCompressed) "already in place (validated)" else "done"}: " +
-            "line_content=$lineRowsCompressed version_line=$versionRowsCompressed rows, " +
+            "line_content=$lineRowsCompressed version_line=$versionRowsCompressed line_note=$noteRowsCompressed rows, " +
             "$textBytes → $frameBytes bytes, $framesValidated frames decoded"
 }
 
@@ -104,18 +106,18 @@ internal fun compressLineContent(
     }
     val pool = Executors.newFixedThreadPool(threads)
     try {
-        val encode = { rows: List<Pair<Long, ByteArray>> ->
+        val encode = { rows: List<Pair<LongArray, ByteArray>> ->
             val slice = (rows.size + threads - 1) / threads
             rows.chunked(maxOf(slice, 1)).map { part ->
                 pool.submit<List<ByteArray>> {
                     val (compressor, decompressor) = local.get()
                     part.map { (key, text) ->
                         check(text.size <= LineContentCompression.MAX_LINE_BYTES) {
-                            "row $key is ${text.size} bytes, over the reader cap ${LineContentCompression.MAX_LINE_BYTES}"
+                            "row ${keyText(key)} is ${text.size} bytes, over the reader cap ${LineContentCompression.MAX_LINE_BYTES}"
                         }
                         val frame = compressor.compress(text)
                         check(decompressor.decompress(frame).contentEquals(text)) {
-                            "zstd round trip failed for row $key"
+                            "zstd round trip failed for row ${keyText(key)}"
                         }
                         frame
                     }
@@ -138,12 +140,26 @@ internal fun compressLineContent(
             encode = encode,
         )
         logger.i { "version_line: ${version.rows} rows compressed" }
+        val note = if (hasLineNote(conn)) {
+            compressColumn(
+                conn,
+                selectSql = "SELECT lineId, noteIndex, CAST(body AS BLOB) FROM line_note " +
+                    "WHERE (lineId, noteIndex) >= (?, ?) AND typeof(body) = 'text' " +
+                    "ORDER BY lineId, noteIndex LIMIT $chunkRows",
+                updateSql = "UPDATE line_note SET body = ? WHERE lineId = ? AND noteIndex = ?",
+                keyColumns = 2,
+                encode = encode,
+            ).also { logger.i { "line_note: ${it.rows} rows compressed" } }
+        } else {
+            ColumnResult(0, 0, 0)
+        }
         val validated = validateCompressed(conn, dictionary, threads)
         return CompressLineContentReport(
             lineRowsCompressed = line.rows,
             versionRowsCompressed = version.rows,
-            textBytes = line.textBytes + version.textBytes,
-            frameBytes = line.frameBytes + version.frameBytes,
+            noteRowsCompressed = note.rows,
+            textBytes = line.textBytes + version.textBytes + note.textBytes,
+            frameBytes = line.frameBytes + version.frameBytes + note.frameBytes,
             framesValidated = validated,
         )
     } finally {
@@ -181,23 +197,53 @@ private fun storeDictionary(conn: Connection, dictionary: ByteArray) {
     }
 }
 
+/** `line_note` exists (schema 7); its bodies are compressed and validated like line text. */
+private fun hasLineNote(conn: Connection): Boolean =
+    conn.prepareStatement("SELECT 1 FROM sqlite_master WHERE type='table' AND name='line_note'").use { ps ->
+        ps.executeQuery().use { it.next() }
+    }
+
 private class ColumnResult(val rows: Long, val textBytes: Long, val frameBytes: Long)
+
+/** A row key as messages name it: `id`, or `(lineId, noteIndex)`. */
+private fun keyText(key: LongArray): String = key.singleOrNull()?.toString() ?: key.joinToString(", ", "(", ")")
+
+/** The key right after [key] in key order; null after the last one, (MAX_VALUE, …). */
+private fun keyAfter(key: LongArray): LongArray? {
+    val next = key.copyOf()
+    for (i in next.indices.reversed()) {
+        if (next[i] != Long.MAX_VALUE) return next.also { it[i]++ }
+        next[i] = Long.MIN_VALUE
+    }
+    return null
+}
+
+/** Rows of [selectSql]: its key columns, then the value; [from] binds the inclusive lower key bound. */
+private fun readChunk(conn: Connection, selectSql: String, from: LongArray): List<Pair<LongArray, ByteArray?>> =
+    conn.prepareStatement(selectSql).use { ps ->
+        from.forEachIndexed { i, k -> ps.setLong(i + 1, k) }
+        ps.executeQuery().use { rs ->
+            buildList {
+                while (rs.next()) add(LongArray(from.size) { rs.getLong(it + 1) } to rs.getBytes(from.size + 1))
+            }
+        }
+    }
 
 private fun compressColumn(
     conn: Connection,
     selectSql: String,
     updateSql: String,
-    encode: (List<Pair<Long, ByteArray>>) -> List<ByteArray>,
+    keyColumns: Int = 1,
+    encode: (List<Pair<LongArray, ByteArray>>) -> List<ByteArray>,
 ): ColumnResult {
-    // An inclusive bound covers the full signed range; stop before incrementing MAX_VALUE.
-    var nextKey = Long.MIN_VALUE
+    // An inclusive bound covers the full signed range; stop before incrementing past the last key.
+    var nextKey: LongArray? = LongArray(keyColumns) { Long.MIN_VALUE }
     var rows = 0L
     var textBytes = 0L
     var frameBytes = 0L
-    while (true) {
-        val chunk = conn.prepareStatement(selectSql).use { ps ->
-            ps.setLong(1, nextKey)
-            ps.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.getLong(1) to rs.getBytes(2)) } }
+    while (nextKey != null) {
+        val chunk = readChunk(conn, selectSql, nextKey).map { (key, text) ->
+            key to checkNotNull(text) { "row ${keyText(key)} is NULL" }
         }
         if (chunk.isEmpty()) break
         val frames = encode(chunk)
@@ -206,7 +252,7 @@ private fun compressColumn(
             conn.prepareStatement(updateSql).use { ps ->
                 chunk.forEachIndexed { i, (key, _) ->
                     ps.setBytes(1, frames[i])
-                    ps.setLong(2, key)
+                    key.forEachIndexed { k, v -> ps.setLong(k + 2, v) }
                     ps.addBatch()
                 }
                 ps.executeBatch()
@@ -221,9 +267,7 @@ private fun compressColumn(
         rows += chunk.size
         textBytes += chunk.sumOf { it.second.size.toLong() }
         frameBytes += frames.sumOf { it.size.toLong() }
-        val lastKey = chunk.last().first
-        if (lastKey == Long.MAX_VALUE) break
-        nextKey = lastKey + 1
+        nextKey = keyAfter(chunk.last().first)
     }
     return ColumnResult(rows, textBytes, frameBytes)
 }
@@ -253,11 +297,16 @@ internal fun validateCompressed(
     fun count(sql: String): Long =
         conn.createStatement().use { st -> st.executeQuery(sql).use { rs -> rs.next(); rs.getLong(1) } }
     // A BLOB that is not a zstd frame (wrong magic) would pass a typeof check alone.
-    val notFrame = "(typeof(content) <> 'blob' OR substr(content, 1, 4) <> X'28B52FFD')"
-    val plainLines = count("SELECT COUNT(*) FROM line_content WHERE $notFrame")
+    fun notFrame(column: String) = "(typeof($column) <> 'blob' OR substr($column, 1, 4) <> X'28B52FFD')"
+    val plainLines = count("SELECT COUNT(*) FROM line_content WHERE ${notFrame("content")}")
     check(plainLines == 0L) { "$plainLines line_content rows are not zstd frames" }
-    val plainVersions = count("SELECT COUNT(*) FROM version_line WHERE content IS NOT NULL AND $notFrame")
+    val plainVersions = count("SELECT COUNT(*) FROM version_line WHERE content IS NOT NULL AND ${notFrame("content")}")
     check(plainVersions == 0L) { "$plainVersions version_line rows are not zstd frames" }
+    val notes = hasLineNote(conn)
+    if (notes) {
+        val plainNotes = count("SELECT COUNT(*) FROM line_note WHERE ${notFrame("body")}")
+        check(plainNotes == 0L) { "$plainNotes line_note rows are not zstd frames" }
+    }
 
     val ddict = ZstdDictDecompress(approvedDictionary)
     val checkers = ConcurrentLinkedQueue<FrameChecker>()
@@ -266,7 +315,7 @@ internal fun validateCompressed(
     }
     val pool = Executors.newFixedThreadPool(threads)
     try {
-        return decodeColumn(
+        val lineFrames = decodeColumn(
             conn, "line_content",
             "SELECT id, content FROM line_content WHERE id >= ? ORDER BY id LIMIT $chunkRows",
             pool, threads, local,
@@ -274,6 +323,13 @@ internal fun validateCompressed(
             conn, "version_line",
             "SELECT rowid, content FROM version_line WHERE rowid >= ? AND content IS NOT NULL ORDER BY rowid LIMIT $chunkRows",
             pool, threads, local,
+        )
+        if (!notes) return lineFrames
+        return lineFrames + decodeColumn(
+            conn, "line_note",
+            "SELECT lineId, noteIndex, body FROM line_note WHERE (lineId, noteIndex) >= (?, ?) " +
+                "ORDER BY lineId, noteIndex LIMIT $chunkRows",
+            pool, threads, local, keyColumns = 2,
         )
     } finally {
         // Contexts close only after every task stopped using them.
@@ -288,16 +344,16 @@ private class FrameChecker(val decompressor: LineContentCompression.Decompressor
     // newDecoder() reports malformed input; String(bytes, UTF_8) would replace it silently.
     private val utf8: CharsetDecoder = Charsets.UTF_8.newDecoder()
 
-    fun check(table: String, key: Long, frame: ByteArray) {
+    fun check(table: String, key: LongArray, frame: ByteArray) {
         val text = try {
             decompressor.decompress(frame)
         } catch (failure: RuntimeException) {
-            throw IllegalStateException("$table row $key: ${failure.message}", failure)
+            throw IllegalStateException("$table row ${keyText(key)}: ${failure.message}", failure)
         }
         try {
             utf8.decode(ByteBuffer.wrap(text))
         } catch (failure: CharacterCodingException) {
-            throw IllegalStateException("$table row $key does not decode to valid UTF-8", failure)
+            throw IllegalStateException("$table row ${keyText(key)} does not decode to valid UTF-8", failure)
         }
     }
 }
@@ -310,33 +366,29 @@ private fun decodeColumn(
     pool: ExecutorService,
     threads: Int,
     local: ThreadLocal<FrameChecker>,
+    keyColumns: Int = 1,
 ): Long {
-    // An inclusive bound covers the full signed range; stop before incrementing MAX_VALUE.
-    var nextKey = Long.MIN_VALUE
+    // An inclusive bound covers the full signed range; stop before incrementing past the last key.
+    var nextKey: LongArray? = LongArray(keyColumns) { Long.MIN_VALUE }
     var rows = 0L
     var pending: List<Future<*>> = emptyList()
-    while (true) {
-        val chunk = conn.prepareStatement(selectSql).use { ps ->
-            ps.setLong(1, nextKey)
-            ps.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.getLong(1) to rs.getBytes(2)) } }
-        }
+    while (nextKey != null) {
+        val chunk = readChunk(conn, selectSql, nextKey)
         awaitAll(pending)
+        pending = emptyList()
         if (chunk.isEmpty()) return rows
         val slice = maxOf((chunk.size + threads - 1) / threads, 1)
         pending = chunk.chunked(slice).map { part ->
             pool.submit {
                 val checker = local.get()
-                for ((key, frame) in part) checker.check(table, key, frame)
+                for ((key, frame) in part) checker.check(table, key, checkNotNull(frame) { "$table row ${keyText(key)} is NULL" })
             }
         }
         rows += chunk.size
-        val lastKey = chunk.last().first
-        if (lastKey == Long.MAX_VALUE) {
-            awaitAll(pending)
-            return rows
-        }
-        nextKey = lastKey + 1
+        nextKey = keyAfter(chunk.last().first)
     }
+    awaitAll(pending)
+    return rows
 }
 
 private fun awaitAll(futures: List<Future<*>>) {
