@@ -182,6 +182,59 @@ class OtzariaAltTocTest {
     }
 
     /**
+     * Siblings may share a line: in ספר העיטור several page markers sit inside one
+     * paragraph (Otzaria/otzaria#3181). Every sibling is kept, and the shared line
+     * maps to the last of them.
+     */
+    @Test
+    fun siblingsSharingALineAreAllKept() = runBlocking {
+        val driver = JdbcSqliteDriver(url = "jdbc:sqlite::memory:")
+        SeforimDb.Schema.create(driver)
+        val repo = SeforimRepository(":memory:", driver)
+
+        val sourceId = repo.insertSource("Dicta")
+        val catId = repo.insertCategory(Category(0, null, "Cat", level = 0, order = 1))
+        repo.insertBook(
+            Book(
+                id = 1, categoryId = catId, sourceId = sourceId, title = "Book", heRef = "Book",
+                authors = emptyList(), pubPlaces = emptyList(), pubDates = emptyList(),
+                heShortDesc = null, notesContent = null, order = 1f, topics = emptyList(),
+                isBaseBook = false, totalLines = 3, hasAltStructures = false,
+                hasTeamim = false, hasNekudot = false,
+            ),
+        )
+        repo.insertLinesBatch(
+            (0 until 3).map { idx ->
+                Line(id = 100L + idx, bookId = 1, lineIndex = idx, content = "l${idx + 1}", heRef = "l${idx + 1}")
+            },
+        )
+
+        val sourceDir = Files.createTempDirectory("otzaria-alt-toc-shared")
+        val altTocDir = Files.createDirectories(sourceDir.resolve("alt_toc"))
+        Files.writeString(
+            altTocDir.resolve("Book_alt_toc.json"),
+            """[{"key": "Dapim", "heTitle": "D", "nodes": [{"heTitle": "Part", "line": 1, "children": [
+               {"heTitle": "P1", "line": 1}, {"heTitle": "P2", "line": 2}, {"heTitle": "P3", "line": 2},
+               {"heTitle": "P4", "line": 3}]}]}]""",
+        )
+
+        DatabaseGenerator(sourceDirectory = sourceDir, repository = repo).generateLinksOnly()
+
+        val structureId = repo.getAltTocStructuresForBook(1).single().id
+        val entries = repo.getAltTocEntriesForStructure(structureId).sortedBy { it.id }
+        assertEquals(listOf("Part", "P1", "P2", "P3", "P4"), entries.map { it.text })
+        assertEquals(listOf(100L, 100L, 101L, 101L, 102L), entries.map { it.lineId })
+        val byText = entries.associateBy { it.text }
+        val mappings = repo.getLineAltTocMappings(structureId).associate { it.lineId to it.altTocEntryId }
+        assertEquals(
+            mapOf(100L to byText.getValue("P1").id, 101L to byText.getValue("P3").id, 102L to byText.getValue("P4").id),
+            mappings,
+        )
+
+        repo.close()
+    }
+
+    /**
      * Entry ids must come from the persistent allocator, not from the rowid the
      * wholesale rebuild happens to free up. Reverting the `addNode` insert to
      * `repository.insertAltTocEntry` fails this: `id_alt_toc_entry` stays empty
