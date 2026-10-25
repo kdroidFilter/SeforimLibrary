@@ -29,6 +29,10 @@ import kotlin.io.path.exists
 import kotlin.io.path.name
 import kotlin.io.path.readText
 
+/** A shared author mapping failure must abort the import, never discard a book. */
+internal class SefariaAuthorMappingException(cause: Exception) :
+    IllegalStateException("Failed to load or apply the Sefaria author mapping", cause)
+
 internal class SefariaBookPayloadReader(
     private val json: Json,
     private val logger: Logger,
@@ -38,6 +42,9 @@ internal class SefariaBookPayloadReader(
     // מיפוי מוצהר של ספרים שמיובאים מקובץ גרסה ולא מ-merged.json.
     // ריק כברירת מחדל, כך שכל ספר שאינו במיפוי נקרא בדיוק כמו קודם.
     private val preferredVersions: SefariaPreferredVersions = SefariaPreferredVersions.Empty,
+    // ForDB/sefaria_author_changes.csv, applied to the author line in the body
+    // so it reads exactly as the `author` table does. Identity by default.
+    private val canonicalAuthorName: (String) -> String = { it },
 ) {
     // Set by the read entry points before any book is walked (see readBaseTexts).
     @Volatile
@@ -243,11 +250,21 @@ internal class SefariaBookPayloadReader(
                     he to author.jsonObject["slug"]?.stringOrNull()
                 }
             }.orEmpty()
-            val authors = authorEntries.map { (he, slug) -> authorTitles.displayName(slug, he) }
+            // Keep one body line per source author, even when canonical names
+            // coincide. Removing a line shifts every later manual-link coordinate.
+            val authorLines = authorEntries.map { (he, slug) ->
+                val displayName = authorTitles.displayName(slug, he)
+                try {
+                    canonicalAuthorName(displayName)
+                } catch (e: Exception) {
+                    throw SefariaAuthorMappingException(e)
+                }
+            }
+            val authors = authorLines.distinct()
             // Keep every form for blacklist matching — see BookPayload.authorMatchKeys.
-            val authorMatchKeys = authorEntries.flatMap { (he, slug) ->
+            val authorMatchKeys = (authorEntries.flatMap { (he, slug) ->
                 listOf(he) + authorTitles.allNameForms(slug)
-            }.distinct()
+            } + authors).distinct()
 
             val sameTractateHeTitle = sameTractateHeTitle(schemaJson, schemaObj, schemaDir, schemaLookup)
             val (lines, refs, headings, cleanShifts, lineKeyHashOverrides, simanTopicLines) = SefariaSameTractateRefs.apply(
@@ -256,7 +273,7 @@ internal class SefariaBookPayloadReader(
                     textElement = textElement,
                     bookHeTitle = hebrewTitle,
                     bookEnTitle = englishTitle,
-                    authors = authors
+                    authors = authorLines
                 ),
                 sameTractateHeTitle,
             )
@@ -333,6 +350,7 @@ internal class SefariaBookPayloadReader(
             // גרסה מוצהרת שחסרה בייצוא היא שגיאת קלט — לא בולעים אותה.
             if (e is MissingPreferredVersionException) throw e
             if (e is SefariaSchemaException) throw e
+            if (e is SefariaAuthorMappingException) throw e
             logger.w(e) { "Failed to prepare book from $textPath" }
         }.getOrNull()
     }
