@@ -2395,9 +2395,8 @@ class DatabaseGenerator(
 
         val entriesByParent = mutableMapOf<Long?, MutableList<Long>>()
         val nextOrdinalByParent = mutableMapOf<Long?, Int>()
-        val usedLinesByParent = mutableMapOf<Long?, MutableSet<Long>>()
-        // lineIndex -> entryId; children insert after their parent, so the deepest
-        // entry starting on a shared line wins (same rule as the Sefaria builder).
+        // lineIndex -> entryId; the last entry inserted on a line wins: a child over
+        // its parent (as in the Sefaria builder), a later sibling over earlier ones.
         val anchorByLineIndex = mutableMapOf<Int, Long>()
 
         suspend fun addNode(node: AltTocNodeData, level: Int, parentId: Long?, parentPath: String): Boolean {
@@ -2405,10 +2404,6 @@ class DatabaseGenerator(
             val lineId = getLineIdCached(book.id, lineIndex)
             if (lineId == null) {
                 logger.w { "Alt-toc node '${node.heTitle}' line ${node.line.toInt()} out of range in ${book.title} — node dropped" }
-                return false
-            }
-            if (!usedLinesByParent.getOrPut(parentId) { mutableSetOf() }.add(lineId)) {
-                logger.w { "Alt-toc node '${node.heTitle}' reuses line ${node.line.toInt()} under the same parent in ${book.title} — node dropped" }
                 return false
             }
             val textId = bindings.upsertTocText(node.heTitle)
