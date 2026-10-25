@@ -303,12 +303,9 @@ class SefariaDirectImporter(
             // stay stable across builds (without this, INSERT OR IGNORE INTO author
             // would assign a fresh auto-increment id on every build and break the
             // delta producer's secondary-UNIQUE collision pre-check).
-            // Canonicalize before the id allocator sees the name: an author row
-            // per spelling splits one man in two, and a search by author then
-            // returns only the corpus that happened to match.
+            // The reader already canonicalized and deduplicated these names,
+            // before constructing either the body or the blacklist keys.
             val resolvedAuthors = payload.authors
-                .map(authorNames::canonical)
-                .distinct()
                 .map { name -> Author(id = bindings.upsertAuthor(name), name = name) }
             val resolvedPubDates = payload.pubDates.map { pd ->
                 io.github.kdroidfilter.seforimlibrary.core.models.PubDate(

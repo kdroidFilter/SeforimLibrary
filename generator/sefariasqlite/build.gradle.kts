@@ -451,16 +451,19 @@ tasks.register<JavaExec>("validateForDbInputs") {
     jvmArgs = listOf("-Xmx$generatorHeap", "-XX:+UseG1GC")
 }
 
-// Each ForDB post-process runs as its own JVM. When the release build pins the
+// Each ForDB consumer runs as its own JVM. When the release build pins the
 // ForDB archive (-PforDbArchive + -PforDbSha256), forward both properties to all
 // of them so they read byte-identical inputs instead of resolving the repository
 // pointer independently. No effect for a local run that omits them.
 // generateSefariaSqlite is in the set because the Sefaria import now reads
 // sefaria_author_changes.csv while it creates the author rows — too early for a
 // post-process to fix without merging rows the id allocator has already handed out.
+// Manual-link tools need the same archive for canonical author blacklist matching.
 tasks.matching {
     it.name in setOf(
         "generateSefariaSqlite",
+        "refreshManualLinks",
+        "manualLinksCorpusTest",
         "renameCategories",
         "seedGenerations",
         "seedAllMetadata",

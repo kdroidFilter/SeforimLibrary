@@ -80,7 +80,7 @@ class SefariaAuthorTitlesIntegrationTest {
         val payload = read(layout(withAuthorsFile = true), canonical)
         assertEquals(listOf("רבי אברהם יצחק הכהן קוק"), payload.authors)
         assertEquals("רבי אברהם יצחק הכהן קוק", payload.lines[1])
-        // Mapping the name again, as the importer does, changes nothing.
+        // Canonical names are stable under repeated normalization.
         assertEquals(payload.authors, payload.authors.map(canonical::canonical))
         // Same line count and refs as without the mapping.
         val unmapped = read(layout(withAuthorsFile = true))

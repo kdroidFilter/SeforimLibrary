@@ -3,6 +3,7 @@ package io.github.kdroidfilter.seforimlibrary.sefariasqlite.manuallinks
 import co.touchlab.kermit.Logger
 import io.github.kdroidfilter.seforimlibrary.sefariasqlite.BookPayload
 import io.github.kdroidfilter.seforimlibrary.sefariasqlite.RefEntry
+import io.github.kdroidfilter.seforimlibrary.sefariasqlite.SefariaAuthorCanonicalNames
 import io.github.kdroidfilter.seforimlibrary.sefariasqlite.SefariaAuthorTitles
 import io.github.kdroidfilter.seforimlibrary.sefariasqlite.SefariaBookPayloadReader
 import io.github.kdroidfilter.seforimlibrary.sefariasqlite.filterBlacklistedPayloads
@@ -97,13 +98,23 @@ internal class SefariaCorpusIndex private constructor(
                 logger,
                 SefariaAuthorTitles.load(dbRoot, corpusJson, logger),
             )
+            val authorNames by lazy { SefariaAuthorCanonicalNames.load(logger) }
             val schemaLookup = reader.buildSchemaLookup(schemaDir)
             val blacklists = loadSefariaBlacklists(SefariaCorpusIndex::class.java.classLoader, logger)
             require(!blacklists.isEmpty()) { "Sefaria book/author blacklist resources are missing" }
             val accepted = ArrayList<ManualBookIndex>()
             var rejected = 0
             val readerStats = reader.readSelectedBooks(jsonDir, schemaDir, schemaLookup, candidates) { payload ->
-                val filtered = filterBlacklistedPayloads(listOf(payload), blacklists).payloads.singleOrNull()
+                // Match the importer's canonical blacklist keys, but retain the
+                // historical generated prefix for the Tashma vector proof.
+                // The importer preserves the number of author lines too, so
+                // body/ref coordinates are identical in both paths.
+                // Resolve outside parseBookFile: mapping failures must propagate.
+                val canonicalKeys = payload.authors.map { authorNames.canonical(it) }
+                val matchingPayload = payload.copy(
+                    authorMatchKeys = (payload.authorMatchKeys + canonicalKeys).distinct(),
+                )
+                val filtered = filterBlacklistedPayloads(listOf(matchingPayload), blacklists).payloads.singleOrNull()
                 if (filtered == null) {
                     rejected++
                 } else {
