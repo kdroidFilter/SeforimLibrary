@@ -742,7 +742,9 @@ exit 0
     def test_assets_are_split_below_the_github_limit_and_reuploadable(self):
         run = body(self.index)
         self.assertIn("split_release_asset.sh", run)
+        self.assertIn('-le "$PART_SIZE"', run)
         self.assertIn("--clobber", run)
+        self.assertIn("gh release delete-asset", run)
         self.assertIn("1992294400", self.text)
         self.assertTrue(SPLIT.exists(), "the split helper is missing")
         split = SPLIT.read_text(encoding="utf-8")

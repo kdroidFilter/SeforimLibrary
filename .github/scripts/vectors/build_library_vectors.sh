@@ -250,16 +250,23 @@ endgroup
 # ─── 1 index ───────────────────────────────────────────────────────────────
 group "1 index: the search index of $TAG"
 ARCHIVE=otzaria-library-index.tar.zst
-fetch "$ARCHIVE.manifest.json"
 fetch otzaria-library-index.provenance.json
 manifest="$WORK/dl/$ARCHIVE.manifest.json"
 provenance="$WORK/dl/otzaria-library-index.provenance.json"
-# Before the parts download: the provenance names this release, the manifest's archive and
-# this release's full DB (its digest, or its split manifest's sha256). A missing field fails.
-archive_sha=$(jq -r '.sha256 // empty' "$manifest")
-echo "$archive_sha" | grep -Eqx '[0-9a-f]{64}' || die "the index manifest states no sha256 of its archive"
-[ "$(jq -r '.archive // empty' "$manifest")" = "$ARCHIVE" ] || die "the index manifest does not describe $ARCHIVE"
 prov() { jq -r "$1 // empty" "$provenance"; }
+# Whole when it fits one asset; parts and a manifest only above that.
+if jq -e --arg n "$ARCHIVE" 'any(.assets[]; .name == $n)' "$RELEASE_JSON" >/dev/null; then
+  manifest=""
+  archive_sha=$(prov .indexArchiveSha256)
+  echo "$archive_sha" | grep -Eqx '[0-9a-f]{64}' || die "the index provenance states no sha256 of $ARCHIVE"
+else
+  fetch "$ARCHIVE.manifest.json"
+  archive_sha=$(jq -r '.sha256 // empty' "$manifest")
+  echo "$archive_sha" | grep -Eqx '[0-9a-f]{64}' || die "the index manifest states no sha256 of its archive"
+  [ "$(jq -r '.archive // empty' "$manifest")" = "$ARCHIVE" ] || die "the index manifest does not describe $ARCHIVE"
+fi
+# Before the archive download: the provenance names this release, the archive and
+# this release's full DB (its digest, or its split manifest's sha256). A missing field fails.
 [ "$(prov .schemaVersion)" = 1 ] || die "the index provenance is not a schema 1 provenance"
 [ "$(prov .libraryReleaseTag)" = "$TAG" ] \
   || die "the index provenance names release '$(prov .libraryReleaseTag)': this index is another release's, not $TAG's"
@@ -279,13 +286,18 @@ echo "$db_sha" | grep -Eqx '[0-9a-f]{64}' || die "$TAG publishes no sha256 of $d
   || die "the index provenance names database sha256 '$(prov .seforimDbZstSha256)', not $db_name's $db_sha: this index was built from another database"
 # The parts' paths in an array, never split on whitespace: --state and --work may hold any character.
 parts=()
-while IFS= read -r part; do
-  echo "$part" | grep -Eqx 'otzaria-library-index\.tar\.zst\.part-[0-9]+' || die "the index manifest names an unexpected part '$part'"
-  parts+=("$WORK/dl/$part")
-done < <(jq -r '.parts[].name' "$manifest")
-[ "${#parts[@]}" -gt 0 ] || die "the index manifest lists no parts"
-for part in "${parts[@]}"; do fetch "${part##*/}"; done
-jq -r '.parts[] | "\(.sha256)  \(.name)"' "$manifest" | (cd "$WORK/dl" && sha256sum -c --quiet -) || die "an index part does not hash to its manifest"
+if [ -z "$manifest" ]; then
+  parts=("$WORK/dl/$ARCHIVE")
+  fetch "$ARCHIVE"
+else
+  while IFS= read -r part; do
+    echo "$part" | grep -Eqx 'otzaria-library-index\.tar\.zst\.part-[0-9]+' || die "the index manifest names an unexpected part '$part'"
+    parts+=("$WORK/dl/$part")
+  done < <(jq -r '.parts[].name' "$manifest")
+  [ "${#parts[@]}" -gt 0 ] || die "the index manifest lists no parts"
+  for part in "${parts[@]}"; do fetch "${part##*/}"; done
+  jq -r '.parts[] | "\(.sha256)  \(.name)"' "$manifest" | (cd "$WORK/dl" && sha256sum -c --quiet -) || die "an index part does not hash to its manifest"
+fi
 whole=$(cat "${parts[@]}" | sha256sum | cut -d' ' -f1)
 [ "$whole" = "$archive_sha" ] || die "the index archive hashes to $whole, not the $archive_sha its manifest and provenance state"
 cat "${parts[@]}" | "$ZSTD" -dc --long=31 | tar -x -C "$WORK/index"

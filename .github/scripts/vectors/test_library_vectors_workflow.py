@@ -1115,6 +1115,22 @@ class Driver(unittest.TestCase):
                 p, calls = self.run_driver(mode="base", TO_EMBED=0)
                 self.assert_refused_before_the_parts(p, calls, needle)
 
+    def test_an_index_published_whole_is_built_without_a_manifest(self):
+        assets = self.root / "assets" / TAG
+        parts = sorted(assets.glob("otzaria-library-index.tar.zst.part-*"))
+        (assets / "otzaria-library-index.tar.zst").write_bytes(b"".join(p.read_bytes() for p in parts))
+        for path in (*parts, self.manifest):
+            path.unlink()
+        p, calls = self.run_driver(TO_EMBED=0)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertTrue([c for c in calls if c.endswith("--pattern otzaria-library-index.tar.zst")])
+        self.assertFalse([c for c in calls if "otzaria-library-index.tar.zst.manifest.json" in c])
+        self.assert_the_planner_and_the_validator_read_the_database(calls)
+        (assets / "otzaria-library-index.tar.zst").write_bytes(b"not the archive")
+        p, calls = self.run_driver(TO_EMBED=0)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("not the", p.stdout + p.stderr)
+
     def assert_the_planner_and_the_validator_read_the_database(self, calls):
         db = self.state / "work" / TAG / "seforim.db"
         self.assertEqual(db.read_bytes(), self.db_bytes)   # the stub zstd passes it through

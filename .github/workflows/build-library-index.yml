@@ -159,7 +159,7 @@ jobs:
       # Both empty on a release-triggered run, which therefore builds the current dev HEAD.
       OTZARIA_REF_INPUT: ${{ inputs.otzaria_ref }}
       OTZARIA_RUN_ID: ${{ inputs.otzaria_run_id }}
-      # The tar the parts are cut from, and the name every consumer resolves
+      # The index archive, cut into parts only above PART_SIZE; the name every consumer resolves
       # through https://github.com/Otzaria/SeforimLibrary/releases/latest/download/.
       INDEX_ARCHIVE: otzaria-library-index.tar.zst
       PROVENANCE_ASSET: otzaria-library-index.provenance.json
@@ -972,13 +972,16 @@ jobs:
               builtAt: $builtAt
             }' > "$WORK/parts/$PROVENANCE_ASSET"
 
-          bash .github/scripts/split_release_asset.sh \
-            "$WORK/$INDEX_ARCHIVE" "$WORK/split" "$PART_SIZE"
-          mv "$WORK/split"/* "$WORK/parts/"
-          rmdir "$WORK/split"
-          # The intermediate tar is larger than a single asset may be; only the
-          # parts and the two manifests are ever uploaded.
-          rm -f "$WORK/$INDEX_ARCHIVE"
+          # Whole when it fits one asset, as the full DB is; parts and a manifest only above it.
+          if [ "$(stat -c '%s' "$WORK/$INDEX_ARCHIVE")" -le "$PART_SIZE" ]; then
+            mv "$WORK/$INDEX_ARCHIVE" "$WORK/parts/"
+          else
+            bash .github/scripts/split_release_asset.sh \
+              "$WORK/$INDEX_ARCHIVE" "$WORK/split" "$PART_SIZE"
+            mv "$WORK/split"/* "$WORK/parts/"
+            rmdir "$WORK/split"
+            rm -f "$WORK/$INDEX_ARCHIVE"
+          fi
           ls -l "$WORK/parts"
 
       - name: Attach the index to the library release
@@ -989,6 +992,13 @@ jobs:
           timeout --kill-after=60 120m \
             gh release upload "$RELEASE_TAG" "$WORK/parts"/* \
               --repo "$GITHUB_REPOSITORY" --clobber
+          # A rerun may switch between whole and parts; the other shape's assets are stale.
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name | select(startswith(env.INDEX_ARCHIVE))' |
+            while IFS= read -r name; do
+              [ -e "$WORK/parts/$name" ] ||
+                gh release delete-asset "$RELEASE_TAG" "$name" --repo "$GITHUB_REPOSITORY" --yes
+            done
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --json assets --jq '.assets[] | select(.name | startswith("otzaria-library-index")) | "\(.name)\t\(.size)"'
 
