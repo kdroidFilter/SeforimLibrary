@@ -397,8 +397,9 @@ jobs:
           ARG RUSTUP_VERSION
           ARG RUSTUP_SHA256
           ARG RUST_VERSION
-          ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
-          ENV PATH=/opt/cargo/bin:/opt/flutter/bin:$PATH
+          # The .rustup/.cargo layout: build hooks get no RUSTUP_HOME, and the engine infers it from it.
+          ENV RUSTUP_HOME=/opt/rust/.rustup CARGO_HOME=/opt/rust/.cargo
+          ENV PATH=/opt/rust/.cargo/bin:/opt/flutter/bin:$PATH
           # cargokit only ever runs `rustup run stable`, so the pinned toolchain is installed under that name.
           RUN curl -fsSL --retry 3 --connect-timeout 30 --speed-limit 1024 --speed-time 120 \
                 -o /tmp/rustup-init \
