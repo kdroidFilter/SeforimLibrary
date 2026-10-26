@@ -506,13 +506,16 @@ validated() {  # <what> <report> <release>...: the set those releases install, v
   # the releases as a device installs them (into a set under the work directory), and holds it to
   # the index and the plan (G3, G4) and the recall of its scan with the int8 query model the
   # application runs against the exact f32 scan of the warehouse (G6). Its report is published.
-  local what=$1 report=$2 releases=() r g6
+  local what=$1 report=$2 releases=() floors=() r g6 entry
   shift 2
   for r in "$@"; do releases+=(--release "$r"); done
+  for entry in ${G6_FLOORS:-}; do
+    [ "${entry%%=*}" != "$name" ] || { r=${entry#*=}; floors=(--min-recall-10 "${r%,*}" --min-recall-50 "${r#*,}"); }
+  done
   set +e
   TMPDIR="$FW" "$VALIDATE" --index "$INDEX" --seforim-db "$DB" "${releases[@]}" --plan "$PLAN" \
     --warehouse "$WAREHOUSE" --model "$QPKG/$QUERY_GRAPH" --model-identity "$FAMILY" --onnx-runtime "$ORT" \
-    --threads "$(getconf _NPROCESSORS_ONLN)" --report "$report"
+    --threads "$(getconf _NPROCESSORS_ONLN)" --report "$report" ${floors[@]+"${floors[@]}"}
   VALIDATED=$?
   set -e
   jq -c '{passed, gates: [.gates[] | {gate, status}]}' "$report" 2>/dev/null || true

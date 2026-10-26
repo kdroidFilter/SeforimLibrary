@@ -77,6 +77,8 @@ TAG_COMMIT = "c66256253b25c0aa0b13d04e399647496f3b0bee"   # the commit TAG names
 # (name, release prefix) of each family, in build order
 FAMILIES = [(c.split(":")[0].rsplit("/", 1)[-1], c.split(":")[1]) for c in PIN["FAMILY_CONFIGS"].strip('"').split()]
 LEGACY, WINDOWS = FAMILIES[0][0], FAMILIES[1][0]
+# family -> (recall@10, recall@50) floors pins.env sets below the validator's own
+G6_FLOORS = dict((e.split("=")[0], tuple(e.split("=")[1].split(","))) for e in PIN.get("G6_FLOORS", "").strip('"').split())
 ROTATION_KEY = f"{FAMILIES[1][0]}.fp32-4a4a2ae8"   # the windows family's rotation, fitted on the stub warehouse
 CHUNKING_IDENTITY = {"meivin-round2-onnx": 2685558872390372738, "meivin-round2-windows-onnx": 320260894818558297}
 
@@ -888,14 +890,17 @@ class Driver(unittest.TestCase):
                 fw = work / name
                 args = calls[i].split()[1:]
                 pairs = dict(zip(args[::2], args[1::2]))
+                floors = G6_FLOORS.get(name)   # a family pins.env holds below the validator's own floors
                 self.assertEqual(args[::2], ["--index", "--seforim-db", "--release", "--plan", "--warehouse", "--model",
-                                             "--model-identity", "--onnx-runtime", "--threads", "--report"])
+                                             "--model-identity", "--onnx-runtime", "--threads", "--report"]
+                                 + (["--min-recall-10", "--min-recall-50"] if floors else []))
                 self.assertEqual(pairs, {
                     "--index": str(work / "index" / "index"), "--seforim-db": str(work / "seforim.db"),
                     "--release": str(fw / "release"), "--plan": str(fw / "plan"),
                     "--warehouse": str(self.warehouse), "--model": str(cache / PIN["QUERY_PACKAGE_CHECKSUM"] / PIN["QUERY_GRAPH"]),
                     "--model-identity": str(self.model(name)), "--onnx-runtime": str(self.ort),
-                    "--threads": pairs["--threads"], "--report": str(fw / "release" / "validation.json")})
+                    "--threads": pairs["--threads"], "--report": str(fw / "release" / "validation.json"),
+                    **({"--min-recall-10": floors[0], "--min-recall-50": floors[1]} if floors else {})})
                 self.assertGreater(int(pairs["--threads"]), 0)
                 self.assertEqual(calls[i + 1], "validate-env TMPDIR=" + str(fw))   # its installed set stays in the work dir
                 after = calls[i:]
