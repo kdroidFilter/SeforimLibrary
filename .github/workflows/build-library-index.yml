@@ -171,9 +171,9 @@ jobs:
       HOST_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
       # The builder image's toolchain. Flutter and WPE are checked against the
       # application's own build_linux; Rust is what its `stable` resolved in run 35842760972.
-      FLUTTER_VERSION: '3.47.2'
-      FLUTTER_COMMIT: d3b14c876900e553bc736ca19295fc09e3853e8e
-      FLUTTER_SHA256_X86_64: 447878859d01ca9bfdb99a85f245af07ed8a15fedcd9d189c4749e8e92d1f185
+      FLUTTER_VERSION: '3.47.7'
+      FLUTTER_COMMIT: abaf9c523780a608bd46686fd5e53740a07077f8
+      FLUTTER_SHA256_X86_64: af7455f540df951184c7953fbe3cf884766e7541dacf8571f9f582db03dd6230
       RUST_VERSION: '1.98.1'
       RUSTUP_VERSION: '1.29.1'
       RUSTUP_SHA256_X86_64: dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71

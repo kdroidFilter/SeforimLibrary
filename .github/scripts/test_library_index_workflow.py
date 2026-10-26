@@ -455,7 +455,7 @@ sys.exit(1)
                         "${{ matrix.arch == 'aarch64' && '" + "1" * 64 + "' || '" + "2" * 64 + "' }}"}})
             elif name == "Set up Flutter (aarch64, from git)":
                 steps.append({"name": name, "shell": "bash",
-                              "run": "git clone --depth 1 --branch 3.47.2 x\n"})
+                              "run": "git clone --depth 1 --branch 3.47.7 x\n"})
             else:
                 steps.append({"name": name, "shell": "bash", "run": f"echo {role}\n"})
         x.MIRRORED_RUN = {n: x.fingerprint(next(s for s in steps if s["name"] == n)["run"])
@@ -468,7 +468,7 @@ sys.exit(1)
                 "strategy": {"matrix": {"target": ["deb", "raw"], "arch": ["x86_64", "aarch64"]}}}
 
     def check(self, x, job, arch="x86_64"):
-        env = dict(os.environ, FLUTTER_VERSION="3.47.2", WPE_VERSION="9.9.9", WPE_TAG="wpe-tag",
+        env = dict(os.environ, FLUTTER_VERSION="3.47.7", WPE_VERSION="9.9.9", WPE_TAG="wpe-tag",
                    WPE_SHA256=("1" if arch == "aarch64" else "2") * 64)
         saved = dict(os.environ)
         os.environ.update(env)

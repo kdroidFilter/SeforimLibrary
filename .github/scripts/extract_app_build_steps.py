@@ -31,7 +31,7 @@ WPE_DOWNLOAD = "Download prebuilt WPE runtime SDK"
 # Reproduced by build-library-index.yml itself; pinned by fingerprint of the comment-free run.
 MIRRORED_RUN = {
     "Prepare container base tools": "b996259b07b684be56e7cc529cfb4f1712c3381f19e732bc41e383b2ab63b67b",
-    "Set up Flutter (aarch64, from git)": "a285bfe7c1b4f2924efbb7563e398a9dd3f6ff85c4bdd56f169c3fb7dbc43c49",
+    "Set up Flutter (aarch64, from git)": "8518cce0a699547dc0517e1081e9709dad4bcff38defde7a22e4d02fb71225ce",
     "Add cargo to PATH and verify toolchain": "ccd2ca002cdeb025b85eace91b76b9c430c8459f11d07fc991221d30f6a4f879",
     "Install Linux build dependencies": "afad8660067a7909e955667c2cabd3782c2a5f889664f1bdc1604fa5daaa11cc",
     WPE_DOWNLOAD: "291e7657cf03dd9b570975bf30f0bc9158bec15ed796b2eaf0887e7c30ede838",
@@ -45,7 +45,7 @@ MIRRORED_USES = {
     "Set up Flutter": {
         "if": "matrix.arch != 'aarch64'",
         "uses": "subosito/flutter-action@v2",
-        "with": {"channel": "stable", "flutter-version": "3.47.2", "cache": True},
+        "with": {"channel": "stable", "flutter-version": "3.47.7", "cache": True},
     },
     "Install Rust (stable) with rustup": {"uses": "dtolnay/rust-toolchain@stable"},
 }
@@ -56,7 +56,7 @@ tries=0
 : > "$GITHUB_WORKSPACE/build_linux.log"
 until [ $tries -ge 3 ]
 do
-if flutter build linux --verbose --dart-define=BIO_OBF_KEY=${{ secrets.BIO_OBF_KEY }} 2>&1 | tee -a "$GITHUB_WORKSPACE/build_linux.log"; then
+if flutter build linux --verbose --dart-define=BIO_OBF_KEY=${{ secrets.BIO_OBF_KEY }} "--dart-define=OTZARIA_BUILD_COMMIT=$(git rev-parse --short=12 HEAD)" 2>&1 | tee -a "$GITHUB_WORKSPACE/build_linux.log"; then
 break
 fi
 tries=$((tries+1))
