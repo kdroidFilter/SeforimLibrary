@@ -91,6 +91,170 @@ class RenameCategoryDescriptionsTest {
         }
     }
 
+    @Test
+    fun `conflict settled by a ForDB replace or clear keeps the target value`() {
+        withConnection { connection ->
+            insert(connection, 1, "source", "source long", title = "old")
+            insert(connection, 2, "target", "target long", title = "new")
+            val overrides = overridesOf(
+                override("new", shortEdit = DescriptionEdit.Replace("final"), longEdit = DescriptionEdit.Clear),
+            )
+
+            mergeCategoryDescriptions(connection, 1, 2, overrides)
+
+            assertEquals("target" to "target long", read(connection, 2))
+        }
+    }
+
+    @Test
+    fun `conflict is not settled by a keep edit or by a row for another path`() {
+        withConnection { connection ->
+            insert(connection, 1, "source", "same", title = "old", parentId = 9)
+            insert(connection, 2, "target", "same", title = "new", parentId = 9)
+            insert(connection, 9, null, null, title = "root")
+
+            // Only the long description is edited; the short one stays in conflict.
+            assertFailsWith<IllegalStateException> {
+                mergeCategoryDescriptions(
+                    connection, 1, 2,
+                    overridesOf(override("root/new", longEdit = DescriptionEdit.Replace("final"))),
+                )
+            }
+            // A row for the bare title is not the target's path.
+            assertFailsWith<IllegalStateException> {
+                mergeCategoryDescriptions(
+                    connection, 1, 2,
+                    overridesOf(override("new", shortEdit = DescriptionEdit.Replace("final"))),
+                )
+            }
+            assertEquals("target" to "same", read(connection, 2))
+        }
+    }
+
+    @Test
+    fun `rename merge folds same-named subcategories instead of duplicating them`() {
+        withConnection { connection ->
+            // old > {shared > {deep, only-source}, unique}; new > {shared > deep}
+            insert(connection, 1, null, null, title = "old")
+            insert(connection, 2, null, null, title = "shared", parentId = 1)
+            insert(connection, 3, null, null, title = "deep", parentId = 2)
+            insert(connection, 4, null, null, title = "only-source", parentId = 2)
+            insert(connection, 5, null, null, title = "unique", parentId = 1)
+            insert(connection, 11, null, null, title = "new")
+            insert(connection, 12, "kept", null, title = "shared", parentId = 11)
+            insert(connection, 13, null, null, title = "deep", parentId = 12)
+            insertBook(connection, id = 100, categoryId = 1)
+            insertBook(connection, id = 101, categoryId = 2)
+            insertBook(connection, id = 102, categoryId = 3)
+
+            val result = renameOrMergeCategory(
+                connection,
+                CategoryRename("old", "new", CategoryMatchMode.Exact),
+                Logger.withTag("test"),
+            )
+
+            assertEquals(RenameResult.Merged(3), result)
+            listOf(1L, 2L, 3L).forEach { assertFalse(categoryExists(connection, it), "source id=$it must be gone") }
+            assertEquals(11, bookCategory(connection, 100))
+            assertEquals(12, bookCategory(connection, 101))
+            assertEquals(13, bookCategory(connection, 102))
+            assertEquals(12, categoryParent(connection, 4))
+            assertEquals(11, categoryParent(connection, 5))
+            assertEquals("kept" to null, read(connection, 12))
+            assertEquals(
+                listOf("new", "new/shared", "new/shared/deep", "new/shared/only-source", "new/unique"),
+                allPaths(connection),
+            )
+        }
+    }
+
+    @Test
+    fun `nested description conflict fails before the merge changes anything`() {
+        withConnection { connection ->
+            insert(connection, 1, null, null, title = "old")
+            insert(connection, 2, "source", null, title = "shared", parentId = 1)
+            insert(connection, 11, null, null, title = "new")
+            insert(connection, 12, "target", null, title = "shared", parentId = 11)
+            insertBook(connection, id = 100, categoryId = 1)
+
+            assertFailsWith<IllegalStateException> {
+                renameOrMergeCategory(
+                    connection,
+                    CategoryRename("old", "new", CategoryMatchMode.Exact),
+                    Logger.withTag("test"),
+                )
+            }
+
+            assertTrue(categoryExists(connection, 1))
+            assertEquals(1, bookCategory(connection, 100))
+            assertEquals(1, categoryParent(connection, 2))
+        }
+    }
+
+    /** The released-DB shape behind the ForDB gate failure: a Sefaria tree renamed onto an Otzaria one. */
+    @Test
+    fun `validator merges onto an existing tree when ForDB settles every conflict`() {
+        withConnection { connection ->
+            insert(connection, 1, "sefaria", "sefaria long", title = "מילונים וספרי יעץ")
+            insert(connection, 2, "same", "sefaria words", title = "מילונים", parentId = 1)
+            insert(connection, 3, "grammar", "grammar", title = "דקדוק", parentId = 1)
+            insert(connection, 11, "otzaria", "otzaria long", title = "ספרות עזר")
+            insert(connection, 12, "same", "otzaria words", title = "מילונים", parentId = 11)
+            insert(connection, 13, "grammar", "grammar", title = "דקדוק", parentId = 11)
+            insertBook(connection, id = 100, categoryId = 2)
+            val rename = CategoryRename("מילונים וספרי יעץ", "ספרות עזר", CategoryMatchMode.Exact)
+            val replaceBoth = { path: String ->
+                override(path, DescriptionEdit.Replace("short"), DescriptionEdit.Replace("long"))
+            }
+
+            connection.autoCommit = false
+            val unsettled = collectForDbRuleFailures(
+                connection, listOf(rename), emptyList(), emptyList(), emptyList(), Logger.withTag("test"),
+                listOf(replaceBoth("ספרות עזר")),
+            )
+            assertEquals(listOf("category_renames.csv"), unsettled.map { it.section })
+            assertTrue(categoryExists(connection, 1), "the failed rule must be rolled back")
+
+            val failures = collectForDbRuleFailures(
+                connection, listOf(rename), emptyList(), emptyList(), emptyList(), Logger.withTag("test"),
+                listOf(replaceBoth("ספרות עזר"), replaceBoth("ספרות עזר/מילונים")),
+            )
+            assertEquals(emptyList(), failures)
+            assertEquals(listOf("ספרות עזר", "ספרות עזר/דקדוק", "ספרות עזר/מילונים"), allPaths(connection))
+            assertEquals(12, bookCategory(connection, 100))
+            connection.rollback()
+        }
+    }
+
+    private fun override(
+        path: String,
+        shortEdit: DescriptionEdit = DescriptionEdit.Keep,
+        longEdit: DescriptionEdit = DescriptionEdit.Keep,
+    ) = CategoryDescriptionOverride(csvRecordNumber = 2, canonicalPath = path, shortEdit = shortEdit, longEdit = longEdit)
+
+    private fun overridesOf(vararg overrides: CategoryDescriptionOverride) =
+        overrides.associateBy { it.canonicalPath }
+
+    /** Every category's path from the root, sorted; a duplicate path appears twice. */
+    private fun allPaths(connection: Connection): List<String> {
+        val rows = connection.createStatement().use { statement ->
+            statement.executeQuery("SELECT id, parentId, title FROM category").use { result ->
+                buildList {
+                    while (result.next()) {
+                        val parent = result.getLong(2).let { if (result.wasNull()) null else it }
+                        add(Triple(result.getLong(1), parent, result.getString(3)))
+                    }
+                }
+            }
+        }
+        val byId = rows.associateBy { it.first }
+        fun path(id: Long): String {
+            val (_, parent, title) = byId.getValue(id)
+            return if (parent == null) title else path(parent) + "/" + title
+        }
+        return rows.map { path(it.first) }.sorted()
+    }
+
     private fun withConnection(block: (Connection) -> Unit) {
         DriverManager.getConnection("jdbc:sqlite::memory:").use { connection ->
             connection.createStatement().use { statement ->

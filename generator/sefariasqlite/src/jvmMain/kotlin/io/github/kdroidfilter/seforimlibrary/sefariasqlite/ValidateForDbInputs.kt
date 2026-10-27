@@ -47,8 +47,10 @@ internal fun collectForDbRuleFailures(
     bookRenames: List<Pair<String, String>>,
     bookMoves: List<BookMove>,
     logger: Logger,
+    categoryDescriptionOverrides: List<CategoryDescriptionOverride> = emptyList(),
 ): List<ForDbRuleFailure> {
     val failures = mutableListOf<ForDbRuleFailure>()
+    val descriptionOverridesByPath = categoryDescriptionOverrides.associateBy { it.canonicalPath }
 
     fun <T> section(name: String, items: List<T>, describe: (T) -> String, apply: (T) -> Unit) {
         for ((index, item) in items.withIndex()) {
@@ -70,7 +72,7 @@ internal fun collectForDbRuleFailures(
 
     // EXACT build order — RenameCategoriesPostProcess.main applies in this sequence.
     section("category_renames.csv", categoryRenames, { "'${it.oldName}' -> '${it.newName}'" }) {
-        renameOrMergeCategory(conn, it, logger)
+        renameOrMergeCategory(conn, it, logger, descriptionOverridesByPath)
     }
     section("category_moves.csv", categoryMoves, { "'${it.sourcePath}' -> '${it.destParentPath}'" }) {
         applyCategoryMove(conn, it, logger)
@@ -139,7 +141,9 @@ fun main(args: Array<String>) {
     DriverManager.getConnection("jdbc:sqlite:$dbPath").use { conn ->
         conn.autoCommit = false
         val failures = try {
-            collectForDbRuleFailures(conn, categoryRenames, categoryMoves, bookRenames, bookMoves, logger)
+            collectForDbRuleFailures(
+                conn, categoryRenames, categoryMoves, bookRenames, bookMoves, logger, categoryDescriptionOverrides,
+            )
         } finally {
             conn.rollback() // dry-run only — the DB is NEVER mutated by this task
         }
@@ -169,7 +173,7 @@ fun main(args: Array<String>) {
         DriverManager.getConnection("jdbc:sqlite:$tempDb").use { conn ->
             conn.autoCommit = false
             val replayFailures = collectForDbRuleFailures(
-                conn, categoryRenames, categoryMoves, bookRenames, bookMoves, logger,
+                conn, categoryRenames, categoryMoves, bookRenames, bookMoves, logger, categoryDescriptionOverrides,
             )
             check(replayFailures.isEmpty()) { "rename/move replay unexpectedly diverged on the validation copy" }
             lostCategories = libraryTrees?.let { (base, candidate) ->
