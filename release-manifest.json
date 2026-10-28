@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-21T17:51:19Z",
+  "generatedAt": "2026-10-28T00:23:35Z",
   "latest": {
     "assets": [
       {
@@ -7,7 +7,7 @@
         "contentType": "application/octet-stream",
         "createdAt": "2026-10-12T19:44:34Z",
         "digest": "sha256:8319c33622f243027cefc5992fc3ea7a591cb63956dae2d1a4e97cfdb15f617c",
-        "downloadCount": 9,
+        "downloadCount": 13,
         "id": "RA_kwDOPFZ3eM4l1lF-",
         "label": "",
         "name": "seforim.db.buildstate",
@@ -21,7 +21,7 @@
         "contentType": "application/json",
         "createdAt": "2026-10-12T19:53:35Z",
         "digest": "sha256:805b3dacbbaacdba0a6238c6c0c39f9ac228b0c8d1442a338c2d56142d716fa7",
-        "downloadCount": 506,
+        "downloadCount": 630,
         "id": "RA_kwDOPFZ3eM4l1qOF",
         "label": "",
         "name": "seforim_bundle.tar.zst.manifest.json",
@@ -35,7 +35,7 @@
         "contentType": "application/octet-stream",
         "createdAt": "2026-10-12T19:53:36Z",
         "digest": "sha256:bd6cd2e2005d944c511c77dd44917d344ce3d17a7f1402b7c9efee0ad805c051",
-        "downloadCount": 741,
+        "downloadCount": 1003,
         "id": "RA_kwDOPFZ3eM4l1qOo",
         "label": "",
         "name": "seforim_bundle.tar.zst.part01",
@@ -49,7 +49,7 @@
         "contentType": "application/octet-stream",
         "createdAt": "2026-10-12T19:55:19Z",
         "digest": "sha256:c3aced138607760ab8fb3f1a253d996b5c1112753eef1c6621a8676339b7436e",
-        "downloadCount": 460,
+        "downloadCount": 641,
         "id": "RA_kwDOPFZ3eM4l1rM6",
         "label": "",
         "name": "seforim_bundle.tar.zst.part02",
@@ -63,7 +63,7 @@
         "contentType": "application/octet-stream",
         "createdAt": "2026-10-12T19:57:04Z",
         "digest": "sha256:0ae877c22d583f1de7c5a8935a91c7b587c71018a698776e6ffd9856fb2e45dd",
-        "downloadCount": 421,
+        "downloadCount": 578,
         "id": "RA_kwDOPFZ3eM4l1sJl",
         "label": "",
         "name": "seforim_bundle.tar.zst.part03",
