@@ -1665,6 +1665,60 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
     }
 
     /**
+     * The lines that the cross-reference links of [lineIds] point to: REFERENCE and MESORAT_HASHAS in
+     * both directions (these links are unoriented and stored once), EIN_MISHPAT forward only (its
+     * reverse is the SOURCE view). A line is returned once, however many links reach it; the lines of
+     * [lineIds] themselves are left out.
+     */
+    suspend fun getReferencesForLines(lineIds: Collection<Long>): List<LineReference> =
+        withContext(Dispatchers.IO) {
+            if (lineIds.isEmpty()) return@withContext emptyList()
+            database.linkQueriesQueries.selectReferencesByLineIds(lineIds, lineIds) {
+                    _, connectionType, fromLineId, lineId, bookId, lineIndex, heRef, content, bookTitle, categoryId, bookOrderIndex ->
+                lineReference(connectionType, fromLineId, lineId, bookId, lineIndex, heRef, content, bookTitle, categoryId, bookOrderIndex)
+            }.executeAsList()
+                .filter { it.line.id !in lineIds }
+                .distinctBy { it.line.id }
+        }
+
+    /**
+     * The lines that [lineIds] comment on (the SOURCE view), as [getReferencesForLines] returns its
+     * lines, in the SOURCE view's order. A line is returned once, however many links reach it.
+     */
+    suspend fun getSourcesForLines(lineIds: Collection<Long>): List<LineReference> =
+        withContext(Dispatchers.IO) {
+            if (lineIds.isEmpty()) return@withContext emptyList()
+            database.linkQueriesQueries.selectSourcesByLineIds(lineIds) {
+                    _, _, fromLineId, lineId, bookId, lineIndex, heRef, content, bookTitle, categoryId, bookOrderIndex ->
+                lineReference(
+                    ConnectionType.SOURCE.name, fromLineId, lineId, bookId, lineIndex, heRef, content, bookTitle, categoryId,
+                    bookOrderIndex,
+                )
+            }.executeAsList()
+                .distinctBy { it.line.id }
+        }
+
+    private fun lineReference(
+        connectionType: String,
+        fromLineId: Long,
+        lineId: Long,
+        bookId: Long,
+        lineIndex: Long,
+        heRef: String?,
+        content: String,
+        bookTitle: String,
+        categoryId: Long,
+        bookOrderIndex: Long,
+    ) = LineReference(
+        connectionType = ConnectionType.fromString(connectionType),
+        fromLineId = fromLineId,
+        line = Line(id = lineId, bookId = bookId, lineIndex = lineIndex.toInt(), content = content, heRef = heRef),
+        bookTitle = bookTitle,
+        categoryId = categoryId,
+        bookOrderIndex = bookOrderIndex.toInt(),
+    )
+
+    /**
      * Lightweight variant for prefetch/navigation use cases; omits target text content.
      * When [includeSources] is false (default), only forward links are returned — callers
      * that need the virtual SOURCE view must opt in.
@@ -2983,4 +3037,15 @@ data class CommentaryWithText(
 data class CommentarySummary(
     val link: Link,
     val targetBookTitle: String
+)
+
+/** A line a cross-reference link reaches, with what its book's grouping needs. */
+data class LineReference(
+    val connectionType: ConnectionType,
+    /** The line of the request this link starts from. */
+    val fromLineId: Long,
+    val line: Line,
+    val bookTitle: String,
+    val categoryId: Long,
+    val bookOrderIndex: Int,
 )

@@ -343,3 +343,37 @@ WHERE l.targetBookId = ?
   AND l.sourceBookId != l.targetBookId
 GROUP BY l.sourceBookId, b.title, a.name
 ORDER BY MAX(l.isDeclaredBase) DESC, b.isBaseBook DESC, b.orderIndex, b.title;
+
+-- The cross-reference links of lines: the line on the other side of each link, with its book.
+-- REFERENCE and MESORAT_HASHAS are unoriented (stored once): both directions. EIN_MISHPAT runs from
+-- a line to the codes that rule on it: forward only, its reverse being the SOURCE view.
+selectReferencesByLineIds:
+SELECT l.id AS linkId, ct.name AS connectionType, l.sourceLineId AS fromLineId, ol.id AS lineId, ol.bookId, ol.lineIndex, ol.heRef, ol.content,
+       b.title AS bookTitle, b.categoryId, b.orderIndex AS bookOrderIndex
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line ol ON ol.id = l.targetLineId
+JOIN book b ON b.id = ol.bookId
+WHERE ct.name IN ('REFERENCE', 'MESORAT_HASHAS', 'EIN_MISHPAT') AND l.sourceLineId IN ?
+UNION ALL
+SELECT l.id AS linkId, ct.name AS connectionType, l.targetLineId AS fromLineId, ol.id AS lineId, ol.bookId, ol.lineIndex, ol.heRef, ol.content,
+       b.title AS bookTitle, b.categoryId, b.orderIndex AS bookOrderIndex
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line ol ON ol.id = l.sourceLineId
+JOIN book b ON b.id = ol.bookId
+WHERE ct.name IN ('REFERENCE', 'MESORAT_HASHAS') AND l.targetLineId IN ?;
+
+-- The SOURCE view of lines in the shape of selectReferencesByLineIds: the lines these lines comment
+-- on, with their book, in the SOURCE view's order (declared bases first, then base books, then catalog).
+selectSourcesByLineIds:
+SELECT l.id AS linkId, ct.name AS connectionType, l.targetLineId AS fromLineId, ol.id AS lineId, ol.bookId, ol.lineIndex, ol.heRef, ol.content,
+       b.title AS bookTitle, b.categoryId, b.orderIndex AS bookOrderIndex
+FROM link l
+JOIN connection_type ct ON l.connectionTypeId = ct.id
+JOIN line ol ON ol.id = l.sourceLineId
+JOIN book b ON b.id = ol.bookId
+WHERE l.targetLineId IN ?
+  AND ct.name IN ('COMMENTARY','SUPER_COMMENTARY','TARGUM','MIDRASH','PARSHANUT','DIBUR_HAMATCHIL','EIN_MISHPAT')
+  AND l.sourceBookId != l.targetBookId
+ORDER BY l.isDeclaredBase DESC, b.isBaseBook DESC, b.orderIndex, ol.lineIndex;
