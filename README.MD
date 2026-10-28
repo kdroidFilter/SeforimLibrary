@@ -155,3 +155,17 @@ Outputs (by default): `build/seforim.db` + `build/catalog.pb`
 
 - **sefariasqlite**: Sefaria direct importer
   - `SefariaDirectImporter` / `GenerateSefariaSqlite`: Sefaria export → SQLite
+
+## Contributing
+
+Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) first. In short: contributions are licensed under the same terms as the project (AGPL v3 + the §7b attribution term), you keep your copyright, you sign the [CLA](CLA.md) once (the bot asks on your first pull request), and every commit must be signed off (`git commit -s`, DCO).
+
+## License
+
+SeforimLibrary is part of [Zayit](https://github.com/kdroidFilter/Zayit) and is published under the **[AGPL v3](LICENSE)**, with an additional attribution term (AGPL v3, §7b): any use, reproduction, modification, or distribution of this software, or of any work derived from it, must conspicuously display:
+
+> Powered by the technologies that drive Zayit — https://zayitapp.com/
+
+See the top of [`LICENSE`](LICENSE) for the full text.
+
+Like Zayit, it is **open core**: the [CLA](CLA.md) also lets the maintainer distribute contributions under other terms, including in Zayit's official builds with their proprietary modules (see "Open core" in [Zayit's README](https://github.com/kdroidFilter/Zayit#open-core)).
