@@ -158,14 +158,14 @@ Outputs (by default): `build/seforim.db` + `build/catalog.pb`
 
 ## Contributing
 
-Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) first. In short: contributions are licensed under the same terms as the project (AGPL v3 + the §7b attribution term), you keep your copyright, you sign the [CLA](CLA.md) once (the bot asks on your first pull request), and every commit must be signed off (`git commit -s`, DCO).
+Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) first. In short: contributions are licensed under the same terms as the project (the Zayit Public License), you keep your copyright, there is no CLA to sign, and every commit must be signed off (`git commit -s`, DCO).
 
 ## License
 
-SeforimLibrary is part of [Zayit](https://github.com/kdroidFilter/Zayit) and is published under the **[AGPL v3](LICENSE)**, with an additional attribution term (AGPL v3, §7b): any use, reproduction, modification, or distribution of this software, or of any work derived from it, must conspicuously display:
+SeforimLibrary is part of [Zayit](https://github.com/kdroidFilter/Zayit) and is published under the **[Zayit Public License](LICENSE)**: the GNU AGPL v3, plus a grant back to the maintainer, an attribution term and a trademark clause. Its attribution term (Section 4): any use, reproduction, modification, or distribution of this software, or of any work derived from it, must conspicuously display:
 
 > Powered by the technologies that drive Zayit — https://zayitapp.com/
 
 See the top of [`LICENSE`](LICENSE) for the full text.
 
-Like Zayit, it is **open core**: the [CLA](CLA.md) also lets the maintainer distribute contributions under other terms, including in Zayit's official builds with their proprietary modules (see "Open core" in [Zayit's README](https://github.com/kdroidFilter/Zayit#open-core)).
+Like Zayit, it is **open core**: Section 3 of the license (the grant back) also lets the maintainer distribute contributions, and the modifications of any fork, under other terms, including in Zayit's official builds with their proprietary modules (see "Open core" in [Zayit's README](https://github.com/kdroidFilter/Zayit#open-core)).
