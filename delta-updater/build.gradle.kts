@@ -14,7 +14,7 @@ mavenPublishing {
         description = "Client-side delta updater for seforim.db"
         url = "github url"
         licenses {
-            license { name = "MIT"; url = "https://opensource.org/licenses/MIT" }
+            license { name = "Zayit Public License 1.0"; url = "https://github.com/kdroidFilter/SeforimLibrary/blob/master/LICENSE" }
         }
         developers { developer { id = ""; name = ""; email = "" } }
         scm { url = "github url" }
