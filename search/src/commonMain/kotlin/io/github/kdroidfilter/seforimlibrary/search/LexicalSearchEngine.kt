@@ -17,6 +17,11 @@ private val logger = Logger.withTag("LexicalSearchEngine")
 // Hard cap on how many synonym/expansion terms we allow per token
 private const val MAX_SYNONYM_TERMS_PER_TOKEN: Int = 32
 
+// The forms of all a query's tokens together, per clause that lists them (the presence filter and each phrase query):
+// a long query gets fewer forms per token, or it overflows Lucene's 1024-clause limit (TooManyNestedClauses)
+private const val SYNONYM_TERMS_BUDGET: Int = 160
+private const val MIN_SYNONYM_TERMS_PER_TOKEN: Int = 4
+
 // Global cap for boost queries built from dictionary expansions
 private const val MAX_SYNONYM_BOOST_TERMS: Int = 256
 private const val DEFAULT_NEAR = 5
@@ -560,7 +565,7 @@ class LexicalSearchEngine(
         val outer = BoolBuilder()
         for (t in tokens) {
             val expansions = expansionsByToken[t] ?: emptyList()
-            val synonymTerms = buildLimitedTermsForToken(t, expansions)
+            val synonymTerms = buildLimitedTermsForToken(t, expansions, synonymTermsPerToken(tokens.size))
             val ngram = if (near > 0) buildNgramPresenceForToken(t) else null
             val clause =
                 BoolBuilder()
@@ -689,9 +694,14 @@ class LexicalSearchEngine(
         return BoolBuilder().apply { tokens.distinct().forEach { add(IndexQuery.Fuzzy("text", it, 1), Occur.MUST) } }.build()
     }
 
+    /** How many forms each of [tokenCount] tokens may bring: all of them up to five tokens, fewer beyond. */
+    private fun synonymTermsPerToken(tokenCount: Int): Int =
+        (SYNONYM_TERMS_BUDGET / tokenCount.coerceAtLeast(1)).coerceIn(MIN_SYNONYM_TERMS_PER_TOKEN, MAX_SYNONYM_TERMS_PER_TOKEN)
+
     private fun buildLimitedTermsForToken(
         token: String,
         expansions: List<MagicDictionaryIndex.Expansion>,
+        cap: Int = MAX_SYNONYM_TERMS_PER_TOKEN,
     ): List<String> {
         if (expansions.isEmpty()) return listOf(token)
 
@@ -702,13 +712,16 @@ class LexicalSearchEngine(
         if (token.isNotBlank()) ordered += token
         baseTerms.forEach { ordered += it }
         otherTerms.forEach { ordered += it }
-        return ordered.take(MAX_SYNONYM_TERMS_PER_TOKEN)
+        return ordered.take(cap)
     }
 
     private fun buildTermAlternativesForTokens(
         tokens: List<String>,
         expansionsByToken: Map<String, List<MagicDictionaryIndex.Expansion>>,
-    ): List<List<String>> = tokens.map { token -> buildLimitedTermsForToken(token, expansionsByToken[token] ?: emptyList()) }
+    ): List<List<String>> =
+        tokens.map { token ->
+            buildLimitedTermsForToken(token, expansionsByToken[token] ?: emptyList(), synonymTermsPerToken(tokens.size))
+        }
 
     // The divine name's forms never change: read once from the dictionary, not on every search
     private val hashemHighlightTerms: List<String> by lazy { readHashemHighlightTerms() }

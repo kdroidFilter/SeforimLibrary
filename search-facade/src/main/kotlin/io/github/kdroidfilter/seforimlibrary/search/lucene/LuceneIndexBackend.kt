@@ -59,6 +59,9 @@ private const val FIELD_ANCESTOR_CATEGORY_IDS = "ancestor_category_ids"
 // Smallest partition worth a task of its own when a segment is split across cores
 private const val MIN_DOCS_PER_SLICE = 100_000
 
+// Room for a long query's synonym boosts, beyond Lucene's default 1024 clauses
+private const val MAX_QUERY_CLAUSES = 4096
+
 /**
  * What [LuceneIndex] runs: a Lucene directory, read with Lucene in this JVM (the desktop's, the mobile apps' embedded
  * one).
@@ -73,6 +76,11 @@ internal class LuceneIndexBackend(
     private val cacheQueries: Boolean = false,
     private val analyzer: Analyzer = StandardAnalyzer(),
 ) : AutoCloseable {
+    init {
+        // A long query's synonym boosts (up to 256 forms of each kind) overflow Lucene's default 1024 clauses: room for them
+        if (IndexSearcher.getMaxClauseCount() < MAX_QUERY_CLAUSES) IndexSearcher.setMaxClauseCount(MAX_QUERY_CLAUSES)
+    }
+
     // Open lazily to avoid any I/O at app startup
     private val dir: Directory by lazy { openDirectory(indexDir) }
 
