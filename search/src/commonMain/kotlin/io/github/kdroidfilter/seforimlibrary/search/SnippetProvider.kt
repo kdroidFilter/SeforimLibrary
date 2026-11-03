@@ -1,8 +1,5 @@
 package io.github.kdroidfilter.seforimlibrary.search
 
-import org.jsoup.Jsoup
-import org.jsoup.safety.Safelist
-
 /**
  * Metadata about a line needed to fetch its snippet source text.
  *
@@ -98,7 +95,7 @@ object SnippetSources {
     }
 
     /** [html] as snippet text: tags dropped, entities escaped, whitespace collapsed. */
-    fun clean(html: String): String = Jsoup.clean(html, Safelist.none()).replace(WHITESPACE, " ").trim()
+    fun clean(html: String): String = escapedText(html).replace(WHITESPACE, " ").trim()
 
     private fun windows(lineIndexes: List<Int>): List<IntRange> {
         val out = ArrayList<IntRange>()

@@ -1,7 +1,9 @@
 [versions]
 
 filekitCore = "0.13.0"
-kotlin = "2.3.20"
+kotlin = "2.4.20"
+# Nucleus JVM Access: Lucene on a JVM on every platform (the search's façade, search-facade)
+nja = "0.4.0"
 agp = "9.1.1"
 jvmToolchain = "25"
 lucene = "10.5.2"
@@ -12,6 +14,10 @@ kotlinx-coroutines = "1.10.2"
 kotlinx-serialization = "1.10.0"
 kotlinx-datetime = "0.7.1"
 kermit = "2.1.0"
+kotlinx-io = "0.9.1"
+cachemap = "0.3.0"
+atomicfu = "0.33.0"
+ksoup = "0.2.6"
 sqlDelight = "2.3.2"
 compose = "1.10.2"
 androidx-activityCompose = "1.13.0"
@@ -32,6 +38,10 @@ kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 kotlinx-serialization-protobuf = { module = "org.jetbrains.kotlinx:kotlinx-serialization-protobuf", version.ref = "kotlinx-serialization" }
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
 kermit = { module = "co.touchlab:kermit", version.ref = "kermit" }
+kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinx-io" }
+cachemap = { module = "io.github.charlietap:cachemap", version.ref = "cachemap" }
+atomicfu = { module = "org.jetbrains.kotlinx:atomicfu", version.ref = "atomicfu" }
+ksoup = { module = "com.fleeksoft.ksoup:ksoup", version.ref = "ksoup" }
 lucene-highlighter = { module = "org.apache.lucene:lucene-highlighter", version.ref = "lucene" }
 lucene-queryparser = { module = "org.apache.lucene:lucene-queryparser", version.ref = "lucene" }
 lucene-analysis-common = { module = "org.apache.lucene:lucene-analysis-common", version.ref = "lucene" }
@@ -54,6 +64,9 @@ compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.re
 [plugins]
 
 multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+nja = { id = "dev.nucleusframework.nja", version.ref = "nja" }
+nja-facade = { id = "dev.nucleusframework.nja.facade", version.ref = "nja" }
 android-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
 maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "maven-publish" }
 kotlinx-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
