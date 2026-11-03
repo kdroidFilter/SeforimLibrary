@@ -156,6 +156,18 @@ jobs:
             -PinMemoryDb=false \
             --no-daemon --stacktrace
 
+      # ─── Compact seforim.db: what ships (COMPACT_DB.md) ────────────────────
+      # The line texts deflated with the packaging's dictionaries, the dev-only
+      # indexes dropped, 4 KiB pages: ~2.4x smaller. The bundle and the patch
+      # fan below both use it (the previous releases are compact too).
+      - name: Compact Seforim Database
+        run: |
+          set -euo pipefail
+          ./gradlew :packaging:compactDb -PcompactDb=$PWD/build/seforim.compact.db --no-daemon --stacktrace
+          rm -f build/seforim.db-wal build/seforim.db-shm
+          mv build/seforim.compact.db build/seforim.db
+          ls -lh build/seforim.db
+
       - name: Package Seforim Bundle (split tar.zst)
         run: ./gradlew packageSeforimBundle --no-daemon --stacktrace
 

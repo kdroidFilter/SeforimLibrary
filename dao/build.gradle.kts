@@ -17,6 +17,10 @@ kotlin {
         namespace = "io.github.kdroidfilter.seforimlibrary.dao"
         compileSdk = 35
         minSdk = 21
+        // The reads on a real database, on a device or an emulator (AndroidDbReadBenchmark)
+        withDeviceTestBuilder { sourceSetTreeName = "test" }.configure {
+            instrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        }
     }
     jvm()
     iosArm64()
@@ -42,19 +46,40 @@ kotlin {
             implementation(libs.sqlDelight.driver.sqlite)
         }
 
-        androidMain.dependencies {
-            implementation(libs.kotlinx.coroutines.android)
-            implementation(libs.sqlDelight.driver.android)
+        // The JVM and Android share java.util.zip's codec for the line texts
+        val androidJvmMain by creating { dependsOn(commonMain.get()) }
+
+        androidMain {
+            dependsOn(androidJvmMain)
+            dependencies {
+                implementation(libs.kotlinx.coroutines.android)
+                implementation(libs.sqlDelight.driver.android)
+            }
         }
 
-        jvmMain.dependencies {
-            implementation(libs.kotlinx.coroutines.swing)
-            implementation(libs.sqlDelight.driver.sqlite)
+        jvmMain {
+            dependsOn(androidJvmMain)
+            dependencies {
+                implementation(libs.kotlinx.coroutines.swing)
+                implementation(libs.sqlDelight.driver.sqlite)
+            }
         }
 
-        iosMain.dependencies {
-            implementation(libs.sqlDelight.driver.native)
+        // The manual source set above turns off the default hierarchy: iOS shares its own one by hand
+        val iosMain by creating {
+            dependsOn(commonMain.get())
+            dependencies {
+                implementation(libs.sqlDelight.driver.native)
+            }
         }
+        getByName("androidDeviceTest").dependencies {
+            implementation(kotlin("test"))
+            implementation(libs.androidx.test.runner)
+            implementation(libs.androidx.test.junit)
+        }
+
+        iosArm64Main { dependsOn(iosMain) }
+        iosSimulatorArm64Main { dependsOn(iosMain) }
 
     }
 

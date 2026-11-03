@@ -303,7 +303,9 @@ CREATE TABLE IF NOT EXISTS line (
     id INTEGER PRIMARY KEY NOT NULL,
     bookId INTEGER NOT NULL,
     lineIndex INTEGER NOT NULL,
-    content TEXT NOT NULL,
+    -- Plain UTF-8, or deflated with a line_codec_dict dictionary (LineTextCodec): the shipped database compresses it
+    content BLOB AS kotlin.String NOT NULL,
+    -- Plain: short (36 bytes on average), it would save 180 MB but cost a second inflate per line read
     heRef TEXT,
     tocEntryId INTEGER,
     -- Visible character count of this line (HTML stripped). Used to compute scrollbar
@@ -313,9 +315,16 @@ CREATE TABLE IF NOT EXISTS line (
     FOREIGN KEY (tocEntryId) REFERENCES tocEntry(id) ON DELETE SET NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_line_book_index ON line(bookId, lineIndex);
-CREATE INDEX IF NOT EXISTS idx_line_toc ON line(tocEntryId);
-CREATE INDEX IF NOT EXISTS idx_line_heref ON line(heRef);
+-- Covers charCount: a book's scrollbar reads its line sizes without reading its texts
+CREATE INDEX IF NOT EXISTS idx_line_book_index ON line(bookId, lineIndex, charCount);
+-- Only a tenth of the lines name their TOC entry (line_toc maps them all): the others stay out of the index
+CREATE INDEX IF NOT EXISTS idx_line_toc ON line(tocEntryId) WHERE tocEntryId IS NOT NULL;
+
+-- The dictionaries the compressed line texts were deflated with, by the id their header names
+CREATE TABLE IF NOT EXISTS line_codec_dict (
+    id INTEGER PRIMARY KEY NOT NULL,
+    data BLOB NOT NULL
+);
 
 -- TOC texts table
 CREATE TABLE IF NOT EXISTS tocText (
@@ -323,7 +332,6 @@ CREATE TABLE IF NOT EXISTS tocText (
     text TEXT NOT NULL UNIQUE
 );
 
-CREATE INDEX IF NOT EXISTS idx_toc_text ON tocText(text);
 CREATE INDEX IF NOT EXISTS idx_toctext_text_length ON tocText(text, length(text));
 
 -- TOC entries table
@@ -385,10 +393,8 @@ CREATE TABLE IF NOT EXISTS link (
 );
 
 CREATE INDEX IF NOT EXISTS idx_link_source_book ON link(sourceBookId);
-CREATE INDEX IF NOT EXISTS idx_link_source_line ON link(sourceLineId);
 CREATE INDEX IF NOT EXISTS idx_link_target_book ON link(targetBookId);
 CREATE INDEX IF NOT EXISTS idx_link_target_line ON link(targetLineId);
-CREATE INDEX IF NOT EXISTS idx_link_type ON link(connectionTypeId);
 CREATE INDEX IF NOT EXISTS idx_link_type_source_line ON link(connectionTypeId, sourceLineId);
 -- Covering index for the forward commentaries path: filter by sourceLineId, then return rows
 -- already ordered by (targetBookOrderIndex, targetLineIndex) so the paged queries' ORDER BY +

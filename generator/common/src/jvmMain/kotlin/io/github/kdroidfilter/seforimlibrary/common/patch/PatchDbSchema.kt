@@ -19,7 +19,9 @@ import java.sql.Connection
  */
 internal object PatchDbSchema {
 
-    const val CURRENT_VERSION: Int = 1
+    // 2: the line texts are LineTextCodec values (compressed in the shipped database): a database of version 1 can
+    // only reach it by the full bundle, and an applier of version 1 refuses its patches
+    const val CURRENT_VERSION: Int = 2
 
     /** Fixed-shape tables (metadata + auxiliaries). */
     val baseStatements: List<String> = listOf(

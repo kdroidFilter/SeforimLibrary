@@ -1,6 +1,7 @@
 package io.github.kdroidfilter.seforimlibrary.deltaupdater
 
 import co.touchlab.kermit.Logger
+import io.github.kdroidfilter.seforimlibrary.dao.text.LineTextCodec
 import java.nio.file.Path
 import java.sql.Connection
 import java.sql.DriverManager
@@ -63,8 +64,10 @@ class LuceneUpdater(
         liveDbPath: Path? = null,
     ): Stats {
         DriverManager.getConnection("jdbc:sqlite:${patchDb.toAbsolutePath()}").use { conn ->
+            // The texts are compressed with the live database's dictionaries (a patch never changes them)
+            val codec = LineTextCodec { (liveDbPath?.let(::readDictionaries) ?: emptyMap()) + readDictionaries(conn) }
             val deleted = forEachDelete(conn, deletes)
-            val upserted = forEachUpsert(conn, upserts)
+            val upserted = forEachUpsert(conn, upserts, codec)
             // Some patches change book-level metadata (title, categoryId,
             // orderIndex, isBaseBook, …) WITHOUT touching any of the book's
             // lines. The line-level loop above wouldn't see those, so the
@@ -72,7 +75,7 @@ class LuceneUpdater(
             // would stay at the pre-patch values. Re-index every line of
             // those books so the search-side metadata stays in sync.
             val metaReindexed = if (liveDbPath != null) {
-                reindexBooksWithMetadataOnlyChange(conn, liveDbPath, upserts)
+                reindexBooksWithMetadataOnlyChange(conn, liveDbPath, upserts, codec)
             } else 0
             logger.i { "Lucene delta — deletes=$deleted, upserts=$upserted, meta-reindexed lines=$metaReindexed" }
             return Stats(deleted, upserted + metaReindexed)
@@ -83,6 +86,7 @@ class LuceneUpdater(
         patchConn: Connection,
         liveDbPath: Path,
         sink: UpsertSink,
+        codec: LineTextCodec,
     ): Int {
         if (!hasTable(patchConn, "upsert_book")) return 0
         // Collect book ids touched at metadata level but not via line ops.
@@ -112,7 +116,7 @@ class LuceneUpdater(
                                     id = rs.getLong(1),
                                     bookId = rs.getLong(2),
                                     lineIndex = rs.getInt(3),
-                                    content = rs.getString(4),
+                                    content = codec.decode(rs.getBytes(4) ?: ByteArray(0)),
                                     heRef = rs.getString(5),
                                 ),
                             )
@@ -141,7 +145,7 @@ class LuceneUpdater(
         return n
     }
 
-    private fun forEachUpsert(conn: Connection, sink: UpsertSink): Int {
+    private fun forEachUpsert(conn: Connection, sink: UpsertSink, codec: LineTextCodec): Int {
         if (!hasTable(conn, "upsert_line")) return 0
         var n = 0
         conn.createStatement().use { st ->
@@ -154,7 +158,7 @@ class LuceneUpdater(
                             id = rs.getLong(1),
                             bookId = rs.getLong(2),
                             lineIndex = rs.getInt(3),
-                            content = rs.getString(4),
+                            content = codec.decode(rs.getBytes(4) ?: ByteArray(0)),
                             heRef = rs.getString(5),
                         ),
                     )
@@ -169,6 +173,18 @@ class LuceneUpdater(
         conn.prepareStatement("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").use { ps ->
             ps.setString(1, name)
             ps.executeQuery().use { rs -> return rs.next() }
+        }
+    }
+
+    private fun readDictionaries(db: Path): Map<Int, ByteArray> =
+        DriverManager.getConnection("jdbc:sqlite:${db.toAbsolutePath()}").use(::readDictionaries)
+
+    private fun readDictionaries(conn: Connection): Map<Int, ByteArray> {
+        if (!hasTable(conn, "line_codec_dict")) return emptyMap()
+        return conn.createStatement().use { st ->
+            st.executeQuery("SELECT id, data FROM line_codec_dict").use { rs ->
+                buildMap { while (rs.next()) put(rs.getInt(1), rs.getBytes(2)) }
+            }
         }
     }
 }
