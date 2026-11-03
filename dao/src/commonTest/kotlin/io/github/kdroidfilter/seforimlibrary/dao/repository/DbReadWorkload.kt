@@ -6,7 +6,7 @@ import kotlin.random.Random
 import kotlin.time.TimeSource
 
 /**
- * The app's reads on a real database (opening books, scrolling, lines by id, commentaries), each phase timed cold
+ * The app's reads on a real database (opening books, jumping, scrolling, lines by id, commentaries), each phase timed cold
  * then warm with the bytes it read from the disk: the benchmarks of the JVM (DbReadBenchmark) and of Android
  * (AndroidDbReadBenchmark) run it.
  *
@@ -26,6 +26,8 @@ class DbReadWorkload(
         val random = Random(42)
         val openBooks = List(150) { books[random.nextInt(books.size)] }
         val pages = List(300) { books[random.nextInt(books.size)] to random.nextInt(0, 100) }
+        val longBooks = driver.longs("SELECT id FROM book WHERE totalLines > 1500 ORDER BY id")
+        val readBooks = List(20) { longBooks[random.nextInt(longBooks.size)] }
         val lineIds = List(3000) { random.nextLong(1, maxLineId + 1) }
         val commentaryLines = List(300) { random.nextLong(1, maxLineId + 1) }
 
@@ -37,8 +39,11 @@ class DbReadWorkload(
                         repository.getLines(b, 0, 49)
                     }
                 },
-                "scroll (300 pages of 50 lines)" to {
+                "jump (300 pages of 50 lines, random books)" to {
                     for ((b, start) in pages) repository.getLines(b, start, start + 49)
+                },
+                "scroll (20 books, 30 pages of 50 lines each)" to {
+                    for (b in readBooks) for (page in 0 until 30) repository.getLines(b, page * 50, page * 50 + 49)
                 },
                 "random lines by id (3000)" to {
                     for (id in lineIds) repository.getLine(id)

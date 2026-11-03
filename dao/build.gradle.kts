@@ -46,40 +46,25 @@ kotlin {
             implementation(libs.sqlDelight.driver.sqlite)
         }
 
-        // The JVM and Android share java.util.zip's codec for the line texts
-        val androidJvmMain by creating { dependsOn(commonMain.get()) }
-
-        androidMain {
-            dependsOn(androidJvmMain)
-            dependencies {
-                implementation(libs.kotlinx.coroutines.android)
-                implementation(libs.sqlDelight.driver.android)
-            }
+        androidMain.dependencies {
+            implementation(libs.kotlinx.coroutines.android)
+            implementation(libs.sqlDelight.driver.android)
         }
 
-        jvmMain {
-            dependsOn(androidJvmMain)
-            dependencies {
-                implementation(libs.kotlinx.coroutines.swing)
-                implementation(libs.sqlDelight.driver.sqlite)
-            }
+        jvmMain.dependencies {
+            implementation(libs.kotlinx.coroutines.swing)
+            implementation(libs.sqlDelight.driver.sqlite)
         }
 
-        // The manual source set above turns off the default hierarchy: iOS shares its own one by hand
-        val iosMain by creating {
-            dependsOn(commonMain.get())
-            dependencies {
-                implementation(libs.sqlDelight.driver.native)
-            }
+        iosMain.dependencies {
+            implementation(libs.sqlDelight.driver.native)
         }
+
         getByName("androidDeviceTest").dependencies {
             implementation(kotlin("test"))
             implementation(libs.androidx.test.runner)
             implementation(libs.androidx.test.junit)
         }
-
-        iosArm64Main { dependsOn(iosMain) }
-        iosSimulatorArm64Main { dependsOn(iosMain) }
 
     }
 

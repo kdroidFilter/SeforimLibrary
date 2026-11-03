@@ -19,18 +19,18 @@ import kotlin.random.Random
 
 private val logger = Logger.withTag("CompactDb")
 
-// Deflate's window: a dictionary beyond 32 KiB is never read
-private const val DICTIONARY_SIZE = 32 * 1024
 private const val DICTIONARY_SAMPLES = 30_000
 private const val DICTIONARY_SEED = 20_261_103L
 
-private const val DEFAULT_PAGE_SIZE = 4096
+// On flash a 16 KiB read costs about the latency of a 4 KiB one, and holds 50 compressed lines: a page of the reader
+// in one read (4 KiB pages read 3x more often on a small phone's storage, see COMPACT_DB.md)
+private const val DEFAULT_PAGE_SIZE = 16384
 private const val CHUNK_LINES = 20_000
 
 /**
- * Writes the shipped database from the generator's: the line texts deflated with a dictionary of the corpus' own text
+ * Writes the shipped database from the generator's: the line texts compressed against a dictionary of the corpus' own text
  * ([LineTextCodec]), the tables and indexes of the current schema only (the generator's dev-only indexes go), every
- * page written once and full, small pages (a line read at random costs one 4 KiB page, not 16).
+ * page written once and full.
  *
  * Usage: ./gradlew :packaging:compactDb [-PseforimDb=…] [-PcompactDb=…] [-PtrainDictionaries=<dir>]
  *
@@ -98,7 +98,11 @@ fun compactDb(source: Path, target: Path, pageSize: Int = DEFAULT_PAGE_SIZE, tra
 }
 
 private fun createSchema(target: Path, pageSize: Int) {
-    DriverManager.getConnection("jdbc:sqlite:$target").use { it.exec("PRAGMA page_size=$pageSize") }
+    // The page size holds once the file is written: VACUUM writes the empty database with it
+    DriverManager.getConnection("jdbc:sqlite:$target").use {
+        it.exec("PRAGMA page_size=$pageSize")
+        it.exec("VACUUM")
+    }
     JdbcSqliteDriver("jdbc:sqlite:$target").use { SeforimDb.Schema.create(it) }
 }
 
@@ -220,29 +224,23 @@ private fun SourceLine.compact(codec: LineTextCodec): CompactLine {
     )
 }
 
-// A text too short to gain from deflate stays plain
+// A text too short to gain from compression stays plain
 private fun smaller(plain: ByteArray, compressed: ByteArray): ByteArray = if (compressed.size < plain.size) compressed else plain
 
-/**
- * Random lines of the corpus, end to end, the last 32 KiB kept: on a sample of the corpus it gets within 3% of zstd's
- * trained dictionary (3.13x against 3.22x).
- */
+/** Random lines of the corpus, end to end, the last [LineTextCodec.DICTIONARY_SIZE] bytes kept. */
 private fun buildDictionaries(conn: Connection): Map<Int, ByteArray> {
     val maxId = conn.strings("SELECT MAX(id) FROM src.line").single().toLong()
     val random = Random(DICTIONARY_SEED)
-    val content = java.io.ByteArrayOutputStream()
+    val decoder = LineTextCodec { emptyMap() }
+    val sample = ArrayList<String>(DICTIONARY_SAMPLES)
     conn.prepareStatement("SELECT content FROM src.line WHERE id >= ? ORDER BY id LIMIT 1").use { ps ->
         repeat(DICTIONARY_SAMPLES) {
             ps.setLong(1, random.nextLong(1, maxId + 1))
-            ps.executeQuery().use { rs ->
-                if (rs.next()) rs.getBytes(1)?.let(content::write)
-            }
+            ps.executeQuery().use { rs -> if (rs.next()) rs.getBytes(1)?.let { sample += decoder.decode(it) } }
         }
     }
-    return mapOf(LineTextDictionaries.CONTENT to content.toByteArray().takeLast32k())
+    return mapOf(LineTextDictionaries.CONTENT to LineTextCodec.buildDictionary(sample))
 }
-
-private fun ByteArray.takeLast32k(): ByteArray = copyOfRange((size - DICTIONARY_SIZE).coerceAtLeast(0), size)
 
 private fun shippedDictionaries(): Map<Int, ByteArray> =
     listOf(LineTextDictionaries.CONTENT).associateWith { id ->

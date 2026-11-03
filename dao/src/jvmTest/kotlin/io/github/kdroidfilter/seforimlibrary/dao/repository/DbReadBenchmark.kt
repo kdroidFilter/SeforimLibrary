@@ -34,8 +34,11 @@ class DbReadBenchmark {
     private fun readBytes(): Long =
         File("/proc/self/io").readLines().first { it.startsWith("read_bytes:") }.substringAfter(':').trim().toLong()
 
+    // Also clears the simulated cache of a slow storage (SLOWIO_DROP, see COMPACT_DB.md)
     private fun dropFromPageCache(path: String) {
-        val script = "import os,sys\nfd=os.open(sys.argv[1],os.O_RDONLY)\nos.fdatasync(fd)\nos.posix_fadvise(fd,0,0,os.POSIX_FADV_DONTNEED)"
+        val script =
+            "import os,sys\nfd=os.open(sys.argv[1],os.O_RDONLY)\nos.fdatasync(fd)\nos.posix_fadvise(fd,0,0,os.POSIX_FADV_DONTNEED)\n" +
+                "d=os.environ.get('SLOWIO_DROP')\nif d: open(d,'w').write('x')"
         ProcessBuilder("python3", "-c", script, path).inheritIO().start().waitFor()
     }
 }

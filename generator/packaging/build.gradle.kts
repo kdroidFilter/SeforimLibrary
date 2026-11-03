@@ -128,7 +128,7 @@ tasks.register<JavaExec>("packageArtifacts") {
     jvmArgs = listOf("-Xmx512m")
 }
 
-// Write the shipped database from the generator's: line texts compressed, dev-only indexes dropped, 4 KiB pages
+// Write the shipped database from the generator's: line texts compressed, dev-only indexes dropped, pages full
 // Usage:
 //   ./gradlew :packaging:compactDb
 //   ./gradlew :packaging:compactDb -PseforimDb=/path/to/seforim.db -PcompactDb=/path/to/seforim.compact.db

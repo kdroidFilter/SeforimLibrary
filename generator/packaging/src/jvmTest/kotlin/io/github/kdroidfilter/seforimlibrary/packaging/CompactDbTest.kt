@@ -51,11 +51,11 @@ class CompactDbTest {
             }
         }
 
-        compactDb(source, target)
+        compactDb(source, target, pageSize = 8192)
 
         DriverManager.getConnection("jdbc:sqlite:$target").use { conn ->
             fun strings(sql: String) = conn.createStatement().use { st -> st.executeQuery(sql).use { rs -> buildList { while (rs.next()) add(rs.getString(1)) } } }
-            assertEquals(listOf("4096"), strings("PRAGMA page_size"))
+            assertEquals(listOf("8192"), strings("PRAGMA page_size"))
             assertTrue("idx_line_heref" !in strings("SELECT name FROM sqlite_master WHERE type = 'index'"))
             assertTrue(strings("SELECT name FROM sqlite_master WHERE name LIKE 'sqlite_stat%'").isEmpty())
             assertEquals(listOf("blob"), strings("SELECT typeof(content) FROM line WHERE id = 1"))
