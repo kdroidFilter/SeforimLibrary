@@ -47,3 +47,6 @@ SELECT COUNT(*) FROM line WHERE bookId = ?;
 
 lastInsertRowId:
 SELECT last_insert_rowid();
+
+selectCodecDictionaries:
+SELECT id, data FROM line_codec_dict;

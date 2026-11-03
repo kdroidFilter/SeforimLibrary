@@ -24,6 +24,8 @@ import io.github.kdroidfilter.seforimlibrary.core.models.Source
 import io.github.kdroidfilter.seforimlibrary.core.models.TocEntry
 import io.github.kdroidfilter.seforimlibrary.core.models.Topic
 import io.github.kdroidfilter.seforimlibrary.dao.extensions.toModel
+import io.github.kdroidfilter.seforimlibrary.dao.text.LineTextCodec
+import io.github.kdroidfilter.seforimlibrary.db.Line as LineRow
 import io.github.kdroidfilter.seforimlibrary.db.SeforimDb
 import io.github.kdroidfilter.seforimlibrary.env.getEnvironmentVariable
 import kotlinx.coroutines.Dispatchers
@@ -39,7 +41,16 @@ import kotlinx.serialization.json.Json
  * @constructor Creates a repository with the specified database path and driver
  */
 class SeforimRepository(databasePath: String, private val driver: SqlDriver) : LineSelectionRepository {
-    private val database = SeforimDb(driver)
+    // Its dictionaries load in init, once the schema exists
+    private val lineTextCodec: LineTextCodec =
+        LineTextCodec {
+            database.lineQueriesQueries.selectCodecDictionaries().executeAsList().associate { it.id.toInt() to it.data_ }
+        }
+    private val database: SeforimDb =
+        SeforimDb(
+            driver,
+            lineAdapter = LineRow.Adapter(contentAdapter = lineTextCodec.columnAdapter),
+        )
     private val json = Json { ignoreUnknownKeys = true }
     private val logger = Logger.withTag("SeforimRepository")
 
@@ -69,11 +80,13 @@ class SeforimRepository(databasePath: String, private val driver: SqlDriver) : L
         logger.d{"Initializing SeforimRepository"}
         // Create the database schema (fresh builds only; no runtime migrations needed)
         SeforimDb.Schema.create(driver)
-        // SQLite optimizations (balanced mode for desktop: 256MB cache + 512MB mmap)
+        lineTextCodec.loadDictionaries()
+        // SQLite's memory sized to the platform: the desktop's 256 MB cache and 512 MB map would get a small phone's
+        // app killed (mapped pages count in its memory)
         pragma("journal_mode=WAL")
         pragma("synchronous=NORMAL")
-        pragma("cache_size=-256000") // 256MB cache (negative = KiB)
-        pragma("mmap_size=536870912") // 512MB memory-mapped I/O
+        pragma("cache_size=-$SQLITE_CACHE_KIB") // negative = KiB
+        pragma("mmap_size=$SQLITE_MMAP_BYTES")
         pragma("temp_store=MEMORY")
 
         // Check if the database is empty

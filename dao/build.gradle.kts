@@ -17,6 +17,10 @@ kotlin {
         namespace = "io.github.kdroidfilter.seforimlibrary.dao"
         compileSdk = 35
         minSdk = 21
+        // The reads on a real database, on a device or an emulator (AndroidDbReadBenchmark)
+        withDeviceTestBuilder { sourceSetTreeName = "test" }.configure {
+            instrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        }
     }
     jvm()
     iosArm64()
@@ -54,6 +58,12 @@ kotlin {
 
         iosMain.dependencies {
             implementation(libs.sqlDelight.driver.native)
+        }
+
+        getByName("androidDeviceTest").dependencies {
+            implementation(kotlin("test"))
+            implementation(libs.androidx.test.runner)
+            implementation(libs.androidx.test.junit)
         }
 
     }

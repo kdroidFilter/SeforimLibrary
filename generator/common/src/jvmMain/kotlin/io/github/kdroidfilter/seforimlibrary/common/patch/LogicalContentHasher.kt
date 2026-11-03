@@ -93,6 +93,9 @@ class LogicalContentHasher(
             "book_pub_date",
             "book_edition",
             "tocEntry",
+            // Hashed, never patched: a release whose dictionaries differ from the previous one's can't be reached by a
+            // delta (its texts wouldn't read with the client's dictionaries), and the strict invariant says so
+            "line_codec_dict",
             "line",
             "line_toc",
             "link",

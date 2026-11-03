@@ -16,8 +16,15 @@ kotlin {
             implementation(kotlin("test"))
         }
 
+        jvmTest.dependencies {
+            implementation(libs.kotlinx.coroutines.core)
+        }
+
         jvmMain.dependencies {
             implementation(project(":generator-common"))
+            implementation(project(":dao"))
+            implementation(libs.sqlite.jdbc)
+            implementation(libs.sqlDelight.driver.sqlite)
             implementation(libs.zstd)
             implementation(libs.commons.compress)
         }
@@ -119,4 +126,26 @@ tasks.register<JavaExec>("packageArtifacts") {
     }
 
     jvmArgs = listOf("-Xmx512m")
+}
+
+// Write the shipped database from the generator's: line texts compressed, dev-only indexes dropped, pages full
+// Usage:
+//   ./gradlew :packaging:compactDb
+//   ./gradlew :packaging:compactDb -PseforimDb=/path/to/seforim.db -PcompactDb=/path/to/seforim.compact.db
+//   ./gradlew :packaging:compactDb -PtrainDictionaries=src/jvmMain/resources/line_codec_dict   (new dictionaries)
+tasks.register<JavaExec>("compactDb") {
+    group = "application"
+    description = "Write the compact seforim.db that ships (compressed line texts, no dev-only indexes)."
+
+    dependsOn("jvmJar")
+    mainClass.set("io.github.kdroidfilter.seforimlibrary.packaging.CompactDbKt")
+    classpath = files(tasks.named("jvmJar")) + configurations.getByName("jvmRuntimeClasspath")
+
+    val defaultDbPath = rootProject.layout.buildDirectory.file("seforim.db").get().asFile.absolutePath
+    systemProperty("seforimDb", (project.findProperty("seforimDb") as String?) ?: System.getenv("SEFORIM_DB") ?: defaultDbPath)
+    listOf("compactDb", "trainDictionaries", "pageSize").forEach { name ->
+        project.findProperty(name)?.let { systemProperty(name, it as String) }
+    }
+
+    jvmArgs = listOf("-Xmx2g")
 }
